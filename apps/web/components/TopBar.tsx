@@ -10,6 +10,7 @@ export function TopBar({ signedIn }: { signedIn: boolean }) {
       {signedIn ? (
         <nav>
           <a href="/">Home</a>
+          <a href="/profile">{t("profile.title")}</a>
           <a href="/settings">{t("settings.title")}</a>
         </nav>
       ) : null}

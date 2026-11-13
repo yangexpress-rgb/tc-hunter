@@ -5,6 +5,8 @@ const config: NextConfig = {
   transpilePackages: ["@tc-hunter/db", "@tc-hunter/domain"],
   serverExternalPackages: ["@node-rs/argon2", "pg"],
   poweredByHeader: false,
+  // Resume uploads go through a server action; files are capped at 5 MB in the app itself.
+  experimental: { serverActions: { bodySizeLimit: "6mb" } },
   async headers() {
     return [{
       source: "/:path*",

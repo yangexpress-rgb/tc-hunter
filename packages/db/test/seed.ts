@@ -97,6 +97,7 @@ export async function seedEverything(
       [me, vaultRef]);
     await recordAudit(c, "site_account.created", { objectType: "site_account", objectId: ids.site_account, payload: { site_host: "jobs.example.test" } });
     ids.audit_event = (await c.query("SELECT id FROM audit_event ORDER BY seq DESC LIMIT 1")).rows[0].id;
+    await one("import_batch", "INSERT INTO import_batch (applicant_id, kind, parser) VALUES ($1, 'resume', 'rules-1') RETURNING id", [me]);
     await c.query("INSERT INTO request_key (applicant_id, key, action) VALUES ($1, 'seed-key', 'seed')", [me]);
     return ids;
   });

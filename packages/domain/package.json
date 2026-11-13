@@ -10,6 +10,10 @@
     "./messages": "./src/messages.ts"
   },
   "dependencies": {
-    "@node-rs/argon2": "^2.0.2"
+    "@anthropic-ai/sdk": "^1.8.0",
+    "@node-rs/argon2": "^2.0.2",
+    "mammoth": "^1.13.0",
+    "unpdf": "^2.1.0",
+    "zod": "^4.6.7"
   }
 }

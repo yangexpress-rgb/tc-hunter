@@ -1,0 +1,44 @@
+Jordan Avery
+Raleigh, NC | jordan.avery@example.test | (919) 555-0142 | linkedin.com/in/jordan-avery-example
+
+SUMMARY
+Operations lead who turns messy processes into simple systems.
+
+EXPERIENCE
+Operations Manager — Northwind Logistics, Raleigh, NC
+Mar 2021 – Present
+• Led CRM migration for a 40-person sales team, cutting quote time by 35%
+• Managed a $1.2M annual vendor budget across 12 suppliers
+• Built weekly operations reports used by the leadership team
+
+Operations Analyst (Part-time) — Contoso Health, Durham, NC
+Jun 2018 – Feb 2021
+• Automated claims intake with Python scripts, saving 10 hours per week
+• Trained 8 new analysts on reporting tools
+
+INTERNSHIPS
+Supply Chain Intern | Fabrikam Inc. | Charlotte, NC | May 2017 – Aug 2017
+• Mapped inbound freight costs for 3 distribution centres
+
+PROJECTS
+Route Planner
+Jan 2020 – Jun 2020
+• Built a delivery route planner in Python that shortened test routes by 18%
+
+VOLUNTEER EXPERIENCE
+Volunteer Coordinator — Triangle Food Bank
+Sep 2016 – May 2018
+• Scheduled 60+ weekend volunteers for food drives
+
+EDUCATION
+North Carolina State University — B.S. in Industrial Engineering, May 2018
+Dean's List
+
+SKILLS
+Technical: Python (advanced), SQL, Excel (expert), Salesforce
+Leadership: Team leadership, Vendor management
+Languages: Spanish (conversational), English
+
+CERTIFICATIONS
+Certified Supply Chain Professional (CSCP) — APICS, 2022
+Lean Six Sigma Green Belt — ASQ, 2019

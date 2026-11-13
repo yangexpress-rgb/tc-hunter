@@ -25,6 +25,8 @@ This is the household setup (design §7.1). It runs the same way on a small VPS.
 4. **Start:** `docker compose -f deploy/compose.yaml up -d --build`
 5. **Sign up:** open `https://tc-hunter.<your-tailnet>.ts.net` on a device in the tailnet. Yong creates an account, Leo creates his own. Then set `ALLOW_SIGNUP=false` in `deploy/.env` and run step 4 again.
 6. **Turn on two-step sign-in** for each account (Settings).
+7. **Passkeys (optional):** set `TC_PUBLIC_ORIGIN` to the exact address from step 5 (e.g. `https://tc-hunter.<your-tailnet>.ts.net`) and run step 4 again. Each person can then add a passkey under Settings and sign in with it. Passkeys are tied to that address: if it changes, add them again.
+8. **Resume reading (optional, decision 13.6):** put an Anthropic API key in `ANTHROPIC_API_KEY` and run step 4 again. Uploaded resumes are then read by Claude after names, email, phone and street address are removed; without a key (or with `TC_RESUME_READER=rules`) the built-in reader is used. Either way, every row arrives as a draft for the applicant to check.
 
 ## Backups
 
@@ -49,4 +51,5 @@ Install Docker and Tailscale's container as above, copy `deploy/.env` and `deplo
 ## What is deliberately not exposed
 
 - No container publishes a port. The database and web app sit on an internal network with no internet route.
+- The web app's only way out is `egress-proxy`, which passes HTTPS to the hosts in its `ALLOW_HOSTS` list (today just `api.anthropic.com`, for resume reading) and refuses everything else. It only tunnels, so it never sees what is sent. Refusals are logged.
 - The web app runs as a non-root user on a read-only filesystem and connects to the database as a role that cannot bypass per-person data isolation.

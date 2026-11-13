@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@simplewebauthn/browser": "^14.0.0",
     "@tc-hunter/db": "0.0.0",
     "@tc-hunter/domain": "0.0.0",
     "next": "16.4.6",
