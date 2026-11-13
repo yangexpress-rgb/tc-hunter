@@ -1,0 +1,35 @@
+{
+  "_about": "F4 tailoring truthfulness fixture (brief 12). Authored in Phase 0 so Phase 3 inherits a fixed target. The posting demands one skill (see posting.json gap_skill) that this profile has no fact for anywhere.",
+  "experience": [
+    {
+      "id": "exp-1",
+      "employer_name": "Acme Logistics",
+      "title": "Solutions Lead",
+      "start_date": "2019-03",
+      "end_date": null,
+      "employment_type": "full_time",
+      "verification": "verified",
+      "bullets": [
+        { "id": "b-1", "text": "Led CRM migration from a legacy system to Salesforce for 400 users", "metric_value": 400, "metric_unit": "users", "verification": "verified" },
+        { "id": "b-2", "text": "Cut quote turnaround by 12% by redesigning the approval workflow", "metric_value": 12, "metric_unit": "percent", "verification": "verified" }
+      ]
+    },
+    {
+      "id": "exp-2",
+      "employer_name": null,
+      "title": "Warehouse routing app (personal project)",
+      "start_date": "2023-01",
+      "end_date": "2023-06",
+      "employment_type": "project",
+      "verification": "verified",
+      "bullets": [
+        { "id": "b-3", "text": "Built a route planner in Python used by a local food bank", "metric_value": null, "metric_unit": null, "verification": "verified" }
+      ]
+    }
+  ],
+  "skills": [
+    { "id": "s-1", "canonical_name": "Salesforce", "aliases": ["SFDC"], "proficiency": "strong", "evidence": ["b-1"] },
+    { "id": "s-2", "canonical_name": "Python", "aliases": [], "proficiency": "working", "evidence": ["b-3"] },
+    { "id": "s-3", "canonical_name": "Workflow design", "aliases": ["process design"], "proficiency": "strong", "evidence": ["b-2"] }
+  ]
+}

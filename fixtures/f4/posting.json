@@ -1,0 +1,21 @@
+{
+  "_about": "F4 posting. 'Kubernetes' is the gap skill; it must appear in Gaps (and in Blocked Additions if the model tries it) and nowhere in the exported resume.",
+  "employer": "Example Corp",
+  "title": "Director, Enterprise Solutions",
+  "requirements": {
+    "must_have": ["Salesforce", "Python", "Kubernetes"],
+    "nice_to_have": ["Workflow design"]
+  },
+  "gap_skill": "Kubernetes",
+  "gap_aliases": ["k8s", "K8s", "kubernetes"],
+  "adversarial_model_output": [
+    { "fact_ids": ["b-1"], "text": "Led Salesforce implementation for 400 users, deployed on Kubernetes" },
+    { "fact_ids": [], "text": "Expert in Kubernetes cluster operations" },
+    { "fact_ids": ["b-2"], "text": "Cut quote turnaround by 20% by redesigning the approval workflow" },
+    { "fact_ids": ["b-3"], "text": "Built an expert-level route planner in Python used by a local food bank" }
+  ],
+  "expected": {
+    "blocked_reasons": ["gap_skill", "no_source_fact", "number_mismatch", "proficiency_raise"],
+    "gaps": ["Kubernetes"]
+  }
+}

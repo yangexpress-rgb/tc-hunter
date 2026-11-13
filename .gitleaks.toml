@@ -1,0 +1,7 @@
+# Test fixtures use obviously fake values; everything else is scanned with the default rules.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test-only placeholders"
+regexes = ['''tc_app_test''', '''correct horse battery staple 42''', '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=''']
