@@ -19,7 +19,7 @@ import { withApplicant, withSignInScope } from "./context";
 let dummyHash: Promise<string> | undefined;
 const getDummyHash = () => (dummyHash ??= hashPassword(randomBytes(24).toString("base64")));
 
-function tokenHash(token: string): string {
+export function tokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
@@ -65,7 +65,7 @@ export async function signUp(
   }
 }
 
-async function createSession(c: pg.PoolClient, cfg: AppConfig, accountId: string, mfaPassed: boolean): Promise<string> {
+export async function createSession(c: pg.PoolClient, cfg: AppConfig, accountId: string, mfaPassed: boolean): Promise<string> {
   const token = randomBytes(32).toString("base64url");
   await c.query(
     `INSERT INTO user_session (user_account_id, token_hash, mfa_passed, expires_at)
@@ -115,7 +115,7 @@ export async function verifySignInCode(pool: pg.Pool, cfg: AppConfig, token: str
   });
 }
 
-async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out", payload: Record<string, unknown>) {
+export async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out" | "session.step_up", payload: Record<string, unknown>) {
   const a = await c.query("SELECT id FROM applicant WHERE user_account_id = $1", [accountId]);
   if (!a.rows[0]) return;
   await c.query("SELECT set_config('app.applicant_id', $1, true)", [a.rows[0].id]);

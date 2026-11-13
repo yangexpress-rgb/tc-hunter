@@ -8,3 +8,6 @@ export * from "./secretStore";
 export * from "./redact";
 export * from "./auditPolicy";
 export * from "./messages";
+export * from "./profile";
+export * from "./zip";
+export * from "./resume";

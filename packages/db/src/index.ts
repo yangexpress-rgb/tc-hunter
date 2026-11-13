@@ -7,3 +7,6 @@ export * from "./packets";
 export * from "./owned";
 export * from "./requestKey";
 export { migrate } from "./migrate";
+export * from "./profile";
+export * from "./privacy";
+export * from "./passkeys";

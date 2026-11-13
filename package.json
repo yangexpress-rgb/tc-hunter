@@ -3,8 +3,13 @@
   "private": true,
   "version": "0.0.0",
   "description": "TC Hunter: a household job-hunting workspace. Get hired. Rise like Tim Cook.",
-  "workspaces": ["packages/*", "apps/*"],
-  "engines": { "node": ">=22" },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "typecheck": "tsc -b packages/domain packages/db && npm run typecheck -w apps/web",
     "test": "vitest run",
@@ -15,6 +20,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "pdf-lib": "^1.17.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^3.0.0"

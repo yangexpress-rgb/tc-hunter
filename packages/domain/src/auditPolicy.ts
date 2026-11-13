@@ -5,7 +5,7 @@
  */
 export const AUDIT_ALLOWED_KEYS = {
   "account.created": ["method"],
-  "session.signed_in": ["mfa_used"],
+  "session.signed_in": ["mfa_used", "method"],
   "session.signed_out": [],
   "session.step_up": ["method"],
   "mfa.enabled": [],
@@ -19,6 +19,9 @@ export const AUDIT_ALLOWED_KEYS = {
   ],
   "packet.outcome_resolved": ["application_ref", "applicant_says"],
   "site_account.created": ["site_host"],
+  "profile.imported": ["kind", "parser", "rows"],
+  "passkey.added": ["label"],
+  "passkey.removed": [],
   "data.exported": ["format"],
   "data.deleted": [],
 } as const satisfies Record<string, readonly string[]>;
