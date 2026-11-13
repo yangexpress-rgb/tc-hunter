@@ -97,7 +97,8 @@ describe.skipIf(!toolsPresent)("F8 backup and restore", () => {
     const bytes = readFileSync(join(offsite, files[0]!));
     expect(bytes.subarray(0, 21).toString()).toBe("age-encryption.org/v1");
     const text = bytes.toString("latin1");
-    for (const needle of ["Yong", "Leo", "experience_item", CANARY, "yong@example.test"]) expect(text).not.toContain(needle);
+    // Needles are 8+ bytes so random ciphertext cannot match them by chance (a 3-byte name did, once in CI).
+    for (const needle of ["experience_item", "Solutions Lead", CANARY, "yong@example.test", "leo@example.test"]) expect(text).not.toContain(needle);
     expect(readFileSync(join(backupDir, "last-success"), "utf8")).toContain(files[0]);
   });
 
