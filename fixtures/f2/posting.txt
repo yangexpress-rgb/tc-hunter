@@ -1,0 +1,23 @@
+About the role
+Contoso is hiring a Senior Operations Analyst to help our supply chain team plan better. You will turn data into decisions for planners and leaders.
+
+What you'll do
+- Build weekly forecasts and explain them to planners.
+- Own dashboards that leaders use every Monday.
+
+Requirements
+- 5+ years in an analytics or operations role
+- Strong SQL and Python
+- Advanced Excel, including modelling
+- Building dashboards in Tableau
+- Forecasting demand for a supply chain
+- Stakeholder management with senior leaders
+- Project management of cross-team work
+- Experience with Snowflake
+
+Nice to have
+- Power BI
+- Lean Six Sigma
+
+Benefits
+- Remote across the US, with a yearly team week.

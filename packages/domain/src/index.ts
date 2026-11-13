@@ -11,3 +11,6 @@ export * from "./messages";
 export * from "./profile";
 export * from "./zip";
 export * from "./resume";
+export * from "./jobs";
+export * from "./match";
+export * from "./jobs/claudeRequirements";

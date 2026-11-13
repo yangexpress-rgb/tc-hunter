@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteStory, discardImport, FACT_TABLES, importParsedResume,
-  removeEvidence, resumeReaderName, saveAbout, saveAnswer, savePreferences, saveStory, updateFact, verifyFact, type FactTable,
+  removeEvidence, rescoreMatches, resumeReaderName, saveAbout, saveAnswer, savePreferences, saveStory, updateFact, verifyFact, type FactTable,
 } from "@tc-hunter/db";
 import {
   ANSWER_PRESETS, ClaudeResumeParser, detectKind, errorCode, extractText, MAX_RESUME_BYTES, parseLinkedInExport, readResume,
@@ -33,12 +33,18 @@ function tableOf(form: FormData): FactTable {
 async function act(form: FormData, fn: () => Promise<unknown>, fallback?: string): Promise<never> {
   const back = backTo(form, fallback);
   let target = withParam(back, "saved", "1");
+  let ok = false;
   try {
     await fn();
+    ok = true;
   } catch (e) {
     const code = errorCode(e) ?? "TC_UNKNOWN";
     log.warn("profile.action_failed", { code });
     target = withParam(back, "e", code);
+  }
+  // Profile and preference changes move job scores; rescoring is local (no fetching) and never fails the save.
+  if (ok) {
+    try { await rescoreMatches(app().pool, await requireSession()); } catch (e) { log.warn("profile.rescore_failed", { code: errorCode(e) ?? "TC_UNKNOWN" }); }
   }
   redirect(target);
 }

@@ -1,0 +1,23 @@
+{
+  "jobs": [
+    {
+      "id": 4012345,
+      "title": "Operations Analyst",
+      "company_name": "Fabrikam, Inc.",
+      "updated_at": "2026-11-10T09:00:00-05:00",
+      "first_published": "2026-11-10T09:00:00-05:00",
+      "location": { "name": "Raleigh, NC" },
+      "absolute_url": "https://boards.greenhouse.io/fabrikam/jobs/4012345",
+      "content": "&lt;p&gt;&lt;strong&gt;About the role&lt;/strong&gt;&lt;/p&gt;&lt;p&gt;Fabrikam is looking for an Operations Analyst to join our Raleigh logistics team. You will build the reports our planners rely on every day and help us ship faster.&lt;/p&gt;&lt;p&gt;&lt;strong&gt;Requirements&lt;/strong&gt;&lt;/p&gt;&lt;ul&gt;&lt;li&gt;2+ years of experience in operations or analytics&lt;/li&gt;&lt;li&gt;Strong SQL and Excel&lt;/li&gt;&lt;li&gt;Experience with Tableau or Power BI&lt;/li&gt;&lt;li&gt;Clear written communication&lt;/li&gt;&lt;/ul&gt;&lt;p&gt;&lt;strong&gt;Benefits&lt;/strong&gt;&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Health, dental and vision from day one&lt;/li&gt;&lt;li&gt;401(k) with a 4% match&lt;/li&gt;&lt;/ul&gt;"
+    },
+    {
+      "id": 4012399,
+      "title": "Warehouse Associate",
+      "company_name": "Fabrikam, Inc.",
+      "updated_at": "2026-11-09T09:00:00-05:00",
+      "location": { "name": "Durham, NC" },
+      "absolute_url": "https://boards.greenhouse.io/fabrikam/jobs/4012399",
+      "content": "&lt;p&gt;Pick, pack and ship orders in our Durham warehouse. Requirements: able to lift 50 pounds.&lt;/p&gt;"
+    }
+  ]
+}

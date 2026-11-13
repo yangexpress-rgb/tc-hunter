@@ -159,12 +159,30 @@ describe("F8 private network only", () => {
     expect(compose).not.toMatch(/^\s+ports\s*:/m);
     expect(compose).not.toMatch(/network_mode\s*:\s*host/);
     expect(compose).toMatch(/internal:\s*\n\s+internal: true/);
-    for (const svc of ["db", "web", "migrate"]) {
-      const block = new RegExp(`\\n  ${svc}:\\n([\\s\\S]*?)\\n  \\w+:\\n`).exec(compose)?.[1] ?? "";
+    for (const svc of ["db", "web", "migrate", "worker"]) {
+      const block = new RegExp(`\\n  ${svc}:\\n([\\s\\S]*?)\\n  \\w[\\w-]*:\\n`).exec(compose)?.[1] ?? "";
       expect(block, svc).toMatch(/networks: \[internal\]/);
+      expect(block, svc).not.toMatch(/egress\]/);
     }
     const serve = JSON.parse(readFileSync(join(ROOT, "deploy", "tailscale-serve.json"), "utf8"));
     expect(Object.values(serve.AllowFunnel)).toEqual([false]);
+  });
+
+  it("the worker reaches public HTTPS hosts only through its gate, never private addresses", async () => {
+    const compose = readFileSync(join(ROOT, "deploy", "compose.yaml"), "utf8");
+    const worker = /\n  worker:\n([\s\S]*?)\n  \w[\w-]*:\n/.exec(compose)?.[1] ?? "";
+    expect(worker).toMatch(/HTTPS_PROXY: http:\/\/egress-worker:3128/);
+    const { allowed, isPrivateAddress } = await import(join(ROOT, "deploy", "egress-proxy", "proxy.mjs"));
+    const any = { anyPublic: true, allow: new Set() };
+    expect(allowed("boards-api.greenhouse.io:443", any)).toBe(true);
+    expect(allowed("boards-api.greenhouse.io:80", any)).toBe(false);
+    expect(allowed("192.168.1.10:443", any)).toBe(false);
+    expect(allowed("nas.local:443", any)).toBe(false);
+    expect(allowed("localhost:443", any)).toBe(false);
+    for (const ip of ["10.0.0.5", "127.0.0.1", "169.254.169.254", "172.20.0.3", "192.168.0.1", "100.100.1.1", "::1", "fd00::1", "fe80::1", "::ffff:10.0.0.1"]) {
+      expect(isPrivateAddress(ip), ip).toBe(true);
+    }
+    for (const ip of ["104.18.1.1", "2606:4700::1111"]) expect(isPrivateAddress(ip), ip).toBe(false);
   });
 
   it("the web app reaches out only through the allow-list gate (Claude API, HTTPS only)", async () => {

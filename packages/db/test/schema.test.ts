@@ -12,12 +12,12 @@ const DOMAIN_TABLES = [
 ];
 
 describe("schema", () => {
-  it("has the 30 domain tables from the design, plus sign-in, request keys, rule tables and Phase 1 import batches", async () => {
+  it("has the 30 domain tables from the design, plus sign-in, request keys, rule tables, Phase 1 import batches and Phase 2 scan tables", async () => {
     const r = await ownerQuery("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'");
     const names = r.rows.map((x) => x.table_name).sort();
     expect(DOMAIN_TABLES).toHaveLength(30);
     expect(names).toEqual([...DOMAIN_TABLES, "user_session", "request_key", "packet_transition", "stage_forward", "schema_migration",
-      "import_batch", "passkey_credential", "auth_challenge"].sort());
+      "import_batch", "passkey_credential", "auth_challenge", "job_posting_event", "applicant_job_source", "posting_alert", "work_item"].sort());
   });
 
   it("no column can hold an employer-site password or session (vault-only rule)", async () => {
