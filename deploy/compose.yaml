@@ -1,0 +1,104 @@
+# TC Hunter household stack (accepted proposal P6).
+#
+# Conditions from Yong's acceptance, and how this file meets them:
+#   1. Nightly encrypted backups copied off the home server: the `backup` service
+#      dumps the database and the vault every night, encrypts the bundle with age
+#      (the decryption key is NOT on this server), and copies it to an off-site
+#      rclone remote. See docs/deploy.md.
+#   2. Leo's remote access via private network only, no public ports: no service
+#      publishes a port. The only way in is the `tailscale` service, which serves
+#      the app over HTTPS inside your private tailnet. Nothing is opened on the router.
+#   3. Portable to a VPS: no host paths, no host networking, everything in named
+#      volumes and one .env file. The same file runs on a home box or a VPS.
+
+name: tc-hunter
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tc_hunter
+      POSTGRES_USER: tc_owner
+      POSTGRES_PASSWORD: ${DB_OWNER_PASSWORD:?set DB_OWNER_PASSWORD in deploy/.env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tc_owner -d tc_hunter"]
+      interval: 10s
+      retries: 10
+    networks: [internal]
+    # No "ports:" on purpose.
+
+  migrate:
+    build: { context: .., target: migrate }
+    environment:
+      DATABASE_OWNER_URL: postgres://tc_owner:${DB_OWNER_PASSWORD}@db:5432/tc_hunter
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?set DB_APP_PASSWORD in deploy/.env}
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [internal]
+    restart: "no"
+
+  web:
+    build: { context: .., target: web }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://tc_app:${DB_APP_PASSWORD}@db:5432/tc_hunter
+      TC_MASTER_KEY: ${TC_MASTER_KEY:?set TC_MASTER_KEY in deploy/.env}
+      TC_VAULT_KEY: ${TC_VAULT_KEY:?set TC_VAULT_KEY in deploy/.env}
+      TC_VAULT_DIR: /vault
+      SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-60}
+      STEP_UP_MINUTES: ${STEP_UP_MINUTES:-5}
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+    volumes:
+      - vault-data:/vault
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs: [/tmp]
+    networks: [internal]
+    # No "ports:" on purpose. Reached only through the tailscale service.
+
+  tailscale:
+    image: tailscale/tailscale:stable
+    restart: unless-stopped
+    hostname: tc-hunter
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in deploy/.env}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale-serve.json:/config/serve.json:ro
+    networks: [internal, egress]
+
+  backup:
+    build: { context: ./backup }
+    restart: unless-stopped
+    environment:
+      DATABASE_OWNER_URL: postgres://tc_owner:${DB_OWNER_PASSWORD}@db:5432/tc_hunter
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:?set BACKUP_AGE_RECIPIENT (age public key) in deploy/.env}
+      BACKUP_REMOTE: ${BACKUP_REMOTE:?set BACKUP_REMOTE (rclone remote:path) in deploy/.env}
+      BACKUP_CRON: ${BACKUP_CRON:-15 3 * * *}
+      BACKUP_KEEP_LOCAL_DAYS: ${BACKUP_KEEP_LOCAL_DAYS:-7}
+      BACKUP_KEEP_REMOTE_DAYS: ${BACKUP_KEEP_REMOTE_DAYS:-60}
+    volumes:
+      - vault-data:/vault:ro
+      - backups:/backups
+      - ./rclone.conf:/config/rclone/rclone.conf:ro
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [internal, egress]
+
+networks:
+  internal:
+    internal: true   # no route to the internet; db and web live only here
+  egress: {}         # tailscale and backup need to reach out (tailnet, off-site copy)
+
+volumes:
+  db-data:
+  vault-data:
+  backups:
+  tailscale-state:

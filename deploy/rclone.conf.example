@@ -1,0 +1,13 @@
+# Copy to deploy/rclone.conf and fill in one off-site remote. Examples:
+#
+# [b2]
+# type = b2
+# account = <key id>
+# key = <application key>
+#
+# [gdrive]
+# type = drive
+# scope = drive.file
+# token = <run `rclone config` on a laptop to create this>
+#
+# Then set BACKUP_REMOTE=b2:tc-hunter-backups (or gdrive:tc-hunter-backups) in deploy/.env.

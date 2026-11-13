@@ -1,0 +1,22 @@
+{
+  "name": "tc-hunter",
+  "private": true,
+  "version": "0.0.0",
+  "description": "TC Hunter: a household job-hunting workspace. Get hired. Rise like Tim Cook.",
+  "workspaces": ["packages/*", "apps/*"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "typecheck": "tsc -b packages/domain packages/db && npm run typecheck -w apps/web",
+    "test": "vitest run",
+    "db:migrate": "tsx packages/db/src/migrate.ts",
+    "db:reset": "tsx packages/db/src/migrate.ts --reset",
+    "dev": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/web"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}
