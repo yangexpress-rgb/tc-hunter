@@ -8,7 +8,7 @@ import { withApplicant } from "./context";
  */
 export const APPLICANT_OWNED_TABLES = [
   "experience_item", "experience_bullet", "education_item", "skill", "skill_evidence", "credential",
-  "answer_bank_item", "hunt_preference", "scan_run", "match", "match_feedback", "preference_adjustment",
+  "answer_bank_item", "story_bank_item", "hunt_preference", "scan_run", "match", "match_feedback", "preference_adjustment",
   "document", "document_claim", "blocked_addition", "document_gap", "application", "application_stage_event",
   "application_packet", "packet_field", "packet_state_event", "submission_attempt", "site_account",
   "audit_event", "request_key",

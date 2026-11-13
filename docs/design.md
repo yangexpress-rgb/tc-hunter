@@ -1,6 +1,6 @@
 # TC Hunter — Design (living document)
 
-**Version:** v1.2 (2026-11-13). Source: *TC Hunter — Design Brief v1.1* and its §15 proposals, with every decision Yong has made folded into the body. This file is the design of record; it is updated in the body (not only a changelog) at the end of every phase.
+**Version:** v1.2 (2026-11-13). Source: *TC Hunter — Design Brief v1.2* (Drive, approved by Yong 2026-11-13: v1.1 + household decision + accepted §15 proposals), with the approved design review and Phase 0 build notes folded in. Where this file adds detail, the brief's rules still win. This file is the design of record; it is updated in the body (not only a changelog) at the end of every phase.
 
 **App name:** TC Hunter. "TC" is for Tim Cook: not a founder, a person who was *hired* into a good job, rose to CEO, and became a billionaire as an employee. Tagline: *"Get hired. Rise like Tim Cook."* **Brand rule:** TC Hunter is an aspirational reference only. Never market the app as endorsed by, affiliated with, or using the likeness of Tim Cook or Apple. The name and the tagline are the brand; the story is internal positioning. (Enforced by a test: no Tim Cook or Apple reference may appear in user-facing text except the tagline.)
 
@@ -13,7 +13,7 @@
 | 2026-11-13 | Name: TC Hunter (brief v1.1). |
 | 2026-11-13 | §13.1: personal household tool for two applicants, Yong and Leo, fully isolated (folded into §1, §3, §8, §13). |
 | 2026-11-13 | Design review (schema, Phase 0 plan, §14 risk handling) approved. |
-| 2026-11-13 | §15 proposals: P1–P5 and P7–P11 accepted; P6 accepted with three conditions; P12 accepted for the v1.1 roadmap only. P2 and P6 built in Phase 0. §15 resolved. |
+| 2026-11-13 | §15 proposals: P1–P5 and P7–P11 accepted; P6 accepted with three conditions (fixture F8); P12 accepted for the v1.1 roadmap only. P2 and P6 built in Phase 0. §15 resolved. Brief v1.2 approved. |
 
 ---
 
@@ -133,7 +133,7 @@ PostgreSQL. Internal ids are UUIDs; user-facing ids are human-readable (`J-00012
 
 **Isolation (MUST):** every applicant-owned table carries `applicant_id`, guarded twice: (1) the data layer only reads inside `withApplicant()`, which filters by the signed-in applicant; (2) Postgres row-level security on the `tc_app` role the app runs as (it does not own the tables and cannot bypass the policies). Child rows use composite foreign keys `(parent_id, applicant_id)` so a row can never point at the other applicant's data. Job postings hold no personal data and form a shared catalogue, so a job found once is not fetched twice; everything about an applicant's interest in a job is in their own tables.
 
-**Phase 0 schema:** 29 domain tables, all created in Phase 0 (`packages/db/migrations/001_schema.sql`), plus `user_session` (sign-in sessions), `request_key` (double-click protection) and two read-only rule tables (`packet_transition`, `stage_forward`). Columns ending `_enc` are field-level encrypted (AES-256-GCM) with that applicant's own data key, wrapped by the server master key.
+**Phase 0 schema:** 30 domain tables (the 29 from the approved review plus `story_bank_item` for P4), all created in Phase 0 (`packages/db/migrations/001_schema.sql`), plus `user_session` (sign-in sessions), `request_key` (double-click protection) and two read-only rule tables (`packet_transition`, `stage_forward`). Columns ending `_enc` are field-level encrypted (AES-256-GCM) with that applicant's own data key, wrapped by the server master key.
 
 ### 5.1 Module A — Applicant Vault (profile & documents)
 
@@ -148,8 +148,8 @@ PostgreSQL. Internal ids are UUIDs; user-facing ids are human-readable (`J-00012
 | `skill_evidence` | skill_id + exactly one of experience_bullet / experience_item / education_item / credential | A skill without evidence does not count as covered in matching. The **evidence coach** (P1) turns this into Layer 1 nudges: *"3 skills have no proof yet — add one so they count in matching."* |
 | `credential` | name, kind, issuer, issued/expires, reference_enc, verification | Draft → verified. |
 | `answer_bank_item` | question_key, question_patterns[], answer_text_enc, structured_value_enc, status, last_reviewed_at, is_applicant_step | Only approved items are used verbatim; not reviewed in 90 days = "stale", never silently reused. Work-authorisation items are applicant steps. |
-| `hunt_preference` | target_titles[], seniority[], locations, workplace_types[], salary_floor (amount, currency, period), industries in/out, employers_exclude[], must_have_keywords[], deal_breakers[], scan_schedule, notify_pref, tailor_target_pages | One active set per applicant. Salary floor = "jobs I'll consider"; the Answer Bank salary = "what I tell employers". Phase 2 adds `long_term_target_role` (P3); Phase 4a adds `weekly_application_cap` and `min_score_to_tailor` (P5). |
-| `story` *(Phase 1, P4)* | title, situation, task, action, result, linked bullet ids, verification | **Story bank:** short STAR stories the applicant writes, each linked to the bullets they prove. Cover letters, "Why this company" answers and (v1.1) interview prep draw only from verified stories. |
+| `hunt_preference` | target_titles[], seniority[], locations, workplace_types[], salary_floor (amount, currency, period), industries in/out, employers_exclude[], must_have_keywords[], deal_breakers[], scan_schedule, notify_pref, tailor_target_pages, long_term_target_role + target_function (P3), weekly_application_budget + min_score_to_tailor (P5), weekly_review_enabled (P9) | One active set per applicant. Salary floor = "jobs I'll consider"; the Answer Bank salary = "what I tell employers". Columns exist from Phase 0; behaviour arrives in the phases listed in §11. |
+| `story_bank_item` (P4) | title, story_enc (situation, task, action, result), linked_fact_ids[] (required, non-empty), skill_ids[], status (draft / approved), last_reviewed_at | **Story bank:** STAR stories the applicant writes, each tied to the facts it draws on. Generators may select and rephrase approved stories, never add to them. Cover letters prefer a fitting approved story. Table exists from Phase 0; screens in Phase 1. |
 
 **Sorting the UI must support:** experience by date or by relevance to target role; skills by category; documents by job / status / date; answer bank by last-reviewed.
 
@@ -168,7 +168,7 @@ Sources in preference order: (1) official public job-board feeds (Greenhouse, Le
 
 **Deduplication (MUST):** same employer + normalised title + location + description text similarity ≥ 0.9 = one posting with all source links.
 
-**Posting watch (P7, Phase 2):** for saved jobs, compare each scan's snapshot with the last one and alert in Layer 1 when a posting changes its requirements, closes, or is reposted, so nobody tailors for a closed job.
+**Posting watch (P7, Phase 2):** for saved / tailoring / ready-to-apply jobs, each scan compares the posting with its last snapshot. Layer 1: *"A job you saved has closed"*, *"Requirements changed for [Job] — review before applying"*, *"[Job] was reposted"*. A changed posting returns any unsubmitted packet to review (the Phase 0 approval-voiding guard already supports this).
 
 ### 5.3 Module C — Matching Engine
 
@@ -177,18 +177,18 @@ Score 0–100, deterministic first; AI may assist parsing, never the score.
 | Component | Weight | Basis |
 |---|---|---|
 | Required skills covered | 35 | must-haves with evidence in the profile ÷ must-haves in posting |
-| Experience fit | 25 | years + seniority + title relevance; projects, internships, volunteering and coursework count, and entry-level postings are recognised (P2) |
+| Experience fit | 25 | years + seniority + title relevance; internships, projects, volunteer and part-time roles count toward years and relevance at a recorded, visible discount, and entry-level / graduate / intern postings are recognised (P2) |
 | Preference fit | 20 | location / remote, salary floor (if published), industry include/exclude |
 | Keyword / domain relevance | 10 | domain terms from the applicant's experience present in the posting |
 | Recency & availability | 10 | posted recently, still active, not already dismissed / applied |
 
 - Deal-breakers filter a posting out (with the reason recorded), not just score it low.
 - **Every score ships with reasons (MUST):** Layer 1 one line (*"Strong fit — you cover 8 of 9 required skills."*); Layer 2 the full breakdown, matched skills, gaps, and preference rules that fired.
-- **Career ladder — the TC lens (P3, Phase 2):** if the applicant sets a long-term target role (e.g. COO), each match is tagged *step toward*, *same level* or *side step*, from posting text and the profile only (nothing inferred about the employer). The Gap report shows the skills between the applicant and the next rung.
+- **Career ladder — the TC lens (P3, Phase 2):** if the applicant sets a long-term target role (e.g. COO), each match gets `ladder_tag` *step_toward*, *same_level* or *side_step* (Layer 1: *"A step toward COO"*), from the posting's title / seniority / function and the applicant's level and target only (nothing inferred about the employer). The tag is shown and filterable; it is **not** a score component unless the applicant turns on a visible preference adjustment. The Gap report shows the skills between the applicant and the next rung.
 - **Feedback** (`match_feedback`: save / dismiss / not a fit + reason) becomes a visible, switch-off-able `preference_adjustment`, never a silent change to the maths.
 - **Score calibration, visible (P10, after 4a):** after 20+ outcomes, the Fit report may suggest weight changes (*"required skills predicted interviews best for you"*) that the applicant accepts or ignores. Accepted changes are recorded with a new rules_version.
 
-`match`: applicant_id, job_posting_id (unique together), score, components (raw + weighted), matched_skills (skill + evidence ids), gap_skills[], filtered, filter_reasons, reason_line, **status `new | saved | dismissed | not_a_fit`**, rules_version, parser_version, computed_at. "Tailored" and "applied" are derived from documents and applications, not stored twice.
+`match`: applicant_id, job_posting_id (unique together), score, components (raw + weighted), matched_skills (skill + evidence ids), gap_skills[], filtered, filter_reasons, reason_line, ladder_tag (P3), **status `new | saved | dismissed | not_a_fit`**, rules_version, parser_version, computed_at. "Tailored" and "applied" are derived from documents and applications, not stored twice.
 
 ### 5.4 Module D — Tailoring Studio
 
@@ -196,7 +196,7 @@ Flow (MUST, in order): select a saved match → generate a **draft** from the Ma
 
 | Table | Key columns | Rules |
 |---|---|---|
-| `document` | public_ref, type (`master_resume, tailored_resume, cover_letter, short_answer, referral_request, follow_up_email, portfolio, other`), version, parent_document_id, job_posting_id, match_id, **status `draft | approved | superseded`**, created_by, source_json, pdf_ref, docx_ref, content_hash, generation_meta, diff_viewed_at, approved_at | Starts as draft. Only the applicant approves; a generated document needs diff_viewed_at; an approved version can only be superseded, never edited. "Used in A-000045" is derived from packets. All database-enforced. |
+| `document` | public_ref, type (`master_resume, tailored_resume, cover_letter, short_answer, referral_request, follow_up_email, receipt, portfolio, other`), version, parent_document_id, job_posting_id, match_id, **status `draft | approved | superseded`**, created_by, source_json, pdf_ref, docx_ref, content_hash, generation_meta, diff_viewed_at, approved_at | Starts as draft. Only the applicant approves; a generated document needs diff_viewed_at; an approved version can only be superseded, never edited. "Used in A-000045" is derived from packets. All database-enforced. |
 | `document_claim` | document_id, section, ordinal, rendered_text, claim_type, source_fact_ids[] (non-empty), transform, check_result | Every line of a tailored document cites profile rows. |
 | `blocked_addition` | document_id, proposed_text, reason (`no_source_fact, gap_skill, number_mismatch, date_mismatch, new_name, proficiency_raise, unverified_fact, unconfirmed_alias`), terms[] | The Blocked Additions list. |
 | `document_gap` | document_id, requirement_text, skill_term | The Gaps list. |
@@ -224,18 +224,20 @@ Allowed transitions are a table in the database and a function in code, tested t
 - Absence of a confirmation number is shown as *"Submitted — no confirmation number was shown"*, never invented.
 - Retry: one automatic retry for a transient error before the submit click only.
 
-**Application receipt (P11, Phase 4b):** a one-page PDF per submission — job, documents sent (versions), each answer and where it came from, confirmation number — built from the packet and audit log, for the applicant's own records.
+**Weekly budget at approval (P5):** before `approved_to_apply`, if the weekly budget is used up, Layer 1 says *"You've used 5 of 5 applications this week"* and the applicant may override for this application: the budget is advice, never a block on their own approval.
+
+**Application receipt (P11, Phase 4b):** on `submitted`, a one-page PDF from the audit log — job, employer, document versions sent, each answer and its source, confirmation number (or *"no confirmation number was shown"*), time — stored as a `document` of type `receipt`, never sent anywhere.
 
 ### 5.6 Module F — Tracker, Reports & Audit
 
 **`application`:** public_ref, job_posting_id (**unique per applicant**), match_id, stage (`interested → tailoring → ready_to_apply → applied → screening → interview → offer → closed_won / closed_lost / withdrawn / no_response`), stage_set_by, next_step, next_step_due, notes_enc, applied_at, confirmation_ref, and from Phase 4a `outcome_tag`. **`application_stage_event`** records every move with its source. The applicant can always move their own application; email or portal checks may only step forward and never over a stage the applicant set; they record a conflict for the applicant instead (database-enforced).
 
-- **Outcome tags (P8, Phase 4a):** one tap when an application closes — no reply, rejected after screen, after interview, withdrew — feeding the Fit and Source reports.
+- **Outcome tags (P8, Phase 4a):** one optional tap when an application closes (`outcome_tag`: no reply · rejected before screen · rejected after screen · rejected after interview · offer declined · withdrew · other), feeding the Fit, Source and Pipeline reports.
 - **Follow-ups:** per-application next step + date, surfaced as *"Today: 2 follow-ups due"*.
 - **Quality-over-volume budget (P5, Phase 4a):** optional weekly cap on applications and a minimum score to tailor, shown as *"4 of 5 applications this week"*.
 - **Reports** (CSV + PDF): Pipeline, Activity, Fit, Gap (top 5 on the dashboard; includes the next-rung skills from the TC lens), Source.
-- **Weekly hunt review (P9, Phase 4a):** one plain page each week — what happened, what converted, the three best next actions — in-app and in the optional email digest.
-- **Dashboard (Layer 1 home):** New matches today · Applications in progress · Follow-ups due · Interviews upcoming · Top skill gaps. Nothing else above the fold.
+- **Weekly hunt review (P9, Phase 4a):** one plain page per week per applicant — what happened, what converted, top gaps, ladder progress, the three best next actions — in-app and in the optional email digest; reconciles with the reports (F7).
+- **Dashboard (Layer 1 home):** New matches today · Applications in progress · Follow-ups due · Interviews upcoming · Top skill gaps. Nothing else above the fold. Below the fold: evidence coach nudges (P1), posting-watch alerts (P7), weekly budget used (P5), latest weekly review (P9).
 
 **Audit log (`audit_event`):** actor, action, object, time, payload_summary. Per-action allow-list of payload keys (submissions: employer, job, document versions, answer sources, confirmation; never passwords or full PII); the database also rejects secret-looking keys. Append-only for the app role, protected by a trigger even for the owner, and **hash-chained per applicant** so tampering is detectable (shown in Settings → Advanced).
 
@@ -267,9 +269,9 @@ Allowed transitions are a table in the database and a function in code, tested t
 
 ### 7.1 Hosting: one-box household server (P6)
 
-The whole app runs as one Docker Compose stack (`deploy/compose.yaml`) on a home server, portable unchanged to a small VPS. Services: `db` (Postgres 16), `migrate` (one-shot), `web`, `tailscale`, `backup`. Yong's three conditions and how they are met:
+The whole app runs as one Docker Compose stack (`deploy/compose.yaml`) on a home server, portable unchanged to a small VPS. Phase 0 services: `db` (Postgres 16), `migrate` (one-shot), `web`, `tailscale`, `backup`. The brief's stack also lists a worker, Redis and S3-compatible storage; those join when a phase first needs them (worker and queue in Phase 2, proposed on Postgres via pg-boss instead of Redis; object storage in Phase 3, e.g. MinIO on the same box). Yong's three conditions and how they are met:
 
-1. **Nightly encrypted backups copied off the home server.** The `backup` service runs nightly (default 03:15 UTC): database dump + vault volume → one bundle → encrypted with `age` to a public key whose private key is kept **off** the server (Yong's password manager) → copied to an off-site rclone remote → old copies pruned (7 days local, 60 remote) → `last-success` marker written. `restore.sh` does a full restore; a restore drill is part of setup (docs/deploy.md).
+1. **Nightly encrypted backups copied off the home server.** The `backup` service runs nightly (default 03:15 UTC): database dump + vault volume → one bundle → encrypted with `age` to a public key whose private key is kept **off** the server (Yong's password manager) → copied to an off-site rclone remote → old copies pruned (7 days local, 60 remote) → `last-success` marker written. `restore.sh` does a full restore; a restore drill is part of setup (docs/deploy.md). **Fixture F8** runs the real backup and restore scripts in the test suite: the backup is age-encrypted, lands in a separate off-site folder, cannot be opened with another key, and restores into a clean database with both applicants' data identical, both able to sign in, isolation intact and audit chains verified; it also checks no Compose service publishes a port.
 2. **Leo's remote access via private network only, no public ports.** No service publishes a port. The `tailscale` service serves the app over HTTPS inside the household tailnet only (Funnel off); nothing is opened on the router. Leo joins the tailnet (or gets the device shared) and signs in with his own TC Hunter account.
 3. **Portable to a VPS.** Named volumes only, no host paths or host networking, all settings in one `deploy/.env`. Moving = restore the latest backup on the new host with the same keys.
 
@@ -315,7 +317,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 
 | Phase | Scope | Gate | Status |
 |---|---|---|---|
-| **0. Foundations** | Repo, sign-in, full schema, vault pattern, audit log, layered UI shell, state machines + database guards, early-career experience types (P2), household server stack with backups and private access (P6), F4/F5 fixtures authored | Schema + fixtures reviewed | **Built — awaiting review** |
+| **0. Foundations** | Repo, sign-in, household accounts (Yong + Leo), full schema, per-applicant vault pattern, audit log, layered UI shell, state machines + database guards, early-career experience types (P2), household server stack with encrypted off-site backups and private access (P6), F4/F5 fixtures authored | Schema + fixtures reviewed; F6b, F8 pass | **Built — F6, F6b, F8 passing; awaiting review** |
 | **1. Applicant Vault** | Module A incl. import → draft → verify, Answer Bank, Preferences, evidence coach (P1), story bank (P4), passkeys, export / delete-my-data | F1, F6 pass | Not started |
 | **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | Not started |
 | **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | Not started |
@@ -335,7 +337,8 @@ The same story must work for an early-career applicant whose profile is mostly p
 - **F5 — Application flow** (4b assisted, 5 full). *Authored in Phase 0:* `fixtures/f5/` (demo form with attestation and work-authorisation steps, confirmation id). *Phase 0 foundation:* idempotency guards tested (one application per job, single-use submit key, unknown-outcome block, double-click safety).
 - **F6 — Isolation, both directions.** *Passing in Phase 0* for every applicant-owned table (the test reads the table list from the live schema, so a new table cannot skip it).
 - **F6b — Neither applicant can approve, submit or change the other's packet**, even by direct id. *Passing in Phase 0.*
-- **F7 — Reports reconcile** (Phase 4a).
+- **F7 — Reports reconcile** (Phase 4a), including the weekly hunt review.
+- **F8 — Backup & restore (P6).** *Passing in Phase 0* (`packages/db/test/f8-backup.test.ts`). The off-site copy in the test goes to a local folder through a stand-in for rclone; the real remote is checked on the first run on the home server.
 
 ---
 
@@ -409,7 +412,7 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 
 | Area | Where | Notes |
 |---|---|---|
-| Schema | `packages/db/migrations/001_schema.sql` | 29 domain tables + sessions, request keys |
+| Schema | `packages/db/migrations/001_schema.sql` | 30 domain tables + sessions, request keys |
 | Guard rails | `packages/db/migrations/002_guards.sql` | proficiency / verification, document immutability, packet state machine + approval binding, stage rules, audit chain |
 | Access | `packages/db/migrations/003_access.sql` | `tc_app` role, row-level security, append-only grants |
 | Sign-in | `packages/db/src/auth.ts` | password, two-step code, idle timeout, step-up |
@@ -418,4 +421,4 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Layer 1 text | `packages/domain/src/messages.ts` | catalogue, error mapping, brand |
 | Web shell | `apps/web` | sign-up, sign-in (+ code), home, settings |
 | Household stack | `deploy/` | Compose, Tailscale serve, backup / restore |
-| Tests | `packages/*/test` | 199 passing; F4 / F5 behaviour tests marked todo for their phases |
+| Tests | `packages/*/test` | all passing (see PR); F4 / F5 behaviour tests marked todo for their phases |

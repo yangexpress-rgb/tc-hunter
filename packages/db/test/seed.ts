@@ -57,6 +57,8 @@ export async function seedEverything(
       [me, ids.skill, ids.experience_bullet]);
     await one("answer_bank_item", `INSERT INTO answer_bank_item (applicant_id, question_key, answer_text_enc, status, last_reviewed_at)
       VALUES ($1, 'notice_period', $2, 'approved', now()) RETURNING id`, [me, encryptField(dk, "answer_bank_item.answer_text", "Two weeks")]);
+    await one("story_bank_item", `INSERT INTO story_bank_item (applicant_id, title, story_enc, linked_fact_ids)
+      VALUES ($1, 'CRM migration', $2, ARRAY[$3::uuid]) RETURNING id`, [me, encryptField(dk, "story_bank_item.story", '{"situation":"..."}'), ids.experience_bullet]);
     await one("hunt_preference", "INSERT INTO hunt_preference (applicant_id, target_titles) VALUES ($1, '{Director}') RETURNING id", [me]);
     await one("scan_run", "INSERT INTO scan_run (applicant_id) VALUES ($1) RETURNING id", [me]);
     await one("match", `INSERT INTO match (applicant_id, job_posting_id, score, components, reason_line, rules_version)

@@ -5,17 +5,17 @@ beforeAll(async () => { await freshDatabase(); });
 
 const DOMAIN_TABLES = [
   "user_account", "applicant", "experience_item", "experience_bullet", "education_item", "skill", "skill_evidence",
-  "credential", "answer_bank_item", "hunt_preference", "job_source", "scan_run", "job_posting", "job_posting_source",
+  "credential", "answer_bank_item", "story_bank_item", "hunt_preference", "job_source", "scan_run", "job_posting", "job_posting_source",
   "match", "match_feedback", "preference_adjustment", "document", "document_claim", "blocked_addition", "document_gap",
   "application", "application_stage_event", "application_packet", "packet_field", "packet_state_event",
   "submission_attempt", "site_account", "audit_event",
 ];
 
 describe("schema", () => {
-  it("has the 29 domain tables from the design, plus sign-in sessions, request keys and two rule tables", async () => {
+  it("has the 30 domain tables from the design, plus sign-in sessions, request keys and two rule tables", async () => {
     const r = await ownerQuery("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'");
     const names = r.rows.map((x) => x.table_name).sort();
-    expect(DOMAIN_TABLES).toHaveLength(29);
+    expect(DOMAIN_TABLES).toHaveLength(30);
     expect(names).toEqual([...DOMAIN_TABLES, "user_session", "request_key", "packet_transition", "stage_forward", "schema_migration"].sort());
   });
 

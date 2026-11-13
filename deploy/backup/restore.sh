@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Restore drill. Usage (on any machine that has the age PRIVATE key):
-#   restore.sh <backup.tar.age> <age-identity-file> <target-database-url> <vault-dir>
-# Restores into an EMPTY database. You also need TC_MASTER_KEY and TC_VAULT_KEY
-# from your offline copy, or the restored data stays unreadable by design.
+# Restore (design §7.1, fixture F8). Run on any machine that has the age PRIVATE key:
+#   restore.sh <backup.tar.age> <age-identity-file> <empty-database-url> <vault-dir>
+# You also need TC_MASTER_KEY and TC_VAULT_KEY from your offline copy, or the
+# restored personal fields and vault stay unreadable, by design.
 set -euo pipefail
 [ $# -eq 4 ] || { echo "usage: restore.sh <backup.tar.age> <age-identity> <db-url> <vault-dir>"; exit 2; }
 work="$(mktemp -d)"

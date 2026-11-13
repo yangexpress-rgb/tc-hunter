@@ -1,5 +1,6 @@
 -- TC Hunter, Phase 0 schema.
--- 29 domain tables (design.md section 5) plus 2 infrastructure tables
+-- 30 domain tables (design.md section 5; 29 from the approved review + story_bank_item, P4)
+-- plus 2 infrastructure tables
 -- (user_session, request_key). All tables are created now so later phases add
 -- behaviour, not data rewrites.
 --
@@ -222,6 +223,22 @@ CREATE TABLE answer_bank_item (
   CHECK (status <> 'approved' OR last_reviewed_at IS NOT NULL)
 );
 
+-- Story bank (accepted proposal P4): applicant-written STAR stories, each tied to the
+-- profile facts it draws on. Generators may select and rephrase approved stories, never add to them.
+CREATE TABLE story_bank_item (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  applicant_id       uuid NOT NULL REFERENCES applicant(id) ON DELETE CASCADE,
+  title              text NOT NULL,
+  story_enc          bytea,                  -- {situation, task, action, result}
+  linked_fact_ids    uuid[] NOT NULL CHECK (cardinality(linked_fact_ids) > 0),  -- bullets / experience items it draws on
+  skill_ids          uuid[] NOT NULL DEFAULT '{}',
+  status             text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved')),
+  last_reviewed_at   timestamptz,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  updated_at         timestamptz NOT NULL DEFAULT now(),
+  CHECK (status <> 'approved' OR last_reviewed_at IS NOT NULL)
+);
+
 CREATE TABLE hunt_preference (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   applicant_id         uuid NOT NULL REFERENCES applicant(id) ON DELETE CASCADE,
@@ -241,6 +258,11 @@ CREATE TABLE hunt_preference (
   scan_schedule        text NOT NULL DEFAULT 'daily' CHECK (scan_schedule IN ('manual','daily','weekly')),
   notify_pref          text NOT NULL DEFAULT 'in_app' CHECK (notify_pref IN ('in_app','daily_digest','weekly_digest')),
   tailor_target_pages  int NOT NULL DEFAULT 2 CHECK (tailor_target_pages BETWEEN 1 AND 4),
+  long_term_target_role text,                -- career ladder, the TC lens (P3), e.g. COO
+  target_function      text,
+  weekly_application_budget int CHECK (weekly_application_budget > 0),  -- advice, never a block (P5)
+  min_score_to_tailor  int CHECK (min_score_to_tailor BETWEEN 0 AND 100), -- P5
+  weekly_review_enabled boolean NOT NULL DEFAULT true,                  -- P9
   created_at           timestamptz NOT NULL DEFAULT now(),
   updated_at           timestamptz NOT NULL DEFAULT now()
 );
@@ -338,6 +360,7 @@ CREATE TABLE match (
   reason_line     text NOT NULL,
   -- "tailored" and "applied" are derived from application, not stored here.
   status          text NOT NULL DEFAULT 'new' CHECK (status IN ('new','saved','dismissed','not_a_fit')),
+  ladder_tag      text CHECK (ladder_tag IN ('step_toward','same_level','side_step')),  -- P3; shown, not scored
   rules_version   text NOT NULL,
   parser_version  text,
   computed_at     timestamptz NOT NULL DEFAULT now(),
@@ -381,7 +404,7 @@ CREATE TABLE document (
   public_ref         text NOT NULL UNIQUE DEFAULT next_public_ref('D'),
   applicant_id       uuid NOT NULL REFERENCES applicant(id) ON DELETE CASCADE,
   type               text NOT NULL CHECK (type IN ('master_resume','tailored_resume','cover_letter','short_answer',
-                                                   'referral_request','follow_up_email','portfolio','other')),
+                                                   'referral_request','follow_up_email','receipt','portfolio','other')),
   version            int NOT NULL DEFAULT 1,
   parent_document_id uuid,
   job_posting_id     uuid REFERENCES job_posting(id),
@@ -463,6 +486,8 @@ CREATE TABLE application (
   notes_enc       bytea,
   applied_at      timestamptz,
   confirmation_ref text,
+  outcome_tag     text CHECK (outcome_tag IN ('no_reply','rejected_before_screen','rejected_after_screen',
+                    'rejected_after_interview','offer_declined','withdrew','other')),  -- P8
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (id, applicant_id),
