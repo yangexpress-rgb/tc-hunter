@@ -33,7 +33,65 @@ export const L1 = {
   // Home
   "home.welcome": "Welcome, {name}",
   "home.next_action.profile": "Start by building your profile",
-  "home.next_action.profile_soon": "Your profile tools arrive in the next update.",
+  "home.next_action.profile_soon": "Bring in your resume, or add your experience by hand.",
+  "home.next_action.review": "Check your imported rows",
+  "home.next_action.preferences": "Tell us what jobs you want",
+  "home.next_action.improve": "Strengthen your profile",
+  "home.next_action.done": "Your profile is in good shape",
+  "home.next_action.done_note": "Finding jobs for you arrives in the next update.",
+  "home.coach.title": "To make your profile stronger",
+
+  // Profile (Module A)
+  "profile.title": "My profile",
+  "profile.checked": "Checked",
+  "profile.draft": "Needs your check",
+  "profile.check_cta": "This is right",
+  "profile.import.title": "Bring in your resume",
+  "profile.import.intro": "Upload your resume (PDF, Word or text) or your LinkedIn data download. Everything comes in as a draft for you to check, row by row. Nothing counts until you say it's right.",
+  "profile.import.done": "We read {n} rows from your file. Please check each one.",
+  "profile.import.unreadable": "We couldn't read that file. Try a PDF, a Word document, or your LinkedIn data download.",
+  "profile.import.too_big": "That file is too big. Please use one under 5 MB.",
+  "profile.import.privacy": "Your name, email, phone and address are removed before your resume is read. The file itself isn't kept.",
+  "profile.review.title": "Check your imported rows",
+  "profile.review.empty": "Nothing waiting for your check.",
+  "profile.review.discard": "Remove the rows from this file that I haven't checked",
+  "profile.experience.title": "Experience",
+  "profile.experience.hint": "Jobs, internships, projects, volunteering and coursework all count.",
+  "profile.education.title": "Education",
+  "profile.skills.title": "Skills",
+  "profile.skills.no_proof": "No proof yet. Link it to something you did so it counts in matching.",
+  "profile.credentials.title": "Certifications and licences",
+  "profile.answers.title": "Saved answers",
+  "profile.answers.hint": "Answers you approve here can be reused word for word on applications. Anything not approved is only a draft.",
+  "profile.answers.stale": "Not reviewed in 90 days. Check it's still right before it's used again.",
+  "profile.answers.your_step": "Always your step: we'll show this answer, but you answer it yourself on each application.",
+  "profile.stories.title": "Your stories",
+  "profile.stories.hint": "Short stories about things you did: the situation, your task, what you did and the result. Each one must be tied to something in your experience.",
+  "profile.preferences.title": "What you're looking for",
+  "profile.saved": "Saved.",
+
+  // Settings, Phase 1
+  "settings.passkeys.title": "Passkeys",
+  "settings.passkeys.intro": "Sign in with your phone or laptop's fingerprint, face or PIN instead of a password.",
+  "settings.passkeys.add": "Add a passkey",
+  "settings.passkeys.unavailable": "Passkeys need the server's web address to be set. Ask the person who runs it.",
+  "settings.passkeys.added": "Passkey added.",
+  "settings.passkeys.failed": "That didn't work. Please try again.",
+  "settings.confirm.title": "Confirm it's you",
+  "settings.confirm.cta": "Confirm",
+  "settings.confirm.intro": "Adding a passkey or deleting your data needs a fresh check that it's you.",
+  "settings.confirm.failed": "That didn't match. Please try again.",
+  "settings.confirm.done": "Thanks, you're confirmed for the next few minutes.",
+  "settings.confirm.passkey_cta": "Confirm with a passkey",
+  "settings.export.title": "Download my data",
+  "settings.export.intro": "Everything TC Hunter keeps about you, in one file you can open. It never includes your passwords.",
+  "settings.export.cta": "Download my data",
+  "settings.delete.title": "Delete my data",
+  "settings.delete.intro": "This permanently deletes your account and everything in it, including your saved employer-site passwords. It can't be undone. Download your data first if you want a copy.",
+  "settings.delete.cta": "Delete everything",
+  "settings.delete.type_email": "Type your email to confirm",
+  "signin.passkey_cta": "Sign in with a passkey",
+  "signin.passkey_failed": "That passkey didn't work here. Try again, or use your password.",
   "home.tile.new_matches": "New matches today",
   "home.tile.in_progress": "Applications in progress",
   "home.tile.follow_ups": "Follow-ups due",
@@ -103,6 +161,10 @@ export const L1 = {
   "error.stage_conflict": "We noticed a possible update to this application. Check it and decide.",
   "error.needs_your_answer": "We need you to tell us what happened before going further.",
   "error.proficiency": "Only you can set how strong a skill is.",
+  "error.fact_locked": "You've checked this, so only you can change it.",
+  "error.story_fact": "Link this story to something in your own experience.",
+  "error.fields": "Some of that doesn't fit. Check the dates and required fields and try again.",
+  "error.erase_confirm": "That email doesn't match your account, so nothing was deleted.",
 } as const;
 
 export type L1Key = keyof typeof L1;
@@ -139,6 +201,14 @@ export const ERROR_MESSAGES: Record<string, L1Key> = {
   TC_AUDIT_APPEND_ONLY: "error.generic",
   TC_NOT_FOUND: "error.not_found",
   TC_STEP_UP_REQUIRED: "stepup.needed",
+  TC_VERIFIED_FACT_LOCKED: "error.fact_locked",
+  TC_STORY_FACT_NOT_YOURS: "error.story_fact",
+  TC_STORY_NEEDS_FACT: "error.story_fact",
+  TC_FIELD_NOT_EDITABLE: "error.generic",
+  TC_PASSKEYS_NOT_SET_UP: "settings.passkeys.unavailable",
+  TC_ERASE_CONFIRM_MISMATCH: "error.erase_confirm",
+  TC_BAD_INPUT: "error.fields",
+  TC_STEP_UP_FAILED: "settings.confirm.failed",
 };
 
 /** Layer 1 sentence for any error. Technical detail belongs in Layer 3 only. */
@@ -146,8 +216,12 @@ export function plainError(code: string | undefined): string {
   return t(ERROR_MESSAGES[code ?? ""] ?? "error.generic");
 }
 
-/** Pull a TC_ code out of a database error message. */
+/** Pull a TC_ code out of a database error message. Bad input (checks, dates, types) reads as TC_BAD_INPUT. */
 export function errorCode(err: unknown): string | undefined {
   const msg = err instanceof Error ? err.message : String(err);
-  return /\b(TC_[A-Z_]+)\b/.exec(msg)?.[1];
+  const tc = /\b(TC_[A-Z_]+)\b/.exec(msg)?.[1];
+  if (tc) return tc;
+  const pg = (err as { code?: string } | null)?.code;
+  if (pg && /^(22|23502|23514)/.test(pg)) return "TC_BAD_INPUT";
+  return undefined;
 }

@@ -166,4 +166,19 @@ describe("F8 private network only", () => {
     const serve = JSON.parse(readFileSync(join(ROOT, "deploy", "tailscale-serve.json"), "utf8"));
     expect(Object.values(serve.AllowFunnel)).toEqual([false]);
   });
+
+  it("the web app reaches out only through the allow-list gate (Claude API, HTTPS only)", async () => {
+    const compose = readFileSync(join(ROOT, "deploy", "compose.yaml"), "utf8");
+    const web = /\n  web:\n([\s\S]*?)\n  \w[\w-]*:\n/.exec(compose)?.[1] ?? "";
+    expect(web).toMatch(/HTTPS_PROXY: http:\/\/egress-proxy:3128/);
+    const gate = /\n  egress-proxy:\n([\s\S]*?)\n  \w[\w-]*:\n/.exec(compose)?.[1] ?? "";
+    expect(gate).toMatch(/ALLOW_HOSTS: api\.anthropic\.com\n/);
+    expect(gate).not.toMatch(/ports\s*:/);
+    const { allowed } = await import(join(ROOT, "deploy", "egress-proxy", "proxy.mjs"));
+    expect(allowed("api.anthropic.com:443")).toBe(true);
+    expect(allowed("api.anthropic.com:80")).toBe(false);
+    expect(allowed("evil.example:443")).toBe(false);
+    expect(allowed("api.anthropic.com.evil.example:443")).toBe(false);
+    expect(allowed("10.0.0.1:443")).toBe(false);
+  });
 });

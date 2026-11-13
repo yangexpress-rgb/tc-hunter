@@ -4,7 +4,7 @@
 
 **App name:** TC Hunter. "TC" is for Tim Cook: not a founder, a person who was *hired* into a good job, rose to CEO, and became a billionaire as an employee. Tagline: *"Get hired. Rise like Tim Cook."* **Brand rule:** TC Hunter is an aspirational reference only. Never market the app as endorsed by, affiliated with, or using the likeness of Tim Cook or Apple. The name and the tagline are the brand; the story is internal positioning. (Enforced by a test: no Tim Cook or Apple reference may appear in user-facing text except the tagline.)
 
-**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phase 0 built, awaiting Yong's review.
+**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phase 0 merged. Phase 1 built, awaiting Yong's review.
 
 ### Decision log
 
@@ -14,6 +14,8 @@
 | 2026-11-13 | §13.1: personal household tool for two applicants, Yong and Leo, fully isolated (folded into §1, §3, §8, §13). |
 | 2026-11-13 | Design review (schema, Phase 0 plan, §14 risk handling) approved. |
 | 2026-11-13 | §15 proposals: P1–P5 and P7–P11 accepted; P6 accepted with three conditions (fixture F8); P12 accepted for the v1.1 roadmap only. P2 and P6 built in Phase 0. §15 resolved. Brief v1.2 approved. |
+| 2026-11-13 | Phase 0 approved and merged. |
+| 2026-11-13 | §13.6: resume import is read by Claude (Anthropic API) with contact details removed before sending; the built-in rule reader is the fallback (folded into §2.5, §5.1). |
 
 ---
 
@@ -87,7 +89,7 @@ Technical complexity must never be exposed without a well-designed structure and
 
 - Applicant PII is encrypted at rest, visible only to that applicant, and included in export / delete-my-data from v1.
 - PII is sent **only** to the employer site for an application the applicant approved — never to job sources, analytics, or a third party as a side effect.
-- AI provider calls (resume import, tailoring) have name, email, phone and address stripped before sending and re-inserted at render time, and use a provider setting with no training on inputs. *(Recommended in review; to confirm before Phase 1.)*
+- AI provider calls (resume import, tailoring) have name, email, phone and address stripped before sending and re-inserted at render time, and use a provider setting with no training on inputs. *(Decided §13.6. Built for import in Phase 1: `stripContactDetails` removes the header block, emails, phone numbers, street addresses, profile links and the applicant's names; a test proves none of them reach the reader.)*
 - Every outbound submission is written to the audit log (§5.6).
 - Delete-my-data removes everything for that applicant, including their audit log and their vault, after offering an export first.
 
@@ -139,7 +141,10 @@ PostgreSQL. Internal ids are UUIDs; user-facing ids are human-readable (`J-00012
 
 | Table | Key columns | Rules |
 |---|---|---|
-| `user_account` | email, password_hash (argon2id), mfa_enabled, mfa_secret_enc, passkey_refs | The app's own sign-in. Employer-site secrets never come here. |
+| `user_account` | email, password_hash (argon2id), mfa_enabled, mfa_secret_enc | The app's own sign-in. Employer-site secrets never come here. |
+| `passkey_credential` (Phase 1) | user_account_id, credential_id, public_key, counter, transports, label, last_used_at | Public keys only; nothing secret is stored. Registration needs a fresh sign-in check. |
+| `auth_challenge` (Phase 1) | purpose (register / sign_in / step_up), challenge, expires_at | Single use, short-lived. |
+| `import_batch` (Phase 1) | kind (resume / linkedin), file_name, file_kind, parser, notes[], row_counts | One per upload. The file itself is not kept. Every fact row it creates carries `import_batch_id`, so "remove the unchecked rows from this file" is one action. |
 | `applicant` | user_account_id (unique), data_key_wrapped, legal_name_enc, preferred_name, email_enc, phone_enc, city/region/country, timezone, work_auth_summary_enc, work_auth_structured_enc, links | One per account; v1 has two. Work authorisation is stored, never auto-attested. |
 | `experience_item` | employer_name (empty allowed only for project / coursework), title, location, start/end (null = present), date_precision, **employment_type** (`full_time, part_time, contract, internship, volunteer, project, coursework, other`), sort_order, verification, source, parse_confidence | Early-career types are first-class experience (P2). Imports always land as draft; only the applicant can mark verified. |
 | `experience_bullet` | experience_item_id, text, metric_value / unit / context, sort_order, verification, source, parse_confidence | One row per achievement. These ids are the facts tailoring must cite. |
@@ -154,6 +159,10 @@ PostgreSQL. Internal ids are UUIDs; user-facing ids are human-readable (`J-00012
 **Sorting the UI must support:** experience by date or by relevance to target role; skills by category; documents by job / status / date; answer bank by last-reviewed.
 
 **Import:** parse an uploaded resume (PDF/DOCX) or LinkedIn export into **draft** rows; nothing is verified until the applicant confirms row by row; parse confidence shown per row in Layer 2. For early-career profiles the importer recognises project, internship, volunteer and coursework sections.
+
+*As built (Phase 1):* text is extracted (PDF, Word, plain text; LinkedIn data-download ZIP read from its CSVs), contact details are removed, and a reader turns it into rows: Claude when `ANTHROPIC_API_KEY` is set (§13.6), otherwise the built-in rule reader; if Claude fails or declines, the rule reader runs instead. Every result then passes the **honesty check** (`groundInSource`), whatever the reader: a row or achievement whose words are not in the file is dropped with a plain note; numbers are re-read from the file's own text, never taken from the reader; a stated skill level is kept only if it is written on the same line as the skill, and capped at what is written. Rows are written as `system` actor, so the database itself refuses any verified row or applicant-set level from an import. The review screen shows only draft rows, each with "This is right", "Fix it, then mark it right" and "Remove, it's wrong".
+
+*Other Phase 1 rules, database-enforced:* a checked (verified) row can be changed only by the applicant; a story's linked facts and skills must be the applicant's own; only the applicant approves an answer or story, and editing an approved one sends it back to draft. The evidence coach (P1) counts drafts, skills without proof, stale and draft answers, draft stories, empty experience and missing target roles, and turns them into Layer 1 nudges on Home and My profile. Experience sorts by date or by closeness to the target roles (P3 field `long_term_target_role` included).
 
 ### 5.2 Module B — Job Ingestion (Scanner)
 
@@ -283,11 +292,11 @@ Keys that must be kept offline, or a restore is unreadable by design: `TC_MASTER
 
 ## 8. Security requirements
 
-- **Sign-in:** each household member has their own account: email + password (argon2id, minimum 12 characters) with optional authenticator-app two-step code. Configurable idle timeout (default 60 min). Session cookies are random, httpOnly, and only their hash is stored. Sign-up can be closed (`ALLOW_SIGNUP=false`) once both accounts exist. A fresh sign-in check (password or code, within 5 minutes) is required before "Approve submission". *Passkeys: schema ready; sign-in flow deferred to Phase 1.*
+- **Sign-in:** each household member has their own account: email + password (argon2id, minimum 12 characters) with optional authenticator-app two-step code. Configurable idle timeout (default 60 min). Session cookies are random, httpOnly, and only their hash is stored. Sign-up can be closed (`ALLOW_SIGNUP=false`) once both accounts exist. A fresh sign-in check (password, code or passkey, within 5 minutes) is required before "Approve submission", adding a passkey, and deleting your data. **Passkeys (Phase 1):** WebAuthn, tied to `TC_PUBLIC_ORIGIN` (off when unset); sign-in with a passkey counts as two-step; challenges are single use.
 - Encryption in transit (TLS via the private network) and at rest (per-applicant field keys; document files via signed, expiring URLs from Phase 3).
 - Vault pattern for employer-site accounts (§2.4): `SecretStore` interface returns only opaque references; household backend is one encrypted file per applicant on its own volume with its own key (`TC_VAULT_KEY`, per-applicant derived keys). Secrets travel as `SecretValue`, which prints as `[secret]` in logs, JSON and inspection. A canary test plants a fake employer password and fails the build if it appears in a full database dump, any log line, the audit log, or the vault file on disk (export is added to the scan in Phase 1).
 - Per-applicant isolation at the data layer and in Postgres (F6, F6b).
-- Data export (JSON + documents ZIP) and hard delete, applicant-initiated, audit-logged (Phase 1).
+- Data export (JSON + documents ZIP) and hard delete, applicant-initiated, audit-logged. *Built in Phase 1:* the download is a ZIP (README, `profile.json` with encrypted fields opened, one file per document) and never includes password hashes, two-step secrets or vault contents; a planted fake employer password is checked to be absent from it (`vault.test.ts`). Delete needs a fresh sign-in check and the applicant's email typed; it runs `erase_my_data()` (every row, audit log, sessions, passkeys), then destroys that applicant's vault, then signs out.
 - Secret scanning in CI.
 
 ---
@@ -317,8 +326,8 @@ The same story must work for an early-career applicant whose profile is mostly p
 
 | Phase | Scope | Gate | Status |
 |---|---|---|---|
-| **0. Foundations** | Repo, sign-in, household accounts (Yong + Leo), full schema, per-applicant vault pattern, audit log, layered UI shell, state machines + database guards, early-career experience types (P2), household server stack with encrypted off-site backups and private access (P6), F4/F5 fixtures authored | Schema + fixtures reviewed; F6b, F8 pass | **Built — F6, F6b, F8 passing; awaiting review** |
-| **1. Applicant Vault** | Module A incl. import → draft → verify, Answer Bank, Preferences, evidence coach (P1), story bank (P4), passkeys, export / delete-my-data | F1, F6 pass | Not started |
+| **0. Foundations** | Repo, sign-in, household accounts (Yong + Leo), full schema, per-applicant vault pattern, audit log, layered UI shell, state machines + database guards, early-career experience types (P2), household server stack with encrypted off-site backups and private access (P6), F4/F5 fixtures authored | Schema + fixtures reviewed; F6b, F8 pass | **Merged — F6, F6b, F8 passing** |
+| **1. Applicant Vault** | Module A incl. import → draft → verify, Answer Bank, Preferences, evidence coach (P1), story bank (P4), passkeys, export / delete-my-data | F1, F6 pass | **Built — F1, F6 passing; awaiting review** |
 | **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | Not started |
 | **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | Not started |
 | **4a. Tracker & Reports** | Module F: pipeline, follow-ups, 5 reports, dashboard, weekly budget (P5), outcome tags (P8), weekly review (P9); then score calibration (P10) | F7 pass | Not started |
@@ -330,7 +339,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 
 ## 12. Acceptance fixtures
 
-- **F1 — Import honesty** (Phase 1). *Phase 0 foundation:* the database refuses verified imports, refuses verification by anyone but the applicant, and refuses proficiency changes by anyone but the applicant.
+- **F1 — Import honesty** (Phase 1). *Passing* (`packages/db/test/f1-import.test.ts`): the sample resume in `fixtures/f1/` (text, PDF and Word) imports with every row draft / unverified, parse confidence on every row, no level above what the resume states (Python "advanced" → Strong, Spanish "conversational" → Working, others unset); an adversarial reader that invents a job, a bullet, a number and a higher level is cut back to the file's own words; reader failure and refusal fall back to the rule reader; contact details never reach the reader; LinkedIn download imports the same way.
 - **F2 — Match explainability** (Phase 2). Parsed requirements are pinned in the fixture so AI parsing variance cannot break the ±2 tolerance.
 - **F3 — Deduplication** (Phase 2).
 - **F4 — Tailoring truthfulness** (Phase 3). *Authored in Phase 0:* `fixtures/f4/` (profile, posting with gap skill, adversarial model output with expected block reasons); test placeholders in `packages/db/test/pending-fixtures.test.ts`.
@@ -349,7 +358,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 3. **Connected email — open (before Phase 4a).** Recommendation: defer to v1.1.
 4. **Future auto-apply mode — open, not needed for v1.** Recommendation: park.
 5. **Name — DECIDED:** TC Hunter.
-6. **AI provider and PII rule — open (before Phase 1).** Recommendation in §2.5.
+6. **AI provider and PII rule — DECIDED (Yong, 2026-11-13):** Claude (Anthropic API) with contact details removed before sending; built-in rule reader as fallback and when no key is set (§2.5, §5.1).
 7. **Work-authorisation questions — open (before Phase 4b).** Recommendation (§2.3): always "Your step", saved answer shown, never filled.
 8. **Unknown outcome after submit — open (before Phase 4b).** Built as recommended: `failed` + reason `outcome_unknown`, applicant resolves.
 
@@ -422,3 +431,16 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Web shell | `apps/web` | sign-up, sign-in (+ code), home, settings |
 | Household stack | `deploy/` | Compose, Tailscale serve, backup / restore |
 | Tests | `packages/*/test` | all passing (see PR); F4 / F5 behaviour tests marked todo for their phases |
+
+## Appendix — Phase 1 as built
+
+| Area | Where | Notes |
+|---|---|---|
+| Schema | `packages/db/migrations/004_applicant_vault.sql` | `import_batch`, passkeys, challenges; checked-row, story and answer guards; `erase_my_data()` |
+| Import | `packages/domain/src/resume/` | text extraction, contact stripping, rule reader, Claude reader, LinkedIn download, honesty check |
+| Vault data | `packages/db/src/profile.ts` | import, edit / check / remove, proof links, answers, stories, preferences, evidence coach |
+| Privacy | `packages/db/src/privacy.ts` | download my data, delete my data |
+| Passkeys | `packages/db/src/passkeys.ts` | add, remove, sign in, fresh check |
+| Screens | `apps/web/app/profile/*`, `apps/web/app/settings` | My profile (about you, experience, education, skills, certifications, stories, saved answers, what you want, bring in a resume, check imported rows); Settings (passkeys, confirm it's you, download, delete); passkey sign-in; Home next step from the coach |
+| Household stack | `deploy/` | new settings `TC_PUBLIC_ORIGIN`, `ANTHROPIC_API_KEY`, `TC_RESUME_READER`; web still has no internet route: a small allow-list gate (`deploy/egress-proxy`, HTTPS to `api.anthropic.com` only) is its one way out, checked by F8 |
+| Tests | `packages/*/test` | 242 passing (F1, F6 incl. `import_batch`, vault, passkeys with a software authenticator, export canary, erase), plus an end-to-end browser run of the whole flow |

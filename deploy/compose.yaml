@@ -51,6 +51,13 @@ services:
       SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-60}
       STEP_UP_MINUTES: ${STEP_UP_MINUTES:-5}
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-true}
+      TC_PUBLIC_ORIGIN: ${TC_PUBLIC_ORIGIN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TC_RESUME_READER: ${TC_RESUME_READER:-}
+      # Outbound calls (the Claude resume reader) go only through egress-proxy, which allows only listed hosts.
+      HTTPS_PROXY: http://egress-proxy:3128
+      NO_PROXY: db,localhost
+      NODE_USE_ENV_PROXY: "1"
     volumes:
       - vault-data:/vault
     depends_on:
@@ -74,6 +81,19 @@ services:
       - ./tailscale-serve.json:/config/serve.json:ro
     networks: [internal, egress]
 
+  # The only way out for the web app: HTTPS tunnels to an allow-list of hosts, nothing else.
+  egress-proxy:
+    image: node:22-bookworm-slim
+    restart: unless-stopped
+    command: ["node", "/proxy/proxy.mjs"]
+    environment:
+      ALLOW_HOSTS: api.anthropic.com
+    volumes:
+      - ./egress-proxy:/proxy:ro
+    read_only: true
+    user: node
+    networks: [internal, egress]
+
   backup:
     build: { context: ./backup }
     restart: unless-stopped
@@ -95,7 +115,7 @@ services:
 networks:
   internal:
     internal: true   # no route to the internet; db and web live only here
-  egress: {}         # tailscale and backup need to reach out (tailnet, off-site copy)
+  egress: {}         # tailscale, backup and egress-proxy reach out (tailnet, off-site copy, Claude API)
 
 volumes:
   db-data:
