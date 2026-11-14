@@ -180,3 +180,5 @@ table.report { width: 100%; border-collapse: collapse; font-size: 15px; }
 table.report th, table.report td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 table.report td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.report thead th { color: var(--muted); font-weight: 600; font-size: 13px; }
+.email-suggestions .suggestion + .suggestion { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.email-suggestions p { margin: 0 0 8px; }

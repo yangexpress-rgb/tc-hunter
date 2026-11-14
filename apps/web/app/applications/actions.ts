@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, resetCalibration, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  acceptCalibration, acceptEmailSignal, dismissEmailSignal, resetCalibration, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -9,6 +9,7 @@ import { app, log, requireSession } from "@/lib/server";
 /** Only ever send people back to an Applications, Reports or Jobs page. */
 function backTo(form: FormData, fallback: string): string {
   const b = String(form.get("back") ?? "");
+  if (b === "/" || /^\/\?[a-z=&0-9_-]*$/.test(b)) return b;  // Home
   return /^\/(applications|reports|jobs)(\/[A-Za-z0-9-]*)?(\?[a-z=&0-9_-]*)?(#[a-z0-9-]*)?$/.test(b) ? b : fallback;
 }
 const withParam = (path: string, k: string, v: string) => {
@@ -78,4 +79,11 @@ export async function calibrationAction(form: FormData) {
   const s = await requireSession();
   const { pool } = app();
   await act(form, () => (form.get("do") === "reset" ? resetCalibration(pool, s) : acceptCalibration(pool, s)), "/reports?tab=fit", form.get("do") === "reset" ? "reset" : "calibrated");
+}
+
+export async function emailSignalAction(form: FormData) {
+  const s = await requireSession();
+  const id = String(form.get("signal") ?? "");
+  const { pool } = app();
+  await act(form, () => (form.get("do") === "dismiss" ? dismissEmailSignal(pool, s, id) : acceptEmailSignal(pool, s, id)), "/applications", form.get("do") === "dismiss" ? "dismissed" : "moved");
 }

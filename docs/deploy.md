@@ -30,6 +30,17 @@ This is the household setup (design §7.1). It runs the same way on a small VPS.
 9. **Finding jobs (Phase 2):** nothing to set up. The `worker` service looks for jobs on each person's schedule (daily by default) and when they press *Look for jobs now*. Its only way out is the `egress-worker` gate: HTTPS to public addresses only, never to anything on your home network. It reads public job-board feeds and careers pages politely (identified, one request every 6 seconds per site, robots.txt respected) and never opens LinkedIn or Indeed. With an Anthropic key set (step 8), the requirements in each job are read by Claude from the job text alone; `TC_POSTING_READER=rules` keeps it to the built-in reader.
    Check it: `docker compose -f deploy/compose.yaml logs --tail 50 worker`
 10. **Tailored resumes (Phase 3):** nothing to set up. Drafts are made by the `worker`. With an Anthropic key (step 8) Claude may reword lines for each job; every line is checked against your profile and anything new is blocked. `TC_TAILOR_WRITER=rules` keeps drafts to your own words. Downloads are rebuilt from the approved version each time, so there is no file storage to back up.
+11. **Applications and reports (Phase 4a):** nothing to set up. Weeks start on Monday in each person's own time zone (My profile › About you).
+12. **Connected Gmail (optional, decision 13.3).** Each person can connect their own Gmail, read-only, so TC Hunter can suggest updates when an employer replies. It needs a Google sign-in client, made once for the household:
+    1. Open the [Google Cloud console](https://console.cloud.google.com/), create a project (e.g. "TC Hunter") and turn on the **Gmail API** (APIs & Services › Library).
+    2. **OAuth consent screen:** user type *External*, app name "TC Hunter", your email as support and developer contact. Add one scope: `https://www.googleapis.com/auth/gmail.readonly`. Under *Test users* add Yong's and Leo's Gmail addresses.
+    3. **Credentials › Create credentials › OAuth client ID:** type *Web application*. Authorised redirect URI: your `TC_PUBLIC_ORIGIN` followed by `/settings/email/callback` (e.g. `https://tc-hunter.<your-tailnet>.ts.net/settings/email/callback`).
+    4. Put the client ID and secret in `TC_GOOGLE_CLIENT_ID` and `TC_GOOGLE_CLIENT_SECRET` in `deploy/.env` (`TC_PUBLIC_ORIGIN` must be set, step 7) and run step 4 again.
+    5. Each person: Settings › Email › *Connect Gmail (read-only)*. You'll be asked to confirm it's you first.
+
+    While the Google project's publishing status is *Testing*, Google ends the connection after about 7 days and each person has to connect again (Settings shows when). Setting the status to *In production* stops that. Google then shows an "unverified app" warning on the sign-in screen, which is expected for a household tool. Choose *Advanced › Go to TC Hunter* to continue.
+
+    What it does: the `worker` looks at recent mail mentioning employers you track, about once an hour, through the `egress-worker` gate. The web app reaches only `oauth2.googleapis.com` (for the sign-in) through `egress-proxy`. The Google token is kept in that person's vault, never in the database. From mail, only the kind of reply, the date and the sender's domain are kept. Mail is never sent to Claude. Nothing changes until the person taps *Yes, move it*. *Disconnect* revokes the token with Google and deletes everything taken from mail.
 
 ## Backups
 

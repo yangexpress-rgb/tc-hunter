@@ -16,6 +16,10 @@ export const AUDIT_ALLOWED_KEYS = {
   "skill.alias_confirmed": [],
   "application.stage_changed": ["application_ref", "from", "to"],
   "calibration.changed": ["active", "rules_version"],
+  "email.connected": ["provider"],
+  "email.disconnected": [],
+  "email.suggestion_accepted": ["application_ref", "kind"],
+  "email.suggestion_dismissed": ["kind"],
   "packet.approved": ["application_ref", "packet_version", "packet_hash"],
   "packet.submit_approved": ["application_ref", "packet_version", "submit_hash"],
   "packet.submitted": [

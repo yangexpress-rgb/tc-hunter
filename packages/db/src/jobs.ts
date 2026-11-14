@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { runEmailCheck, type EmailDeps } from "./email";
 import {
   dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreMatch, sha256Hex, canonicalJson,
@@ -270,7 +271,7 @@ export async function watchAlerts(c: pg.PoolClient, eventIds: string[]): Promise
 // The worker's two jobs: a scan, and reading one pasted link
 // ---------------------------------------------------------------------------
 
-export interface WorkDeps { fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps }
+export interface WorkDeps { fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps; email?: EmailDeps }
 
 const PLAIN_REFUSAL: Record<string, string> = {
   robots: "This site asks automated readers not to look at its job pages, so we won't.",
@@ -373,7 +374,7 @@ export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload:
   });
 }
 
-export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link" | "tailor"; payload: Record<string, any>; attempts: number }
+export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link" | "tailor" | "email_check"; payload: Record<string, any>; attempts: number }
 
 /** Takes and runs one piece of queued work. Returns false when there was nothing to do. */
 export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolean> {
@@ -382,6 +383,7 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolea
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
     const result = item.kind === "scan" ? await runScan(pool, ctx, deps)
+      : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
       : await runIngestLink(pool, ctx, item.payload as never, deps);
     await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);

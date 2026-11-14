@@ -4,7 +4,7 @@
 
 **App name:** TC Hunter. "TC" is for Tim Cook: not a founder, a person who was *hired* into a good job, rose to CEO, and became a billionaire as an employee. Tagline: *"Get hired. Rise like Tim Cook."* **Brand rule:** TC Hunter is an aspirational reference only. Never market the app as endorsed by, affiliated with, or using the likeness of Tim Cook or Apple. The name and the tagline are the brand; the story is internal positioning. (Enforced by a test: no Tim Cook or Apple reference may appear in user-facing text except the tagline.)
 
-**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0–2 merged. Phase 3 built. Per Yong (2026-11-14), Phases 3, 4a and 4b run back to back without a review stop; Phase 5 still needs Yong's separate written go-ahead.
+**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0–3 merged. Phase 4a built (with connected Gmail). Per Yong (2026-11-14), Phases 3, 4a and 4b run back to back without a review stop; Phase 5 still needs Yong's separate written go-ahead.
 
 ### Decision log
 
@@ -18,6 +18,8 @@
 | 2026-11-13 | §13.6: resume import is read by Claude (Anthropic API) with contact details removed before sending; the built-in rule reader is the fallback (folded into §2.5, §5.1). |
 | 2026-11-13 | Phase 1 approved and merged. |
 | 2026-11-14 | Phase 2 approved and merged. Yong: keep moving through the phases without asking each time (3 → 4a → 4b, one PR each); Phase 5 still needs a separate written go-ahead. |
+| 2026-11-14 | Phase 3 merged (PR #4). |
+| 2026-11-14 | §13.3: connect Gmail in Phase 4a (Yong: "Yes", "Connect now"), per applicant, read-only, suggestions only (folded into §2.5, §5.6, §7). |
 | 2026-11-13 | §13.2: public job-board feeds only (Greenhouse, Lever, Ashby, SmartRecruiters, plus careers pages); LinkedIn and Indeed by pasted link; no licensed aggregator (folded into §5.2). |
 
 ---
@@ -92,6 +94,7 @@ Technical complexity must never be exposed without a well-designed structure and
 
 - Applicant PII is encrypted at rest, visible only to that applicant, and included in export / delete-my-data from v1.
 - PII is sent **only** to the employer site for an application the applicant approved — never to job sources, analytics, or a third party as a side effect.
+- Connected email (§13.3) reads only headers and Gmail's preview of mail about tracked employers; keeps no subject, text or address; never sends mail to an AI service; the Google token lives only in the applicant's vault (§5.6).
 - AI provider calls (resume import, tailoring) have name, email, phone and address stripped before sending and re-inserted at render time, and use a provider setting with no training on inputs. *(Decided §13.6. Built for import in Phase 1: `stripContactDetails` removes the header block, emails, phone numbers, street addresses, profile links and the applicant's names; a test proves none of them reach the reader.)*
 - Every outbound submission is written to the audit log (§5.6).
 - Delete-my-data removes everything for that applicant, including their audit log and their vault, after offering an export first.
@@ -280,7 +283,16 @@ Allowed transitions are a table in the database and a function in code, tested t
 - **Quality-over-volume budget (P5, Phase 4a):** optional weekly cap on applications and a minimum score to tailor, shown as *"4 of 5 applications this week"*.
 - **Reports** (CSV + PDF): Pipeline, Activity, Fit, Gap (top 5 on the dashboard; includes the next-rung skills from the TC lens), Source.
 - **Weekly hunt review (P9, Phase 4a):** one plain page per week per applicant — what happened, what converted, top gaps, ladder progress, the three best next actions — in-app and in the optional email digest; reconciles with the reports (F7).
+- **As built (Phase 4a):** reports are pure functions over one `ReportInput` (`packages/domain/src/tracker/reports.ts`), so the screens, the CSV / PDF files and the weekly review always agree. *Applications* groups by stage (Getting ready · Waiting to hear back · Talking with the employer · Closed in Layer 2) with follow-ups due and the budget line. *An application* shows one next thing per stage: prepare/look over the resume, **I applied** (how, optional confirmation number; sets a follow-up a week out; the weekly budget is advice, never a block), *What happened next?* buttons, the optional outcome tag once closed, the interview time (typed in the applicant's own time zone), next step, private notes (encrypted), history (Layer 2), *Move it somewhere else* (Layer 2), events (Advanced). Tailoring moves a job to *Preparing*; approving its resume moves it to *Ready to apply*. *Reports* has five tabs, CSV and PDF downloads (CSV guarded against spreadsheet formulas) and the weekly look back with three linked next actions. **Score calibration (P10):** after ≥20 applications with an outcome (≥3 that reached an interview and ≥3 that didn't), the Fit tab suggests moving 5 points toward the score part that best told interviews apart; weights always total 100 with each ≥5 (database-enforced, applicant only); accepting re-scores matches and records `rules_version` `match-1+cal-N` on each; *Go back to the standard weights* undoes it.
 - **Dashboard (Layer 1 home):** New matches today · Applications in progress · Follow-ups due · Interviews upcoming · Top skill gaps. Nothing else above the fold. Below the fold: evidence coach nudges (P1), posting-watch alerts (P7), weekly budget used (P5), latest weekly review (P9).
+
+**Connected email (§13.3, Phase 4a, as built):**
+- *Connect:* Settings › Email, after a fresh "is it you?" check. Google sign-in with PKCE and a one-time state bound to the applicant (10-minute httpOnly cookie). Only `gmail.readonly` is accepted: a sign-in that grants more (or less) is refused and not kept. The long-lived token is a `SecretValue` from arrival and goes straight into **that applicant's vault** (`email_token`); the database holds only `email_connection.vault_ref`. Only the applicant can connect or change the token (database-enforced).
+- *Look:* the worker, about once an hour (`enqueue_due_email_checks()`), searches recent mail (`newer_than:14d`, never sent mail, drafts or chats) that mentions tracked employers by name or comes from their own domains. It reads only the From and Subject headers and Gmail's short preview, in memory. **Plain rules** classify it (acknowledgement · interview · offer · rejection). Mail is never sent to Claude. One message → at most one suggestion for exactly one application; unclear matches are skipped.
+- *Keep:* `email_signal` holds the application, kind, suggested stage, sender domain, received time and Gmail message id (for "Open it in Gmail" and to avoid repeats). Never the subject, text or address. The mailbox address is stored encrypted for display.
+- *Decide:* suggestions appear on Home (next action), Applications and the application. **Yes, move it** is the applicant's own move (`stage_set_by = applicant`); **Not right** dismisses it. The worker cannot accept a suggestion (database-enforced). A suggestion that is no longer a step forward disappears.
+- *Stop:* if Google withdraws access, the connection shows *Connect again* and no further looks are queued. **Disconnect** revokes the token with Google, deletes it from the vault and deletes every `email_signal`; applications are untouched. Delete-my-data removes all of it.
+- *Audit:* `email.connected`, `email.disconnected`, `email.suggestion_accepted` (application ref, kind), `email.suggestion_dismissed` (kind); never mail content.
 
 **Audit log (`audit_event`):** actor, action, object, time, payload_summary. Per-action allow-list of payload keys (submissions: employer, job, document versions, answer sources, confirmation; never passwords or full PII); the database also rejects secret-looking keys. Append-only for the app role, protected by a trigger even for the owner, and **hash-chained per applicant** so tampering is detectable (shown in Settings → Advanced).
 
@@ -307,7 +319,7 @@ Allowed transitions are a table in the database and a function in code, tested t
 - **Background jobs (Phase 2):** a small queue inside Postgres (`work_item`) instead of Redis or pg-boss: the household load is tiny and plain SQL keeps it under row-level security. `claim_work()` takes the next item with `SKIP LOCKED`, reclaims items left running too long, and gives up after 3 attempts; one queued or running scan per applicant; `enqueue_due_scans()` queues scans by each applicant's schedule; `prune_work()` tidies finished items. `apps/worker` runs the loop and works each item as actor *system* inside that applicant's context, so it can only see that applicant's rows.
 - **LLM use:** parsing, tailoring drafts, cover letters, question → Answer Bank matching. All output that touches a document or form is draft until applicant-approved. Provider behind an abstraction; prompt + model version recorded on each generated document.
 - **Browser automation:** see §5.5 (extension in the applicant's own browser).
-- **Email (optional):** deferred to v1.1 (§13.3 recommendation); schema has room.
+- **Email (decided §13.3, Phase 4a):** each applicant may connect their own Gmail, read-only (`gmail.readonly`). The web app does the Google sign-in through `egress-proxy` (allow-list: `api.anthropic.com`, `oauth2.googleapis.com`); the worker reads mail through `egress-worker`. See §5.6.
 - **Notifications:** in-app + optional email digest (daily / weekly). No push in v1.
 
 ### 7.1 Hosting: one-box household server (P6)
@@ -366,10 +378,10 @@ The same story must work for an early-career applicant whose profile is mostly p
 | **1. Applicant Vault** | Module A incl. import → draft → verify, Answer Bank, Preferences, evidence coach (P1), story bank (P4), passkeys, export / delete-my-data | F1, F6 pass | **Merged — F1, F6 passing** |
 | **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | **Merged — F2, F3 passing** |
 | **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | **Built — F4 passing** |
-| **4a. Tracker & Reports** | Module F: pipeline, follow-ups, 5 reports, dashboard, weekly budget (P5), outcome tags (P8), weekly review (P9); then score calibration (P10) | F7 pass | Not started |
+| **4a. Tracker & Reports** | Module F: pipeline, follow-ups, 5 reports, dashboard, weekly budget (P5), outcome tags (P8), weekly review (P9); then score calibration (P10); connected Gmail (§13.3) | F7 pass | **Built — F7 passing** |
 | **4b. Assisted Fill** | Application Packet + browser extension fill (Tier 1), application receipt (P11) | F5 (assisted) pass | Not started |
 | **5. Guided Automation** | Automation, Tier 1 adapters, pause / resume, confirmation capture | **Requires Yong's separate written go-ahead after 4b review.** F5 (full) on a sandbox flow, then one real application with Yong present | Not started |
-| **v1.1** | Interview prep pack (P12), connected email | — | Roadmap |
+| **v1.1** | Interview prep pack (P12) | — | Roadmap |
 
 ---
 
@@ -382,7 +394,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 - **F5 — Application flow** (4b assisted, 5 full). *Authored in Phase 0:* `fixtures/f5/` (demo form with attestation and work-authorisation steps, confirmation id). *Phase 0 foundation:* idempotency guards tested (one application per job, single-use submit key, unknown-outcome block, double-click safety).
 - **F6 — Isolation, both directions.** *Passing in Phase 0* for every applicant-owned table (the test reads the table list from the live schema, so a new table cannot skip it).
 - **F6b — Neither applicant can approve, submit or change the other's packet**, even by direct id. *Passing in Phase 0.*
-- **F7 — Reports reconcile** (Phase 4a), including the weekly hunt review.
+- **F7 — Reports reconcile** (Phase 4a), including the weekly hunt review. *Passing* (`packages/domain/test/tracker.test.ts`, `packages/db/test/f7-tracker.test.ts`): the weekly review's numbers are the Activity report's row for that week; Pipeline, Fit, Source and Activity count the same applications and responses; the CSV and PDF files hold exactly the rows on screen; weeks start on Monday in the applicant's time zone (a Sunday-night application in Tokyo lands in the Tokyo week).
 - **F8 — Backup & restore (P6).** *Passing in Phase 0* (`packages/db/test/f8-backup.test.ts`). The off-site copy in the test goes to a local folder through a stand-in for rclone; the real remote is checked on the first run on the home server.
 
 ---
@@ -391,7 +403,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 
 1. **Single tool vs product — DECIDED:** personal household tool, two fully separate applicants (Yong and Leo). Pricing / accounts / support for others are out of scope.
 2. **Sources beyond Tier 1 ATS — DECIDED (Yong, 2026-11-13):** public job-board feeds and careers pages only; LinkedIn and Indeed as pasted-link only; no licensed aggregator unless the Source report later shows a need.
-3. **Connected email — open (before Phase 4a).** Recommendation: defer to v1.1.
+3. **Connected email — DECIDED (Yong, 2026-11-14): connect Gmail in Phase 4a.** One read-only Gmail per applicant; token in the applicant's vault; only the kind of reply, date and sender domain kept; suggestions only, never automatic moves; disconnect revokes and deletes (§5.6).
 4. **Future auto-apply mode — open, not needed for v1.** Recommendation: park.
 5. **Name — DECIDED:** TC Hunter.
 6. **AI provider and PII rule — DECIDED (Yong, 2026-11-13):** Claude (Anthropic API) with contact details removed before sending; built-in rule reader as fallback and when no key is set (§2.5, §5.1).
@@ -506,3 +518,16 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Worker | `apps/worker` | runs tailoring; Claude rewording when a key is set and `TC_TAILOR_WRITER` isn't `rules` |
 | Screens | `apps/web/app/documents/*`, job detail, home | Prepare a resume (job page), document page with This version / What changed / Your profile, Approve, Download PDF / Word, Make changes; Documents list; Home next step for a waiting draft; Documents in the top bar |
 | Tests | `packages/*/test` | 318 passing (F4 in domain and through the app), plus an end-to-end browser run: prepare, refused made-up number, What changed, approve, download PDF and Word, next version |
+
+---
+
+## Appendix — Phase 4a as built
+
+| Area | Where | Notes |
+|---|---|---|
+| Schema | `packages/db/migrations/007_tracker.sql`, `008_email.sql` | interview time, how applied, closed time (outcome cleared on reopen); `score_calibration` with guards; `email_connection`, `email_signal`, `email_check` work items with guards |
+| Rules | `packages/domain/src/tracker/`, `packages/domain/src/email/` | five reports, weekly review, calibration, CSV / PDF files; Gmail read-only client, rule classifier and matcher |
+| Data | `packages/db/src/tracker.ts`, `packages/db/src/email.ts` | track, stage moves (audited), follow-ups, interview, notes, budget, report input; connect / look / suggest / accept / dismiss / disconnect |
+| Worker | `apps/worker` | hourly mailbox looks when `TC_GOOGLE_CLIENT_ID` / `TC_GOOGLE_CLIENT_SECRET` are set; vault mounted read-only |
+| Screens | `apps/web/app/applications/*`, `apps/web/app/reports/*`, Settings › Email, job detail, Home | Track this job; Applications; one application; Reports (5 tabs, CSV / PDF, calibration); Weekly look back; email suggestions; Home tiles for in progress, follow-ups and interviews, budget line and last week below the fold |
+| Tests | `packages/*/test` | 387 passing (F7 in domain and through the app, calibration, email), plus an end-to-end browser run: track, I applied, screening, interview, notes, Home tiles, reports and downloads, weekly look back, Connect Gmail (read-only request, forged return refused), email suggestion accepted, outcome tag, disconnect |

@@ -1,12 +1,12 @@
 /**
- * The background worker (design 7): runs scans, reads pasted job links and drafts
- * tailored documents, one at a time, politely. It has no internet route of its own: every request goes through the
+ * The background worker (design 7): runs scans, reads pasted job links, drafts
+ * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { createPool, enqueueDueScansAndPrune, loadConfig, resumeReaderName, runNextWork } from "@tc-hunter/db";
+import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, loadSecretStore, resumeReaderName, runNextWork, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeLetterProposer, ClaudeRequirementsReader, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
-  RulesResumeProposer, type RequirementsReader,
+  GmailReader, googleClientFrom, RulesResumeProposer, type RequirementsReader,
 } from "@tc-hunter/domain";
 
 const log = createLogger();
@@ -21,6 +21,10 @@ const tailor = {
   letter: claudeWrites ? new ClaudeLetterProposer() : new RulesLetterProposer(),
   cfg,
 };
+// Connected Gmail (decision 13.3): only when a Google client is configured and the vault is mounted.
+const google = googleClientFrom(process.env);
+const email: EmailDeps | undefined = google && process.env.TC_VAULT_DIR
+  ? { vault: loadSecretStore(), cfg, reader: (token) => new GmailReader(google, token) } : undefined;
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
@@ -28,17 +32,18 @@ let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
 async function main() {
-  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version });
+  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail.readonly" : "off" });
   let lastSchedule = 0;
   while (!stopping) {
     try {
       if (Date.now() - lastSchedule > SCHEDULE_MS) {
         const queued = await enqueueDueScansAndPrune(pool);
+        const mail = email ? await enqueueDueEmailChecks(pool) : 0;
         lastSchedule = Date.now();
-        if (queued) log.info("worker.scheduled", { scans: queued });
+        if (queued || mail) log.info("worker.scheduled", { scans: queued, email_checks: mail });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email });
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
     } catch (e) {
       log.warn("worker.error", { message: String((e as Error).message ?? e).slice(0, 200) });

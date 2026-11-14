@@ -11,7 +11,7 @@ export const APPLICANT_OWNED_TABLES = [
   "answer_bank_item", "story_bank_item", "hunt_preference", "scan_run", "match", "match_feedback", "preference_adjustment",
   "document", "document_claim", "blocked_addition", "document_gap", "application", "application_stage_event",
   "application_packet", "packet_field", "packet_state_event", "submission_attempt", "site_account",
-  "audit_event", "request_key", "import_batch", "applicant_job_source", "posting_alert", "work_item", "score_calibration",
+  "audit_event", "request_key", "import_batch", "applicant_job_source", "posting_alert", "work_item", "score_calibration", "email_connection", "email_signal",
 ] as const;
 export type OwnedTable = (typeof APPLICANT_OWNED_TABLES)[number];
 

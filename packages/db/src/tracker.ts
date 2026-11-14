@@ -23,8 +23,10 @@ export const APPLIED_HOW = ["employer_site", "email", "referral", "recruiter", "
 
 const FOLLOW_UP_DAYS = 7;
 
+/** The applicant's time zone; anything Intl doesn't know (a typo on My profile) reads as UTC rather than breaking the screens. */
 async function tz(c: pg.PoolClient): Promise<string> {
-  return (await c.query("SELECT timezone FROM applicant WHERE id = app_applicant_id()")).rows[0]?.timezone || "UTC";
+  const z = (await c.query("SELECT timezone FROM applicant WHERE id = app_applicant_id()")).rows[0]?.timezone || "UTC";
+  try { new Intl.DateTimeFormat("en", { timeZone: z }); return z; } catch { return "UTC"; }
 }
 
 /** Track a job: one application per job (database-unique). Saves the match too. Returns the application ref. */
@@ -102,9 +104,7 @@ export async function setInterview(pool: pg.Pool, session: Session, appRef: stri
   await withApplicant(pool, asApplicant(session), async (c) => {
     // The form gives a wall-clock time; it means that time where the applicant lives.
     if (at && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(at)) throw new DomainError("TC_BAD_INPUT");
-    const r = await c.query(
-      "UPDATE application SET interview_at = ($2::timestamp AT TIME ZONE (SELECT timezone FROM applicant WHERE id = app_applicant_id())), updated_at = now() WHERE public_ref = $1",
-      [appRef, at || null]);
+    const r = await c.query("UPDATE application SET interview_at = ($2::timestamp AT TIME ZONE $3), updated_at = now() WHERE public_ref = $1", [appRef, at || null, await tz(c)]);
     if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");
   });
 }

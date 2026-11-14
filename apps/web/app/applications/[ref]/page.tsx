@@ -1,11 +1,12 @@
 import { notFound } from "next/navigation";
-import { budgetNow, getApplication, trackerSummary } from "@tc-hunter/db";
+import { budgetNow, getApplication, listEmailSignals, trackerSummary } from "@tc-hunter/db";
 import { APPLICATION_STAGES, CLOSED, OUTCOME_LABEL, STAGE_LABEL, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
 import { BudgetLine, dateInput, day, localInput, when } from "@/components/applications/AppBits";
+import { EmailSuggestions } from "@/components/applications/EmailSuggestions";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { interviewAction, nextStepAction, notesAction, outcomeAction, stageAction } from "../actions";
@@ -36,7 +37,7 @@ export default async function ApplicationPage(props: Props) {
   const { ref } = await props.params;
   if (!/^A-\d{1,12}$/.test(ref)) notFound();
   const { pool, cfg } = app();
-  const [{ saved, error }, a, sum] = await Promise.all([flashOf(props), getApplication(pool, cfg, session, ref), trackerSummary(pool, session)]);
+  const [{ saved, error, params }, a, sum, signals] = await Promise.all([flashOf(props), getApplication(pool, cfg, session, ref), trackerSummary(pool, session), listEmailSignals(pool, session, ref)]);
   if (!a) notFound();
   const tz = sum.timeZone;
   const back = `/applications/${a.public_ref}`;
@@ -55,6 +56,9 @@ export default async function ApplicationPage(props: Props) {
       <p className="job-meta">{a.employer_canonical} · <a href={`/jobs/${a.job_ref}`}>See the job</a></p>
       <p className="reason big">{STAGE_LABEL[stage]}{a.applied_at && !closed ? <span className="muted"> · applied {day(a.applied_at, tz)}</span> : null}</p>
       {a.posting_status !== "active" && !closed ? <p className="warn">The employer no longer lists this job.</p> : null}
+
+      {params.moved === "1" ? <p className="status" role="status">Moved. You can change it any time.</p> : null}
+      <EmailSuggestions rows={signals} back={back} timeZone={tz} showJob={false} />
 
       {/* Layer 1: the one next thing for this stage. */}
       {stage === "interested" || stage === "tailoring" ? (

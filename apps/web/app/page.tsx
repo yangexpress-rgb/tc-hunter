@@ -1,4 +1,4 @@
-import { coachCounts, getWeeklyReview, jobsSummary, listAlerts, listDocuments, trackerSummary } from "@tc-hunter/db";
+import { coachCounts, getWeeklyReview, jobsSummary, listAlerts, listDocuments, listEmailSignals, trackerSummary } from "@tc-hunter/db";
 import { evidenceCoach, t } from "@tc-hunter/domain";
 import { Details, NextAction } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -16,6 +16,7 @@ export default async function Home() {
   const { pool, cfg } = app();
   const [counts, jobs, alerts, docs, track, weekly] = await Promise.all([coachCounts(pool, session), jobsSummary(pool, session), listAlerts(pool, session), listDocuments(pool, session),
     trackerSummary(pool, session), getWeeklyReview(pool, session)]);
+  const signals = await listEmailSignals(pool, session);
   const due = track.followUpsDue[0] as { public_ref: string; next_step: string; title: string; employer_canonical: string } | undefined;
   const draftDoc = docs.find((d) => d.status === "draft");
   const nudges = evidenceCoach(counts);
@@ -25,6 +26,7 @@ export default async function Home() {
     : !counts.hasPreferences ? { title: t("home.next_action.preferences"), href: "/profile/preferences" }
     : jobs.following === 0 ? { title: t("home.next_action.sources"), note: t("home.next_action.sources_note"), href: "/jobs/sources" }
     : alerts.length ? { title: t("home.next_action.alerts"), note: alerts[0]!.message, href: "/jobs" }
+    : signals.length ? { title: signals.length === 1 ? `${signals[0]!.employer} replied. Update your application?` : `${signals.length} employer replies to look at`, note: "Spotted in your email. Nothing changes until you say so.", href: signals.length === 1 ? `/applications/${signals[0]!.appRef}` : "/applications" }
     : due ? { title: `${due.next_step}: ${due.title}`, note: `At ${due.employer_canonical}.`, href: `/applications/${due.public_ref}` }
     : draftDoc ? { title: `Look over your ${draftDoc.type === "cover_letter" ? "cover letter" : "resume"} for ${draftDoc.title}`, note: "Approve it when it reads right.", href: `/documents/${draftDoc.public_ref}` }
     : jobs.newToday > 0 ? { title: t("home.next_action.matches", { n: String(jobs.newToday) }), href: "/jobs" }

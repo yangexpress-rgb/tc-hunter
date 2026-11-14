@@ -17,7 +17,7 @@ describe("schema", () => {
     const names = r.rows.map((x) => x.table_name).sort();
     expect(DOMAIN_TABLES).toHaveLength(30);
     expect(names).toEqual([...DOMAIN_TABLES, "user_session", "request_key", "packet_transition", "stage_forward", "schema_migration",
-      "import_batch", "passkey_credential", "auth_challenge", "job_posting_event", "applicant_job_source", "posting_alert", "work_item", "score_calibration"].sort());
+      "import_batch", "passkey_credential", "auth_challenge", "job_posting_event", "applicant_job_source", "posting_alert", "work_item", "score_calibration", "email_connection", "email_signal"].sort());
   });
 
   it("no column can hold an employer-site password or session (vault-only rule)", async () => {

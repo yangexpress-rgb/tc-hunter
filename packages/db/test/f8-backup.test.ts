@@ -185,12 +185,12 @@ describe("F8 private network only", () => {
     for (const ip of ["104.18.1.1", "2606:4700::1111"]) expect(isPrivateAddress(ip), ip).toBe(false);
   });
 
-  it("the web app reaches out only through the allow-list gate (Claude API, HTTPS only)", async () => {
+  it("the web app reaches out only through the allow-list gate (Claude API and Google sign-in, HTTPS only)", async () => {
     const compose = readFileSync(join(ROOT, "deploy", "compose.yaml"), "utf8");
     const web = /\n  web:\n([\s\S]*?)\n  \w[\w-]*:\n/.exec(compose)?.[1] ?? "";
     expect(web).toMatch(/HTTPS_PROXY: http:\/\/egress-proxy:3128/);
     const gate = /\n  egress-proxy:\n([\s\S]*?)\n  \w[\w-]*:\n/.exec(compose)?.[1] ?? "";
-    expect(gate).toMatch(/ALLOW_HOSTS: api\.anthropic\.com\n/);
+    expect(gate).toMatch(/ALLOW_HOSTS: api\.anthropic\.com,oauth2\.googleapis\.com\n/);  // exactly these two (Gmail sign-in, decision 13.3)
     expect(gate).not.toMatch(/ports\s*:/);
     const { allowed } = await import(join(ROOT, "deploy", "egress-proxy", "proxy.mjs"));
     expect(allowed("api.anthropic.com:443")).toBe(true);

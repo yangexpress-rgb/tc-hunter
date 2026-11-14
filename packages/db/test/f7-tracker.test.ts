@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { activityReport, reportCsv, RulesRequirementsReader, SourceRefusedError, WEIGHTS, type Fetcher } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, budgetNow, calibrationState, getApplication, getReport, getWeeklyReview, listApplications, listMatches, requestLink,
-  requestTailor, resetCalibration, rescoreMatches, runNextWork, savePreferences, setNextStep, setNotes, setOutcome, setStage, trackerSummary, trackJob,
+  requestTailor, resetCalibration, rescoreMatches, runNextWork, savePreferences, setInterview, setNextStep, setNotes, setOutcome, setStage, trackerSummary, trackJob,
   withApplicant, type AppConfig, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -175,5 +175,21 @@ describe("score calibration (P10)", () => {
     await expect(withApplicant(pool, { userAccountId: yong.userAccountId, applicantId: yong.applicantId, actor: "system" }, (c) => c.query(
       "INSERT INTO score_calibration (applicant_id, weights, rules_version, based_on, message) VALUES (app_applicant_id(), $1, 'x', 20, 'test')",
       [JSON.stringify(WEIGHTS)]))).rejects.toThrow();
+  });
+});
+
+describe("interview times", () => {
+  it("a time typed on the form means that time where the applicant lives", async () => {
+    await ownerQuery("UPDATE applicant SET timezone = 'Asia/Tokyo' WHERE id = $1", [yong.applicantId]);
+    await setInterview(pool, yong, apps.tailspin, "2026-12-01T10:30");
+    const a = (await getApplication(pool, cfg, yong, apps.tailspin))!;
+    expect(new Date(a.interview_at).toISOString()).toBe("2026-12-01T01:30:00.000Z");
+    await expect(setInterview(pool, yong, apps.tailspin, "tomorrow")).rejects.toThrow();
+  });
+
+  it("a mistyped time zone falls back to UTC instead of breaking the reports", async () => {
+    await ownerQuery("UPDATE applicant SET timezone = 'Mars/Olympus' WHERE id = $1", [yong.applicantId]);
+    expect((await getReport(pool, yong, "activity")).input.timeZone).toBe("UTC");
+    await ownerQuery("UPDATE applicant SET timezone = 'UTC' WHERE id = $1", [yong.applicantId]);
   });
 });

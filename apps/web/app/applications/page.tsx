@@ -1,9 +1,12 @@
-import { listApplications, trackerSummary } from "@tc-hunter/db";
+import { listApplications, listEmailSignals, trackerSummary } from "@tc-hunter/db";
 import { CLOSED, STAGE_LABEL, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { TopBar } from "@/components/TopBar";
 import { app, requireSession } from "@/lib/server";
 import { BudgetLine, dueText } from "@/components/applications/AppBits";
+import { Flash } from "@/components/profile/Fact";
+import { flashOf, type PageProps } from "@/lib/profile";
+import { EmailSuggestions } from "@/components/applications/EmailSuggestions";
 
 export const dynamic = "force-dynamic";
 
@@ -29,17 +32,20 @@ function Row({ a, today }: { a: AppRow; today: string }) {
 }
 
 /** Applications (design 5.6): every job you're tracking, grouped by where it is. */
-export default async function ApplicationsPage() {
+export default async function ApplicationsPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
-  const [rows, sum] = await Promise.all([listApplications(pool, session), trackerSummary(pool, session)]);
+  const [{ error, params }, rows, sum, signals] = await Promise.all([flashOf(props), listApplications(pool, session), trackerSummary(pool, session), listEmailSignals(pool, session)]);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: sum.timeZone }).format(new Date());
   const closed = rows.filter((r) => CLOSED.includes(r.stage));
   return (
     <>
       <TopBar signedIn />
       <h1>Applications</h1>
+      <Flash error={error} />
+      {params.moved === "1" ? <p className="status" role="status">Moved. You can change it any time.</p> : null}
       <BudgetLine budget={sum.budget} />
+      <EmailSuggestions rows={signals} back="/applications" timeZone={sum.timeZone} />
       {sum.followUpsDue.length ? (
         <section className="card" aria-label="Follow-ups due">
           <h2>Due now</h2>

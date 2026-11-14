@@ -108,6 +108,10 @@ export async function seedEverything(
     await one("score_calibration", `INSERT INTO score_calibration (applicant_id, weights, rules_version, based_on, message, active)
       VALUES ($1, '{"skills":40,"experience":25,"preferences":20,"keywords":5,"recency":10}', 'match-1+cal-1', 20, 'seed', false) RETURNING id`, [me]);
     await one("work_item", "INSERT INTO work_item (applicant_id, kind, status) VALUES ($1, 'scan', 'done') RETURNING id", [me]);
+    await one("email_connection", `INSERT INTO email_connection (applicant_id, vault_ref) VALUES ($1, $2)
+      ON CONFLICT (applicant_id) DO UPDATE SET updated_at = now() RETURNING id`, [me, vaultRef]);
+    await one("email_signal", `INSERT INTO email_signal (applicant_id, application_id, message_id, kind, suggested_stage, sender_domain, received_at)
+      VALUES ($1, $2, $3, 'interview', 'interview', 'contoso.example', now()) RETURNING id`, [me, ids.application, `seed${Date.now()}${Math.floor(Math.random() * 1e6)}`]);
     return ids;
   });
 }

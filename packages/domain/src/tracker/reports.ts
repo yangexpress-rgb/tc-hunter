@@ -130,7 +130,7 @@ export function activityReport(i: ReportInput): Report {
   };
 }
 
-const BANDS: Array<[string, number, number]> = [["80 and above", 80, 101], ["60 to 79", 60, 80], ["40 to 59", 40, 60], ["Below 40", 0, 40]];
+const BANDS: Array<[string, number, number]> = [["80 and above", 80, 101], ["60 to 79", 60, 80], ["40 to 59", 40, 60], ["below 40", 0, 40]];
 
 export function fitReport(i: ReportInput): Report {
   const rows: Row[] = [];
