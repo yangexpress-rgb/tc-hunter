@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardAnswer, companyKey, findBoard, SourceRefusedError, tokenGuesses, type Fetcher, type FetchResult } from "../src";
+import { boardAnswer, companyKey, findBoard, noBoardReason, noBoardSentence, unreadableCareersSystem, SourceRefusedError, tokenGuesses, type Fetcher, type FetchResult } from "../src";
 
 class Boards implements Fetcher {
   calls: string[] = [];
@@ -50,5 +50,15 @@ describe("finding employers' job boards", () => {
     const f = new Boards({ "https://contoso.example/careers": page });
     expect(await findBoard({ name: "Zz", careersUrl: "https://contoso.example/careers" }, f)).toMatchObject({ kind: "careers_page", name: "Zz" });
     expect(await findBoard({ name: "Zz", careersUrl: "https://www.linkedin.com/company/zz/jobs" }, new Boards({}))).toBeNull();
+  });
+
+  it("names the hiring system behind a careers site we can't read, and says so plainly", () => {
+    expect(unreadableCareersSystem("https://acme.wd1.myworkdayjobs.com/en-US/External")).toBe("Workday");
+    expect(unreadableCareersSystem("https://careers-acme.icims.com/jobs")).toBe("iCIMS");
+    expect(unreadableCareersSystem("https://acme.com/careers")).toBeNull();
+    expect(noBoardReason({ careersUrl: "https://acme.taleo.net/careersection/2/jobsearch.ftl" })).toBe("system:Taleo");
+    expect(noBoardReason({ careersUrl: "https://acme.com/careers" })).toBe("page");
+    expect(noBoardReason({})).toBe("none");
+    expect(noBoardSentence("system:Workday")).toMatch(/^Its careers site runs on Workday, which we can't read yet\./);
   });
 });

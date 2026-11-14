@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { companyKey, findBoard, goalLevelLabel, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
+import { companyKey, findBoard, goalLevelLabel, noBoardReason, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
@@ -51,12 +51,14 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
 
   // 1. Employers for each goal: the named ones first, then suggestions.
   const ideas = new Map<string, CompanyIdea & { goalId: string }>();
+  // Every goal's named companies go first, so they're always looked up (Yong: "prioritize ... its career site").
+  for (const g of goals) for (const name of g.companies) {
+    const k = companyKey(name);
+    if (k && !ideas.has(k)) ideas.set(k, { name, reason: "A company you named", goalId: g.id });
+  }
+  const namedKeys = new Set(ideas.keys());
   for (const g of goals) {
     const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes, levels: g.levels.map(goalLevelLabel) };
-    for (const name of g.companies) {
-      const k = companyKey(name);
-      if (k && !ideas.has(k)) ideas.set(k, { name, reason: "A company you named", goalId: g.id });
-    }
     if (!g.roles.length && !g.occupation && !g.industries.length && !g.companies.length) continue;
     const suggested = await deps.proposer.propose(brief, [...watching, ...[...ideas.values()].map((i) => i.name)], deps.perGoal ?? 12);
     for (const s of suggested) {
@@ -75,13 +77,14 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
       `SELECT job_source_id FROM employer_board WHERE company_key = $1 AND checked_at > now() - make_interval(days => $2)`, [key, RECHECK_DAYS])).rows[0]);
     let sourceId: string | null = cached ? cached.job_source_id : null;
     if (!cached) {
-      if (checked >= limit) { notes.push(`Left ${idea.name} for next time (looked up ${limit} employers this round).`); continue; }
+      if (checked >= limit && !namedKeys.has(key)) { notes.push(`Left ${idea.name} for next time (looked up ${limit} employers this round).`); continue; }
       checked++;
       const spec = await findBoard(idea, fetcher);
       sourceId = await withApplicant(pool, ctx, async (c) => {
         const id = spec ? await upsertSource(c, spec) : null;
-        await c.query(`INSERT INTO employer_board (company_key, name, job_source_id, checked_at) VALUES ($1, $2, $3, now())
-          ON CONFLICT (company_key) DO UPDATE SET name = EXCLUDED.name, job_source_id = EXCLUDED.job_source_id, checked_at = now()`, [key, idea.name, id]);
+        await c.query(`INSERT INTO employer_board (company_key, name, job_source_id, note, checked_at) VALUES ($1, $2, $3, $4, now())
+          ON CONFLICT (company_key) DO UPDATE SET name = EXCLUDED.name, job_source_id = EXCLUDED.job_source_id, note = EXCLUDED.note, checked_at = now()`,
+          [key, idea.name, id, id ? null : noBoardReason(idea)]);
         return id;
       });
       if (!spec) notes.push(`No public job board found for ${idea.name}.`);
@@ -110,4 +113,31 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
 export async function latestDiscovery(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
     "SELECT * FROM discovery_run ORDER BY created_at DESC LIMIT 1")).rows[0] ?? null);
+}
+
+/**
+ * The companies named in the goals in use, and what we know of each one's careers site:
+ * the source we read for it, or why there's none. Unchecked companies have checked_at null.
+ */
+export async function namedCompanies(pool: pg.Pool, session: Session): Promise<Array<{ name: string; goalId: string; key: string; sourceId: string | null; note: string | null; checkedAt: Date | null }>> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const goals = (await c.query("SELECT * FROM hunt_goal WHERE active ORDER BY created_at")).rows.map(goalFromRow);
+    const named = new Map<string, { name: string; goalId: string }>();
+    for (const g of goals) for (const name of g.companies) { const k = companyKey(name); if (k && !named.has(k)) named.set(k, { name, goalId: g.id }); }
+    if (!named.size) return [];
+    const boards = new Map((await c.query("SELECT company_key, job_source_id, note, checked_at FROM employer_board WHERE company_key = ANY($1)", [[...named.keys()]])).rows
+      .map((r) => [r.company_key as string, r]));
+    return [...named].map(([key, n]) => {
+      const b = boards.get(key);
+      return { ...n, key, sourceId: b?.job_source_id ?? null, note: b?.note ?? null, checkedAt: b?.checked_at ?? null };
+    });
+  });
+}
+
+/** The job sources that belong to companies named in the goals in use, to be read first. */
+export async function namedSourceIds(c: pg.PoolClient): Promise<Set<string>> {
+  const goals = (await c.query("SELECT companies FROM hunt_goal WHERE active")).rows as Array<{ companies: string[] }>;
+  const keys = [...new Set(goals.flatMap((g) => g.companies ?? []).map(companyKey).filter(Boolean))];
+  if (!keys.length) return new Set();
+  return new Set((await c.query("SELECT job_source_id FROM employer_board WHERE company_key = ANY($1) AND job_source_id IS NOT NULL", [keys])).rows.map((r) => r.job_source_id as string));
 }

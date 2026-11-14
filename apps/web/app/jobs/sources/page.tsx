@@ -1,5 +1,5 @@
-import { latestDiscovery, listGoals, listSources } from "@tc-hunter/db";
-import { goalName, searchSites, t } from "@tc-hunter/domain";
+import { latestDiscovery, listGoals, listSources, namedCompanies } from "@tc-hunter/db";
+import { companyKey, goalName, noBoardSentence, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -35,7 +35,12 @@ const health = (h: string) => (h === "blocked" ? t("jobs.sources.unavailable") :
 export default async function SourcesPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
-  const [{ saved, error, params }, sources, goals, last] = await Promise.all([flashOf(props), listSources(pool, session), listGoals(pool, session), latestDiscovery(pool, session)]);
+  const [{ saved, error, params }, sources, goals, last, named] = await Promise.all([flashOf(props), listSources(pool, session), listGoals(pool, session), latestDiscovery(pool, session), namedCompanies(pool, session)]);
+  // Companies named in a goal: read first, and shown as such (Yong, 2026-11-14).
+  const namedIds = new Set(named.map((n) => n.sourceId).filter(Boolean));
+  const namedKeys = new Set(named.map((n) => n.key));
+  const isNamed = (s: (typeof sources)[number]) => namedIds.has(s.id) || (s.kind !== "pasted_link" && s.kind !== "job_search" && namedKeys.has(companyKey(s.name)));
+  const namedWithSource = new Set(named.filter((n) => n.sourceId || sources.some((s) => isNamed(s) && companyKey(s.name) === n.key)).map((n) => n.key));
   const names = new Map(goals.map((g) => [g.id, goalName(g)]));
   const found = sources.filter((s) => s.origin === "found");
   const mine = sources.filter((s) => s.origin === "you");
@@ -50,27 +55,31 @@ export default async function SourcesPage(props: PageProps) {
     ...sources.map((s) => {
       const never = !s.last_checked_at;
       const failed = !never && s.health !== "ok";
-      return { key: s.id, name: s.name, kind: s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : KIND[s.kind] ?? "Jobs page",
+      return { key: s.id, name: s.name, kind: s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : isNamed(s) ? "Company you named" : KIND[s.kind] ?? "Jobs page",
         status: never ? "Not searched yet" : failed ? "Failed" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
         reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : "" };
     }),
+    ...named.filter((n) => !namedWithSource.has(n.key)).map((n) => ({ key: `named-${n.key}`, name: n.name, kind: "Company you named",
+      status: n.checkedAt ? "Can't read" : "Not searched yet", last: n.checkedAt, jobs: 0,
+      reason: n.checkedAt ? noBoardSentence(n.note) : "It's looked up first with the next search.", link: n.checkedAt && !n.note?.startsWith("system:") ? { href: "#add", label: "Add its jobs page" } : undefined })),
     ...(!searchRows.has("https://www.linkedin.com/jobs/") ? [{ key: "linkedin", name: "LinkedIn job alerts", kind: "LinkedIn alert emails", status: "Not set up", last: null, jobs: 0,
       reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
   ];
   const KINDS = [...new Set(table.map((r) => r.kind))].sort();
-  const STATUSES = ["Succeeded", "Failed", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
+  const STATUSES = ["Succeeded", "Failed", "Can't read", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
   const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
   const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
   const fQ = (params.q ?? "").slice(0, 60);
   const COLS = [["name", "Source"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "status") as (typeof COLS)[number][0];
   const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
-  const RANK: Record<string, number> = { Failed: 0, Off: 1, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
+  const RANK: Record<string, number> = { Failed: 0, "Can't read": 0.5, Off: 1, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
   const val = (r: StatusRow): string | number => sortBy === "status" ? RANK[r.status] ?? 9 : sortBy === "last" ? r.last ? new Date(r.last).getTime() : -1
     : sortBy === "jobs" ? r.jobs : String(r[sortBy]).toLowerCase();
   const shown = table.filter((r) => (!fKind || r.kind === fKind) && (!fStatus || r.status === fStatus) && (!fQ || r.name.toLowerCase().includes(fQ.toLowerCase())))
     .sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : a.name.localeCompare(b.name)) * (dir === "asc" ? 1 : -1); });
-  const failedCount = table.filter((r) => r.status === "Failed").length;
+  const bad = (st: string) => st === "Failed" || st === "Off" || st === "Can't read";
+  const failedCount = table.filter((r) => r.status === "Failed" || r.status === "Can't read").length;
   const href = (over: Record<string, string>) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries({ kind: fKind, status: fStatus, q: fQ, ...over })) if (v) p.set(k, v);
@@ -100,7 +109,7 @@ export default async function SourcesPage(props: PageProps) {
       {params.refreshed ? <p className="status" role="status">We're looking again. This takes a few minutes.</p> : null}
 
       <section className="card stack">
-        <p>We search job sites for each of your <a href="/profile/goals">goals</a> first, then find employers that fit and read their own jobs pages. Jobs that fit come back to Jobs, scored. You don't need to do anything here.</p>
+        <p>For each of your <a href="/profile/goals">goals</a>, we read the careers sites of the companies you named first, then search job sites, then find other employers that fit and read their own jobs pages. Jobs that fit come back to Jobs, scored. You don't need to do anything here.</p>
         <p className="muted">{last?.finished_at
           ? `Last looked ${ago(last.finished_at)}: checked ${last.companies_checked} ${last.companies_checked === 1 ? "employer" : "employers"}, found ${last.boards_found} with jobs pages we can read.`
           : goals.some((g) => g.active) ? "We haven't looked yet. It starts with the next search." : "Add a goal and we'll start looking."}</p>
@@ -118,7 +127,7 @@ export default async function SourcesPage(props: PageProps) {
           <button className="small">Filter</button>
           {fKind || fStatus || fQ ? <a href="/jobs/sources#status">Clear</a> : null}
         </form>
-        <p className="muted small">{shown.length} of {table.length} sources{failedCount ? <> · <span className="error">{failedCount} failed last time</span></> : null}</p>
+        <p className="muted small">{shown.length} of {table.length} sources{failedCount ? <> · <span className="error">{failedCount} failed or can't be read</span></> : null}</p>
         <div className="table-wrap">
           <table className="report jobs-matrix">
             <thead><tr>
@@ -134,10 +143,10 @@ export default async function SourcesPage(props: PageProps) {
                 <tr key={r.key}>
                   <td>{r.name}</td>
                   <td>{r.kind}</td>
-                  <td className={r.status === "Failed" || r.status === "Off" ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
+                  <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
                   <td>{r.last ? ago(r.last) : "Never"}</td>
                   <td className="num">{r.jobs}</td>
-                  <td className={r.status === "Failed" || r.status === "Off" ? "error wrap" : "muted wrap"}>{r.reason}{r.link ? <> <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a></> : null}</td>
+                  <td className={bad(r.status) ? "error wrap" : "muted wrap"}>{r.reason}{r.link ? <> <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a></> : null}</td>
                 </tr>
               ))}
               {shown.length === 0 ? <tr><td colSpan={6} className="muted">No sources match these filters.</td></tr> : null}
@@ -197,6 +206,7 @@ export default async function SourcesPage(props: PageProps) {
 
       {mine.length ? (<><h2>Added by you</h2><ul className="plain source-list">{mine.map((s) => <Row key={s.id} s={s} />)}</ul></>) : null}
 
+      <div id="add" />
       <Details summary="Add a company yourself">
         <form action={followSourceAction} className="stack">
           <input type="hidden" name="back" value="/jobs/sources" />
@@ -208,10 +218,11 @@ export default async function SourcesPage(props: PageProps) {
       </Details>
 
       <Details summary="How we find jobs">
-        <p>First, we search the job search sites above for each goal's roles in each of its places. We only send a job title and a place, never anything about you.</p>
-        <p>Then, for each goal, we start with the companies you named. When Claude is set up, it also suggests employers that hire for the goal. We check each employer's public jobs page on Greenhouse, Lever, Ashby or SmartRecruiters, or its own careers page, and only watch the ones that answer with jobs.</p>
+        <p>First, we read the careers sites of the companies you named in your goals. If one can't be read, the table above says why.</p>
+        <p>Then we search the job search sites above for each goal's roles in each of its places. We only send a job title and a place, never anything about you.</p>
+        <p>Then, when Claude is set up, it suggests other employers that hire for each goal. We check each employer's public jobs page on Greenhouse, Lever, Ashby or SmartRecruiters, or its own careers page, and only watch the ones that answer with jobs.</p>
         <p>We look again when you change a goal, when you press Refresh, and once a day (or as often as your search settings say). We follow each site's rules for automated visitors.</p>
-        <p>Employers whose jobs pages we can't read (many large companies use other systems) won't show up. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
+        <p>Careers sites run on Workday, Taleo, iCIMS and similar systems can't be read yet, but those employers' jobs often still come in through the job sites. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
       </Details>
 
       <Advanced>
