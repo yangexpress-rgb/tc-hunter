@@ -11,6 +11,19 @@ const ago = (iso: string | null) => {
 };
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** When the next search runs by itself, in the viewer's own time. */
+function NextRun({ s }: { s: ScanStatus }) {
+  // Times are shown in the viewer's own time zone, so only once in the browser.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => setNow(Date.now()), [s]);
+  if (s.schedule === "manual" || !s.nextRunAt) return <p className="muted small">Searches run only when you ask. <a href="/profile/goals#settings">Search settings</a></p>;
+  if (now === null) return <p className="muted small">Searches and scores again by itself {s.schedule === "weekly" ? "every week" : "every day"}.</p>;
+  const at = new Date(s.nextRunAt);
+  const soon = at.getTime() - now <= 16 * 60_000;
+  const when = soon ? "within 15 minutes" : `about ${at.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+  return <p className="muted small">Searches and scores again by itself {s.schedule === "weekly" ? "every week" : "every day"}. Next: {when}. <a href="/profile/goals#settings">Change</a></p>;
+}
+
 /** The button that starts a search. It says so the moment it's pressed. */
 export function LookAgainButton({ label = "Look again now", title }: { label?: string; title?: string }) {
   const { pending } = useFormStatus();
@@ -44,7 +57,8 @@ export function ScanStatusBox({ initial }: { initial: ScanStatus }) {
     return () => clearTimeout(id);
   }, [s, router]);
 
-  if (s.state === "none") return <p className="muted">No search has run yet.</p>;
+  const next = <NextRun s={s} />;
+  if (s.state === "none") return <div className="scan-status"><p className="muted">No search has run yet.</p>{next}</div>;
   if (s.state === "waiting") return (
     <div className="scan-status" role="status" aria-live="polite">
       <p className="status">Search requested {ago(s.startedAt)}. It starts within a minute…</p>
@@ -72,6 +86,7 @@ export function ScanStatusBox({ initial }: { initial: ScanStatus }) {
           <ul className="plain">{s.problems.map((p, i) => <li key={i} className="error small">{p.source}: {p.note}</li>)}</ul>
         </details>
       ) : null}
+      {next}
     </div>
   );
 }

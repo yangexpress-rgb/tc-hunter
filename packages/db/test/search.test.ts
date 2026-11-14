@@ -107,6 +107,12 @@ describe("live status of a search (Yong: no response after Look again now)", () 
     while (await runNextWork(pool, { ...deps, search: [watching] })) { /* drain */ }
     expect(seen[0]).toMatchObject({ state: "running", step: "Searching Adzuna", done: 0, total: 1 });
     expect(await scanStatus(pool, sally)).toMatchObject({ state: "done", step: null, places: 1, failed: null });
+    // It runs by itself every day: the next one is due about 20 hours after this one started.
+    const st = await scanStatus(pool, sally);
+    expect(st.schedule).toBe("daily");
+    const hours = (new Date(st.nextRunAt!).getTime() - new Date(st.startedAt!).getTime()) / 3_600_000;
+    expect(hours).toBeGreaterThan(20);
+    expect(hours).toBeLessThan(20.5);
   });
 
   it("pressed while a search is running, a new one starts with the latest goals once it ends", async () => {
