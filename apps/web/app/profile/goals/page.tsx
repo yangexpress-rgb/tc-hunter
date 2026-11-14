@@ -36,6 +36,10 @@ function GoalForm({ g }: { g?: Goal }) {
             <span className="hint">The job titles. Separate with commas.</span></label>
           <label>Occupation<input name="occupation" defaultValue={g?.occupation ?? ""} placeholder="e.g. Operations, Software engineering" />
             <span className="hint">The line of work.</span></label>
+          <label>Specialty<input name="specialties" defaultValue={g?.specialties.join(", ") ?? ""} placeholder="e.g. Supply chain analytics, Cross-border trade" />
+            <span className="hint">Your own words. We search for these and jobs that mention them score higher.</span></label>
+          <label>Language<input name="languages" defaultValue={g?.languages.join(", ") ?? ""} placeholder="e.g. Mandarin, Chinese" />
+            <span className="hint">Languages you'd like to use at work. Jobs that ask for them score higher.</span></label>
           <label>Industry<input name="industries" defaultValue={g?.industries.join(", ") ?? ""} placeholder="e.g. Healthcare, Retail" /></label>
           <label>Company<input name="companies" defaultValue={g?.companies.join(", ") ?? ""} placeholder="Any companies you have in mind" /></label>
           <label>Location<input name="locations" defaultValue={g?.locations.join(", ") ?? ""} placeholder="e.g. Toronto, Remote in Canada" /></label>
@@ -91,6 +95,8 @@ function GoalItem({ g }: { g: Goal }) {
         <h3>{goalName(g)}{g.active ? null : <> <span className="chip draft">Not used to find jobs</span></>}</h3>
         <p className="item-sub">{when}</p>
         {field ? <p className="muted">{field}</p> : null}
+        {g.specialties.length ? <p className="muted">Specialty: {g.specialties.join(", ")}</p> : null}
+        {g.languages.length ? <p className="muted">Language: {g.languages.join(", ")}</p> : null}
         {g.companies.length ? <p className="muted">At {g.companies.join(", ")}</p> : null}
         {p ? <p className="muted">Pay you expect: {p}</p> : null}
         {where ? <p className="muted">{where}</p> : null}

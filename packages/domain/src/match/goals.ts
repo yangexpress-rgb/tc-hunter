@@ -27,6 +27,10 @@ export interface Goal {
   employmentTypes: GoalType[];
   /** The levels wanted, e.g. Director and VP. Empty means any level. */
   levels: GoalLevel[];
+  /** Typed in freely, e.g. "supply chain analytics". Searched for and counted in the score. */
+  specialties: string[];
+  /** Languages to use at work, e.g. Mandarin. A job that asks for one scores higher. */
+  languages: string[];
   roles: string[];
   occupation: string | null;
   industries: string[];
@@ -83,6 +87,8 @@ export function prefsForGoal(goal: Goal, settings: SearchSettings, ladder: Goal 
     companiesInclude: goal.companies,
     employmentTypes: goal.employmentTypes,
     levels: goal.levels,
+    specialties: goal.specialties,
+    languages: goal.languages,
     goalName: goalName(goal),
     goalId: goal.id,
   };

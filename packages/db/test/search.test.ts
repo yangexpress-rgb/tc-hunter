@@ -46,7 +46,7 @@ let deps: WorkDeps;
 const noBoards: Fetcher = { async get(u) { throw new SourceRefusedError("not_found", u); } };
 const drain = async () => { while (await runNextWork(pool, deps)) { /* drain */ } };
 const goal = (g: Partial<GoalInput>): GoalInput => ({
-  active: true, timeFrame: "now", employmentTypes: [], levels: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
+  active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
 });
 
 beforeAll(async () => {

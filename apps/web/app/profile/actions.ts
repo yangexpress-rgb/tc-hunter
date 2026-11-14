@@ -294,6 +294,8 @@ export async function saveGoalAction(form: FormData) {
     timeFrame: String(form.get("time_frame") ?? "now") as never,
     employmentTypes: form.getAll("employment_types").map(String) as never,
     levels: form.getAll("levels").map(String) as never,
+    specialties: list(form.get("specialties")),
+    languages: list(form.get("languages")),
     roles: list(form.get("roles")),
     occupation: String(form.get("occupation") ?? "").trim() || null,
     industries: list(form.get("industries")),

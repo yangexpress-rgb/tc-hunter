@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { employmentKind, goalLevelOf, goalName, levelFit, goalTargets, ladderGoal, prefsForGoal, scoreBestGoal, scoreMatch, type Goal, type MatchPosting } from "../src";
+import { employmentKind, goalLevelOf, goalName, languageMentioned, levelFit, searchQueries, goalTargets, ladderGoal, prefsForGoal, scoreBestGoal, scoreMatch, type Goal, type MatchPosting } from "../src";
 
 const FIX = join(__dirname, "..", "..", "..", "fixtures");
 const read = (p: string) => readFileSync(join(FIX, p), "utf8");
@@ -11,7 +11,7 @@ const now = new Date(fx.now);
 const settings = { industriesExclude: [], employersExclude: [], mustHaveKeywords: [], dealBreakers: [] };
 
 const goal = (g: Partial<Goal>): Goal => ({
-  id: "g", active: true, timeFrame: "now", employmentTypes: [], levels: [], roles: [], occupation: null, industries: [], companies: [], comp: null,
+  id: "g", active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: [], occupation: null, industries: [], companies: [], comp: null,
   locations: [], workplaceTypes: [], ...g,
 });
 
@@ -68,6 +68,25 @@ describe("goals", () => {
     expect(pref("Senior Data Analyst").points).toBeGreaterThan(pref("Junior Data Analyst").points);
     expect(pref("Senior Data Analyst").detail).toContain("Senior, a level you chose.");
     expect(scoreMatch(fx.profile, p, { ...base, title: "Junior Data Analyst" }, { now }).filtered).toBe(false);
+  });
+
+  it("scores a job higher when it mentions the goal's specialty or language, and says so", () => {
+    expect(languageMentioned("Fluent in Mandarin preferred", "Chinese")).toBe(true);
+    expect(languageMentioned("需要中文", "Mandarin")).toBe(true);
+    expect(languageMentioned("Bilingual English/French", "Mandarin")).toBe(false);
+    const p = prefsForGoal(goal({ roles: ["Analyst"], specialties: ["supply chain"], languages: ["Mandarin"] }), settings, null);
+    const kw = (descriptionText: string) => scoreMatch(fx.profile, p, { ...base, descriptionText }, { now }).components.find((c) => c.key === "keywords")!;
+    const plain = kw(base.descriptionText);
+    const both = kw(`${base.descriptionText}\nSupply chain team. Mandarin speakers preferred.`);
+    expect(both.points).toBeGreaterThan(plain.points);
+    expect(both.detail).toContain("Mentions your specialty: supply chain.");
+    expect(both.detail).toContain("Asks for Mandarin, a language you chose.");
+    expect(plain.detail).toContain("Doesn't mention Mandarin.");
+  });
+
+  it("searches each goal's role with its specialties and languages too", () => {
+    const q = searchQueries([{ roles: ["Operations Analyst"], occupation: null, locations: ["Toronto"], workplaceTypes: [], specialties: ["Supply chain"], languages: ["Mandarin"] }]);
+    expect(q.map((x) => x.what)).toEqual(["Operations Analyst", "Operations Analyst Supply chain", "Operations Analyst Mandarin"]);
   });
 
   it("counts a company the goal names", () => {

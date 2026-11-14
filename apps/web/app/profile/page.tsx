@@ -4,7 +4,7 @@ import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
-import { AwardsSection, CertificationsSection, EducationSection, ExperienceSections, SkillsSection } from "@/components/profile/sections";
+import { AwardsSection, CertificationsSection, EducationSection, ExperienceSections, LanguagesSection, SkillsSection } from "@/components/profile/sections";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { saveAboutAction } from "./actions";
@@ -64,6 +64,7 @@ export default async function ProfilePage(props: PageProps) {
       <EducationSection profile={profile} />
       <CertificationsSection profile={profile} />
       <SkillsSection profile={profile} />
+      <LanguagesSection profile={profile} />
       <AwardsSection profile={profile} />
 
       <Details summary="How your information is kept">

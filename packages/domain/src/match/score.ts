@@ -44,6 +44,9 @@ export interface MatchPrefs {
   employmentTypes?: string[];
   /** From a goal (match-3): the levels wanted. Empty or missing means any level. */
   levels?: GoalLevel[];
+  /** From a goal (match-3): specialties and languages; a job that mentions them scores higher. */
+  specialties?: string[];
+  languages?: string[];
   /** The goal's short name, for the reasons, and its id, so a match can say which goal it fits best. */
   goalName?: string;
   goalId?: string;
@@ -251,9 +254,20 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
   const domainRaw = Math.min(1, shared.length / 5);
   let kwRaw: number | null = null;
   if (prefs.mustHaveKeywords.length) kwRaw = prefs.mustHaveKeywords.filter((k) => containsPhrase(text, k)).length / prefs.mustHaveKeywords.length;
-  const keywordRaw = kwRaw === null ? domainRaw : (domainRaw + kwRaw) / 2;
+  // match-3: the goal's specialties and languages count here too, languages twice over (Yong: jobs that ask for them come first).
+  const specs = (prefs.specialties ?? []).filter((x) => x.trim());
+  const specHits = specs.filter((x) => containsPhrase(text, x));
+  const specRaw = specs.length ? (specHits.length ? 0.5 + 0.5 * specHits.length / specs.length : 0) : null;
+  const langs = (prefs.languages ?? []).filter((x) => x.trim());
+  const langHit = langs.find((l) => languageMentioned(text, l));
+  const langRaw = langs.length ? (langHit ? 1 : 0.3) : null;
+  const parts: Array<[number, number]> = [[domainRaw, 1], ...(kwRaw !== null ? [[kwRaw, 1] as [number, number]] : []),
+    ...(specRaw !== null ? [[specRaw, 1.5] as [number, number]] : []), ...(langRaw !== null ? [[langRaw, 2] as [number, number]] : [])];
+  const keywordRaw = parts.reduce((s, [v, w]) => s + v * w, 0) / parts.reduce((s, [, w]) => s + w, 0);
   const kwDetail = [`${shared.length} of your skills and terms appear in the posting${shared.length ? `: ${shared.slice(0, 8).join(", ")}` : ""}.`,
-    ...(kwRaw !== null ? [`Mentions ${Math.round(kwRaw * prefs.mustHaveKeywords.length)} of your ${prefs.mustHaveKeywords.length} must-have words.`] : [])];
+    ...(kwRaw !== null ? [`Mentions ${Math.round(kwRaw * prefs.mustHaveKeywords.length)} of your ${prefs.mustHaveKeywords.length} must-have words.`] : []),
+    ...(specRaw !== null ? [specHits.length ? `Mentions your specialty: ${specHits.join(", ")}.` : `Doesn't mention your specialty (${specs.join(", ")}).`] : []),
+    ...(langRaw !== null ? [langHit ? `Asks for ${langHit}, a language you chose.` : `Doesn't mention ${langs.join(" or ")}.`] : [])];
 
   // 5. Recency and availability (10 = recency 7 + availability 3) -------------------------
   const days = posting.postedAt ? Math.max(0, (ctx.now.getTime() - new Date(posting.postedAt).getTime()) / DAY) : null;
@@ -327,6 +341,20 @@ export function levelFit(title: string, levels: GoalLevel[]): { raw: number; lin
   const d = Math.min(...levels.map((l) => Math.abs(goalLevelIndex(l) - goalLevelIndex(lp))));
   return d === 1 ? { raw: 0.5, line: `${label}: one step from the levels you chose (${wanted}).` }
     : { raw: 0, line: `${label}: not near the levels you chose (${wanted}).` };
+}
+
+/** Language names that mean the same for a job ad: Chinese covers Mandarin and Cantonese, and Mandarin is a kind of Chinese. */
+const LANGUAGE_ALIASES: Record<string, string[]> = {
+  chinese: ["chinese", "mandarin", "cantonese", "putonghua"], mandarin: ["mandarin", "putonghua", "chinese"], cantonese: ["cantonese", "chinese"],
+  spanish: ["spanish", "español", "espanol"], french: ["french", "français", "francais"], german: ["german", "deutsch"],
+};
+/** Does the posting ask for this language? Words in Chinese characters count for Chinese, Mandarin and Cantonese. */
+export function languageMentioned(text: string, language: string): boolean {
+  const l = language.trim().toLowerCase();
+  if (!l) return false;
+  const names = LANGUAGE_ALIASES[l] ?? [l];
+  if (names.includes("chinese") && /(中文|普通话|普通話|国语|國語|粤语|粵語)/.test(text)) return true;
+  return names.some((n) => containsPhrase(text, n));
 }
 
 const employerKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(inc|llc|ltd|corp|corporation|co|plc|gmbh|the)\b/g, " ").replace(/\s+/g, " ").trim();

@@ -58,7 +58,7 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
   }
   const namedKeys = new Set(ideas.keys());
   for (const g of goals) {
-    const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes, levels: g.levels.map(goalLevelLabel) };
+    const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes, levels: g.levels.map(goalLevelLabel), specialties: g.specialties, languages: g.languages };
     if (!g.roles.length && !g.occupation && !g.industries.length && !g.companies.length) continue;
     const suggested = await deps.proposer.propose(brief, [...watching, ...[...ideas.values()].map((i) => i.name)], deps.perGoal ?? 12);
     for (const s of suggested) {

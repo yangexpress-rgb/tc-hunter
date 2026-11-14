@@ -26,7 +26,7 @@ let yong: Session, leo: Session;
 let deps: WorkDeps;
 
 const goal = (g: Partial<GoalInput>): GoalInput => ({
-  active: true, timeFrame: "now", employmentTypes: [], levels: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
+  active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
 });
 const titles = async (s: Session) => (await listMatches(pool, s)).rows.map((r) => r.title).sort();
 
@@ -53,9 +53,9 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     await ownerQuery(sql.slice(sql.indexOf("-- Bring what people")));
     const goals = await listGoals(pool, yong);
     expect(goals.map((g) => ({ ...g, id: undefined }))).toEqual([
-      { id: undefined, active: true, timeFrame: "now", employmentTypes: [], levels: [], roles: ["Operations Analyst"], occupation: "Operations", industries: ["Logistics"],
+      { id: undefined, active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: ["Operations Analyst"], occupation: "Operations", industries: ["Logistics"],
         companies: [], comp: { amount: 70000, currency: "USD", period: "year" }, locations: ["Raleigh"], workplaceTypes: ["onsite"] },
-      { id: undefined, active: false, timeFrame: "long", employmentTypes: [], levels: [], roles: ["COO"], occupation: "Operations", industries: [],
+      { id: undefined, active: false, timeFrame: "long", employmentTypes: [], levels: [], specialties: [], languages: [], roles: ["COO"], occupation: "Operations", industries: [],
         companies: [], comp: null, locations: [], workplaceTypes: [] },
     ]);
     const p = (await getPreferences(pool, yong))!;
@@ -65,9 +65,10 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     expect((await coachCounts(pool, yong)).hasPreferences).toBe(true);
   });
 
-  it("keeps a goal's levels, dropping any it doesn't know", async () => {
-    const id = await saveGoal(pool, yong, goal({ roles: ["Head of operations"], levels: ["vp", "senior_director", "vp", "wizard" as never] }));
-    expect((await listGoals(pool, yong)).find((g) => g.id === id)!.levels).toEqual(["vp", "senior_director"]);
+  it("keeps a goal's levels, specialties and languages, dropping levels it doesn't know", async () => {
+    const id = await saveGoal(pool, yong, goal({ roles: ["Head of operations"], levels: ["vp", "senior_director", "vp", "wizard" as never],
+      specialties: [" Supply chain ", ""], languages: ["Mandarin", "Mandarin"] }));
+    expect((await listGoals(pool, yong)).find((g) => g.id === id)).toMatchObject({ levels: ["vp", "senior_director"], specialties: ["Supply chain"], languages: ["Mandarin"] });
     await deleteGoal(pool, yong, id);
   });
 

@@ -23,11 +23,11 @@ export function ProfileSection({ title, id, addTitle, addForm, children, empty }
 }
 
 /** The add form for a kind of row. */
-export function AddForm({ table, back, extra }: { table: FactTable; back: string; extra?: ReactNode }) {
+export function AddForm({ table, back, extra, values }: { table: FactTable; back: string; extra?: ReactNode; values?: Record<string, any> }) {
   return (
     <form action={addFactAction} className="stack">
       <RowRef table={table} back={back} />{extra}
-      <FactFields spec={FIELD_SPECS[table]} />
+      <FactFields spec={FIELD_SPECS[table]} values={values} />
       <button>Save</button>
     </form>
   );

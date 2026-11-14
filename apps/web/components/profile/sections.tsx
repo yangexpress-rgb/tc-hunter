@@ -250,9 +250,8 @@ export function AwardsSection({ profile }: { profile: Profile }) {
  * Skills (brief 5.1): grouped by kind. A skill counts in matching only with
  * proof: something you did that shows it. The level is always yours to set.
  */
-export function SkillsSection({ profile }: { profile: Profile }) {
-  const back = "/profile#skills";
-  const proofOptions: Array<[string, string]> = [
+function skillProofOptions(profile: Profile): Array<[string, string]> {
+  return [
     ...profile.experience.flatMap((e) => [
       [`experience_item:${e.id}`, `${e.title}${e.employer_name ? `, ${e.employer_name}` : ""}`] as [string, string],
       ...e.bullets.map((b) => [`experience_bullet:${b.id}`, `  · ${String(b.text).slice(0, 90)}`] as [string, string]),
@@ -260,52 +259,76 @@ export function SkillsSection({ profile }: { profile: Profile }) {
     ...profile.education.map((ed) => [`education_item:${ed.id}`, `${ed.institution}${ed.degree ? `, ${ed.degree}` : ""}`] as [string, string]),
     ...profile.credentials.map((c) => [`credential:${c.id}`, c.name] as [string, string]),
   ];
-  const noProof = profile.skills.filter((s) => s.evidence.length === 0);
+}
+
+function SkillItem({ s, back, proofOptions }: { s: Profile["skills"][number]; back: string; proofOptions: Array<[string, string]> }) {
+  return (
+    <Item table="skill" row={s} back={back} title={s.canonical_name} editTitle={`Edit ${s.canonical_name}`}
+      lines={[
+        s.proficiency ? `${PROFICIENCY_LABELS.find(([k]) => k === s.proficiency)?.[1]}${s.proficiency_set_by === "import_as_stated" ? " (as your resume says)" : ""}` : null,
+        s.evidence.length ? s.evidence.map((ev) => ev.label).join(" · ") : <span className="hint">{t("profile.skills.no_proof")}</span>,
+      ]}
+      dialogExtra={
+        <div className="dialog-section">
+          <h3>Proof</h3>
+          {s.evidence.length ? (
+            <ul className="bullets">
+              {s.evidence.map((ev) => (
+                <li key={ev.id}>{ev.label}{" "}
+                  <form action={removeEvidenceAction} className="inline"><input type="hidden" name="back" value={back} /><input type="hidden" name="evidence_id" value={ev.id} /><button className="link">Unlink</button></form>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="hint">{t("profile.skills.no_proof")}</p>}
+          {proofOptions.length ? (
+            <form action={addEvidenceAction} className="stack">
+              <input type="hidden" name="back" value={back} /><input type="hidden" name="skill_id" value={s.id} />
+              <label>Shown by<select name="target" required defaultValue=""><option value="" disabled>Pick something you did</option>{proofOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
+              <button className="secondary">Link proof</button>
+            </form>
+          ) : null}
+        </div>
+      } />
+  );
+}
+
+/** Skills, grouped by kind. Spoken languages have their own section below (Yong, 2026-11-14). */
+export function SkillsSection({ profile }: { profile: Profile }) {
+  const back = "/profile#skills";
+  const proofOptions = skillProofOptions(profile);
+  const skills = profile.skills.filter((s) => s.category !== "language");
+  const noProof = skills.filter((s) => s.evidence.length === 0);
   return (
     <>
       {noProof.length ? (
         <p id="no-proof" className="status">{noProof.length} {noProof.length === 1 ? "skill has" : "skills have"} no proof yet. Link each to something you did so it counts in matching.</p>
       ) : null}
       <ProfileSection id="skills" title="Skills" addTitle="Add a skill" addForm={<AddForm table="skill" back={back} />}
-        empty={profile.skills.length ? undefined : "No skills yet. Use the plus to add one."}>
-        {CATEGORY_LABELS.map(([cat, label]) => {
-          const list = profile.skills.filter((s) => s.category === cat);
+        empty={skills.length ? undefined : "No skills yet. Use the plus to add one."}>
+        {CATEGORY_LABELS.filter(([cat]) => cat !== "language").map(([cat, label]) => {
+          const list = skills.filter((s) => s.category === cat);
           if (!list.length) return null;
           return (
             <div key={cat} className="skill-group">
               <h3 className="group-label">{label}</h3>
-              {list.map((s) => (
-                <Item key={s.id} table="skill" row={s} back={back} title={s.canonical_name} editTitle={`Edit ${s.canonical_name}`}
-                  lines={[
-                    s.proficiency ? `${PROFICIENCY_LABELS.find(([k]) => k === s.proficiency)?.[1]}${s.proficiency_set_by === "import_as_stated" ? " (as your resume says)" : ""}` : null,
-                    s.evidence.length ? s.evidence.map((ev) => ev.label).join(" · ") : <span className="hint">{t("profile.skills.no_proof")}</span>,
-                  ]}
-                  dialogExtra={
-                    <div className="dialog-section">
-                      <h3>Proof</h3>
-                      {s.evidence.length ? (
-                        <ul className="bullets">
-                          {s.evidence.map((ev) => (
-                            <li key={ev.id}>{ev.label}{" "}
-                              <form action={removeEvidenceAction} className="inline"><input type="hidden" name="back" value={back} /><input type="hidden" name="evidence_id" value={ev.id} /><button className="link">Unlink</button></form>
-                            </li>
-                          ))}
-                        </ul>
-                      ) : <p className="hint">{t("profile.skills.no_proof")}</p>}
-                      {proofOptions.length ? (
-                        <form action={addEvidenceAction} className="stack">
-                          <input type="hidden" name="back" value={back} /><input type="hidden" name="skill_id" value={s.id} />
-                          <label>Shown by<select name="target" required defaultValue=""><option value="" disabled>Pick something you did</option>{proofOptions.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></label>
-                          <button className="secondary">Link proof</button>
-                        </form>
-                      ) : null}
-                    </div>
-                  } />
-              ))}
+              {list.map((s) => <SkillItem key={s.id} s={s} back={back} proofOptions={proofOptions} />)}
             </div>
           );
         })}
       </ProfileSection>
     </>
+  );
+}
+
+/** Languages you speak: the ones read from your resume or LinkedIn, and any you add. */
+export function LanguagesSection({ profile }: { profile: Profile }) {
+  const back = "/profile#languages";
+  const langs = profile.skills.filter((s) => s.category === "language");
+  return (
+    <ProfileSection id="languages" title="Languages" addTitle="Add a language" addForm={<AddForm table="skill" back={back} values={{ category: "language" }} />}
+      empty={langs.length ? undefined : "No languages yet. Use the plus to add one, e.g. Mandarin."}>
+      {langs.length ? <p className="muted small">Jobs that ask for one of these count it as a skill you have once it has proof. To have jobs that ask for a language score higher, add it to a <a href="/profile/goals">goal</a> too.</p> : null}
+      {langs.map((s) => <SkillItem key={s.id} s={s} back={back} proofOptions={skillProofOptions(profile)} />)}
+    </ProfileSection>
   );
 }

@@ -414,7 +414,7 @@ export async function savePreferences(pool: pg.Pool, session: Session, p: Prefer
 
 export function goalFromRow(r: Record<string, any>): Goal {
   return {
-    id: r.id, active: r.active, timeFrame: r.time_frame, employmentTypes: r.employment_types ?? [], levels: r.levels ?? [], roles: r.roles ?? [], occupation: r.occupation ?? null,
+    id: r.id, active: r.active, timeFrame: r.time_frame, employmentTypes: r.employment_types ?? [], levels: r.levels ?? [], specialties: r.specialties ?? [], languages: r.languages ?? [], roles: r.roles ?? [], occupation: r.occupation ?? null,
     industries: r.industries ?? [], companies: r.companies ?? [], locations: r.locations ?? [], workplaceTypes: r.workplace_types ?? [],
     comp: r.comp_amount === null || r.comp_amount === undefined ? null
       : { amount: Number(r.comp_amount), currency: String(r.comp_currency ?? "USD").trim(), period: r.comp_period ?? "year" },
@@ -433,7 +433,7 @@ function goalValues(g: GoalInput): unknown[] {
   const comp = g.comp && Number.isFinite(g.comp.amount) && g.comp.amount >= 0 ? g.comp : null;
   return [g.active, g.timeFrame, types, cleanList(g.roles), g.occupation?.trim() || null, cleanList(g.industries), cleanList(g.companies),
     comp?.amount ?? null, comp ? (comp.currency || "USD").toUpperCase().slice(0, 3) : null, comp ? (["year", "month", "hour"].includes(comp.period) ? comp.period : "year") : null,
-    cleanList(g.locations), wt, levels];
+    cleanList(g.locations), wt, levels, cleanList(g.specialties ?? []), cleanList(g.languages ?? [])];
 }
 
 /** The applicant's goals, soonest first. */
@@ -448,15 +448,15 @@ export async function saveGoal(pool: pg.Pool, session: Session, g: GoalInput, id
   return withApplicant(pool, asApplicant(session), async (c) => {
     if (id) {
       const r = await c.query(`UPDATE hunt_goal SET active = $2, time_frame = $3, employment_types = $4, roles = $5, occupation = $6, industries = $7,
-        companies = $8, comp_amount = $9, comp_currency = $10, comp_period = $11, locations = $12, workplace_types = $13, levels = $14 WHERE id = $1 RETURNING id`, [id, ...v]);
+        companies = $8, comp_amount = $9, comp_currency = $10, comp_period = $11, locations = $12, workplace_types = $13, levels = $14, specialties = $15, languages = $16 WHERE id = $1 RETURNING id`, [id, ...v]);
       if (!r.rows[0]) throw new DomainError("TC_NOT_FOUND");
       return id;
     }
     const n = (await c.query("SELECT count(*)::int AS n FROM hunt_goal")).rows[0].n as number;
     if (n >= 20) throw new DomainError("TC_FIELD_NOT_EDITABLE");
     return (await c.query(`INSERT INTO hunt_goal (applicant_id, active, time_frame, employment_types, roles, occupation, industries, companies,
-      comp_amount, comp_currency, comp_period, locations, workplace_types, levels)
-      VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`, v)).rows[0].id;
+      comp_amount, comp_currency, comp_period, locations, workplace_types, levels, specialties, languages)
+      VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id`, v)).rows[0].id;
   });
 }
 
