@@ -20,6 +20,10 @@ export const AUDIT_ALLOWED_KEYS = {
   "email.disconnected": [],
   "email.suggestion_accepted": ["application_ref", "kind"],
   "email.suggestion_dismissed": ["kind"],
+  "extension.paired": [],
+  "extension.revoked": [],
+  "packet.built": ["application_ref", "packet_version", "fields", "left_for_applicant"],
+  "packet.filled": ["application_ref", "packet_version", "filled", "left_for_applicant"],
   "packet.approved": ["application_ref", "packet_version", "packet_hash"],
   "packet.submit_approved": ["application_ref", "packet_version", "submit_hash"],
   "packet.submitted": [

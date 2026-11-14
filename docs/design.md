@@ -4,7 +4,7 @@
 
 **App name:** TC Hunter. "TC" is for Tim Cook: not a founder, a person who was *hired* into a good job, rose to CEO, and became a billionaire as an employee. Tagline: *"Get hired. Rise like Tim Cook."* **Brand rule:** TC Hunter is an aspirational reference only. Never market the app as endorsed by, affiliated with, or using the likeness of Tim Cook or Apple. The name and the tagline are the brand; the story is internal positioning. (Enforced by a test: no Tim Cook or Apple reference may appear in user-facing text except the tagline.)
 
-**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0–3 merged. Phase 4a built (with connected Gmail). Per Yong (2026-11-14), Phases 3, 4a and 4b run back to back without a review stop; Phase 5 still needs Yong's separate written go-ahead.
+**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0–4a merged. Phase 4b (Assisted Fill) built. Per Yong (2026-11-14), Phases 3, 4a and 4b run back to back without a review stop; Phase 5 still needs Yong's separate written go-ahead.
 
 ### Decision log
 
@@ -20,6 +20,9 @@
 | 2026-11-14 | Phase 2 approved and merged. Yong: keep moving through the phases without asking each time (3 → 4a → 4b, one PR each); Phase 5 still needs a separate written go-ahead. |
 | 2026-11-14 | Phase 3 merged (PR #4). |
 | 2026-11-14 | §13.3: connect Gmail in Phase 4a (Yong: "Yes", "Connect now"), per applicant, read-only, suggestions only (folded into §2.5, §5.6, §7). |
+| 2026-11-14 | Phase 4a merged (PR #5). |
+| 2026-11-14 | §13.7: right-to-work and sponsorship questions are filled from the applicant's own approved, current saved answer (Yong: "Just answer based on profile data"); with none, they stay the applicant's step (§2.3, §5.5). |
+| 2026-11-14 | §13.8: an unclear outcome stops and asks, never retries; first the confirmation is taken from the employer's page or, with Gmail connected, from their "we received your application" email, confirmed with one tap (§5.5). |
 | 2026-11-13 | §13.2: public job-board feeds only (Greenhouse, Lever, Ashby, SmartRecruiters, plus careers pages); LinkedIn and Indeed by pasted link; no licensed aggregator (folded into §5.2). |
 
 ---
@@ -78,7 +81,7 @@ Technical complexity must never be exposed without a well-designed structure and
 - **No application is submitted without the applicant's approval of that specific application** — that job, that employer, that tailored resume, those form answers. Approval is bound to a fingerprint of exactly that content; any change voids it.
 - Each applicant approves only their own applications. The final "Approve submission" needs a fresh sign-in check, so a shared computer left signed in cannot submit for the other person.
 - No "auto-apply to everything" mode in v1 (§13.4 is parked).
-- **Legal attestations are the applicant's alone:** certifications, work-authorisation attestations, background-check consent, EEO / demographic self-identification, and signatures are **never** checked, filled, or signed by automation. *Recommended, pending decision §13.7:* treat every work-authorisation question (e.g. "Do you require sponsorship?") the same way, showing the applicant's saved answer next to it but leaving it for them.
+- **Legal attestations are the applicant's alone:** certifications, background-check consent, EEO / demographic self-identification, and signatures are **never** checked, filled, or signed by automation. **Work-authorisation questions (decision §13.7, Yong 2026-11-14):** "Are you authorised to work…?" and "Will you require sponsorship?" are answered from the applicant's own approved saved answer (My profile › Saved answers), word for word and only when it matches one of the form's choices. With no approved answer, a draft, or one not reviewed in 90 days, the question stays the applicant's step. The applicant still sees it in the packet review and checks the whole form before pressing Submit.
 
 *Built in Phase 0:* a packet field marked as an applicant step cannot hold an answer and cannot be marked filled (database constraint).
 
@@ -272,6 +275,15 @@ Allowed transitions are a table in the database and a function in code, tested t
 
 **Weekly budget at approval (P5):** before `approved_to_apply`, if the weekly budget is used up, Layer 1 says *"You've used 5 of 5 applications this week"* and the applicant may override for this application: the budget is advice, never a block on their own approval.
 
+**Assisted Fill as built (Phase 4b):**
+1. *Pair:* Settings › Your browser › *Pair this browser* (needs a fresh "confirm it's you") shows a key once; only its SHA-256 is stored (`extension_device`). Removing the browser stops the key at once.
+2. *Read:* on the employer's form the applicant clicks the TC Hunter button › *Read this form*. The extension (`apps/extension`, Manifest V3, `activeTab` + `scripting` only, no standing site access) lists the questions; never password or hidden fields.
+3. *Propose:* `proposeField` gives each question an answer from the profile, an approved saved answer or an approved document, with its source and confidence, or a plain note why it's left (not in your profile, still a draft, not one of the choices, new question). Applicant steps carry no answer at all. Answers are encrypted; the packet hash is an HMAC with the applicant's own key.
+4. *Review and approve* on the application page: every question, its answer and where it came from; type or change any answer; *Approve these answers* binds to the hash, with the weekly-budget line (advice only).
+5. *Fill:* *Fill the form* types only approved answers at or above 0.85 (or typed by the applicant), attaches the approved PDFs, and outlines every question that is the applicant's. A second guard in the extension refuses statements, personal questions, consents, signatures and tick boxes even if asked. It never clicks or submits. A "you're a person" check is reported as `verification`.
+6. *Submit:* the applicant does their own steps and presses Submit on the employer's site. *I submitted it* in the extension reads the confirmation number off the page verbatim and opens the application with it filled in; one tap records it (`markSubmitted`: single-use key, `packet.submitted` audit, application → applied, receipt). A repeat is a no-op.
+7. *Unclear outcome (decision §13.8):* if no number was shown or the applicant didn't say, an employer's "we received your application" email (Gmail connected) becomes a suggestion with the confirmation number from the email; *Yes* records the packet as sent. Only the number is kept from mail. If neither shows, the applicant is asked; nothing is ever retried.
+
 **Application receipt (P11, Phase 4b):** on `submitted`, a one-page PDF from the audit log — job, employer, document versions sent, each answer and its source, confirmation number (or *"no confirmation number was shown"*), time — stored as a `document` of type `receipt`, never sent anywhere.
 
 ### 5.6 Module F — Tracker, Reports & Audit
@@ -379,7 +391,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 | **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | **Merged — F2, F3 passing** |
 | **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | **Built — F4 passing** |
 | **4a. Tracker & Reports** | Module F: pipeline, follow-ups, 5 reports, dashboard, weekly budget (P5), outcome tags (P8), weekly review (P9); then score calibration (P10); connected Gmail (§13.3) | F7 pass | **Built — F7 passing** |
-| **4b. Assisted Fill** | Application Packet + browser extension fill (Tier 1), application receipt (P11) | F5 (assisted) pass | Not started |
+| **4b. Assisted Fill** | Application Packet + browser extension fill (Tier 1), application receipt (P11) | F5 (assisted) pass | **Built — F5 (assisted) passing** |
 | **5. Guided Automation** | Automation, Tier 1 adapters, pause / resume, confirmation capture | **Requires Yong's separate written go-ahead after 4b review.** F5 (full) on a sandbox flow, then one real application with Yong present | Not started |
 | **v1.1** | Interview prep pack (P12) | — | Roadmap |
 
@@ -407,8 +419,8 @@ The same story must work for an early-career applicant whose profile is mostly p
 4. **Future auto-apply mode — open, not needed for v1.** Recommendation: park.
 5. **Name — DECIDED:** TC Hunter.
 6. **AI provider and PII rule — DECIDED (Yong, 2026-11-13):** Claude (Anthropic API) with contact details removed before sending; built-in rule reader as fallback and when no key is set (§2.5, §5.1).
-7. **Work-authorisation questions — open (before Phase 4b).** Recommendation (§2.3): always "Your step", saved answer shown, never filled.
-8. **Unknown outcome after submit — open (before Phase 4b).** Built as recommended: `failed` + reason `outcome_unknown`, applicant resolves.
+7. **Work-authorisation questions — DECIDED (Yong, 2026-11-14): fill from the applicant's approved saved answer** ("Just answer based on profile data"). No approved, current answer means it stays their step (§2.3).
+8. **Unknown outcome after submit — DECIDED (2026-11-14): stop and ask, never retry,** after first taking the confirmation from the employer's page or their acknowledgement email (one tap). Phase 5 automation keeps `failed` + `outcome_unknown` until the applicant resolves it.
 
 ---
 
@@ -531,3 +543,15 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Worker | `apps/worker` | hourly mailbox looks when `TC_GOOGLE_CLIENT_ID` / `TC_GOOGLE_CLIENT_SECRET` are set; vault mounted read-only |
 | Screens | `apps/web/app/applications/*`, `apps/web/app/reports/*`, Settings › Email, job detail, Home | Track this job; Applications; one application; Reports (5 tabs, CSV / PDF, calibration); Weekly look back; email suggestions; Home tiles for in progress, follow-ups and interviews, budget line and last week below the fold |
 | Tests | `packages/*/test` | 387 passing (F7 in domain and through the app, calibration, email), plus an end-to-end browser run: track, I applied, screening, interview, notes, Home tiles, reports and downloads, weekly look back, Connect Gmail (read-only request, forged return refused), email suggestion accepted, outcome tag, disconnect |
+
+## Appendix — Phase 4b as built
+
+| Area | Where | Notes |
+|---|---|---|
+| Schema | `packages/db/migrations/009_assist.sql` | `extension_device` (key hash only, applicant-only insert); packet fields keep the form's key, type, choices and a note; packet form site and receipt; receipts can't be changed; `email_signal.confirmation_ref` |
+| Rules | `packages/domain/src/packet/` | answer proposals with sources, applicant-step rules, fill threshold 0.85, packet hash, confirmation finder, receipt PDF |
+| Data | `packages/db/src/assist.ts` | pair / list / remove browsers, ready applications, build packet, review, change an answer, fill plan, fill report, I submitted it, receipt |
+| Extension | `apps/extension` | load unpacked; popup (Read this form, Fill the form, I submitted it), settings (address + key), `fill.js` |
+| Screens | application page (`#packet`), Settings › Your browser, receipt download | review with sources, approve, your turn, sent + receipt |
+| Fixes | `documents.ts` | approving a tailored resume now moves the application to Ready to apply (the 4a check used the wrong type) |
+| Tests | `packages/*/test`, `apps/extension/test` | F5 assisted through the app (review with sources, fill refused before approval, attestation never filled, confirmation verbatim, re-run leaves one of everything, email acknowledgement), the extension helper in Chromium on the demo form, plus an end-to-end browser run of pairing, review, approve, fill, submit and receipt |

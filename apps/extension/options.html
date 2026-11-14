@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>TC Hunter settings</title><link rel="stylesheet" href="style.css"></head>
+<body class="page">
+  <h1>Connect this browser to TC Hunter</h1>
+  <p>In TC Hunter, open <strong>Settings</strong>, then <strong>Your browser</strong>, and choose <strong>Pair this browser</strong>. Paste the two things it shows you here.</p>
+  <form id="f">
+    <label>TC Hunter address<input id="origin" type="url" placeholder="https://tc-hunter.example" required></label>
+    <label>Browser key<input id="key" required autocomplete="off" spellcheck="false"></label>
+    <button>Save</button>
+  </form>
+  <div id="status" role="status"></div>
+  <p class="hint">The key lets this browser read your approved answers for forms you choose. Remove the browser in TC Hunter's settings to stop it at once.</p>
+  <script src="options.js"></script>
+</body>
+</html>

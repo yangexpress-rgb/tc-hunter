@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<!-- F5 demo employer form (fixtures/f5/attestation-form.json). Local test page only, never a real employer. -->
+<head><meta charset="utf-8"><title>Demo employer: apply</title></head>
+<body>
+  <form id="apply" onsubmit="event.preventDefault(); window.__submitted = true; document.getElementById('done').hidden = false;">
+    <div class="field"><label for="first_name">First name *</label><input id="first_name" name="first_name" required></div>
+    <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" required></div>
+    <div class="field"><label for="resume">Resume</label><input id="resume" name="resume" type="file" accept=".pdf"></div>
+    <div class="field"><label for="notice">Notice period</label><input id="notice" name="notice"></div>
+    <div class="field"><label for="work_auth">Are you legally authorised to work in this country?</label>
+      <select id="work_auth" name="work_auth"><option value="">Choose</option><option value="y">Yes</option><option value="n">No</option></select></div>
+    <div class="field"><label><input type="checkbox" id="certify" name="certify" required> I certify that the information in this application is true and complete.</label></div>
+    <div class="field"><label for="pw">Create a password</label><input id="pw" name="pw" type="password"></div>
+    <input type="hidden" name="token" value="x">
+    <button type="submit" id="submit">Submit application</button>
+  </form>
+  <p id="done" hidden>Thanks for applying! Your confirmation number: GH-DEMO-48213</p>
+</body>
+</html>

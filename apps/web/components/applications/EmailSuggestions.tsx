@@ -20,6 +20,7 @@ export function EmailSuggestions({ rows, back, timeZone, showJob = true }: { row
         {rows.map((r) => (
           <li key={r.id} className="suggestion">
             <p>It looks like <strong>{r.employer}</strong> {SAYS[r.kind]}{showJob ? <> about <a href={`/applications/${r.appRef}`}>{r.title}</a></> : null}.
+              {r.confirmationRef ? <> Their confirmation number: <strong>{r.confirmationRef}</strong>.</> : null}
               <span className="muted"> Email from {r.senderDomain}, {day(r.receivedAt)}. <a href={gmailLink(r.messageId)} target="_blank" rel="noopener noreferrer">Open it in Gmail</a></span></p>
             <div className="inline-actions">
               <form action={emailSignalAction}>

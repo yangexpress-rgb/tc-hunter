@@ -30,6 +30,14 @@ describe("matching a message to one application", () => {
     expect(s).toMatchObject({ applicationId: "a1", kind: "interview", stage: "interview", senderDomain: "mail.contoso.com" });
   });
 
+  it("keeps a confirmation number from an acknowledgement, exactly as shown, and nothing else (decision 13.8)", () => {
+    const ready = app({ stage: "ready_to_apply" });
+    expect(suggestFromEmail(msg("jobs@contoso.com", "Application received", "Thanks for applying. Your reference number: CTS-55120."), [ready]))
+      .toMatchObject({ kind: "acknowledgement", stage: "applied", confirmationRef: "CTS-55120" });
+    expect(suggestFromEmail(msg("jobs@contoso.com", "Thank you for applying to Contoso"), [ready])!.confirmationRef).toBeNull();
+    expect(suggestFromEmail(msg("jobs@contoso.com", "Interview invitation", "Application ID 12345"), [app({})])!.confirmationRef).toBeNull();
+  });
+
   it("by the employer's name when the mail comes from a hiring system", () => {
     const s = suggestFromEmail(msg("Contoso Hiring <no-reply@greenhouse.io>", "Unfortunately…", "we will not be moving forward"), [app({})]);
     expect(s).toMatchObject({ kind: "rejection", stage: "closed_lost", senderDomain: "greenhouse.io" });

@@ -10,6 +10,7 @@ import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
 import { setStage } from "./tracker";
+import { markSubmitted } from "./assist";
 
 /**
  * Connected email (decision 13.3, Yong 2026-11-14). One read-only Gmail per applicant.
@@ -115,9 +116,9 @@ export async function runEmailCheck(pool: pg.Pool, ctx: RequestContext, deps: Em
         const s = suggestFromEmail(m, apps);
         if (!s) continue;
         const r = await c.query(
-          `INSERT INTO email_signal (applicant_id, application_id, message_id, kind, suggested_stage, sender_domain, received_at)
-           VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6) ON CONFLICT (applicant_id, message_id) DO NOTHING`,
-          [s.applicationId, s.messageId, s.kind, s.stage, s.senderDomain, s.receivedAt]);
+          `INSERT INTO email_signal (applicant_id, application_id, message_id, kind, suggested_stage, sender_domain, received_at, confirmation_ref)
+           VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7) ON CONFLICT (applicant_id, message_id) DO NOTHING`,
+          [s.applicationId, s.messageId, s.kind, s.stage, s.senderDomain, s.receivedAt, s.confirmationRef]);
         n += r.rowCount ?? 0;
       }
     });
@@ -131,25 +132,33 @@ export async function runEmailCheck(pool: pg.Pool, ctx: RequestContext, deps: Em
 
 export interface EmailSignalRow {
   id: string; kind: EmailKind; suggestedStage: ApplicationStage; senderDomain: string; receivedAt: Date; messageId: string;
-  appRef: string; title: string; employer: string;
+  appRef: string; title: string; employer: string; confirmationRef: string | null;
 }
 
 /** Suggestions still waiting, and still a step forward from where each application is now. */
 export async function listEmailSignals(pool: pg.Pool, session: Session, appRef?: string): Promise<EmailSignalRow[]> {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT s.id, s.kind, s.suggested_stage, s.sender_domain, s.received_at, s.message_id, a.public_ref, a.stage, p.title, p.employer_canonical
+    `SELECT s.id, s.kind, s.suggested_stage, s.sender_domain, s.received_at, s.message_id, s.confirmation_ref, a.public_ref, a.stage, p.title, p.employer_canonical
        FROM email_signal s JOIN application a ON a.id = s.application_id JOIN job_posting p ON p.id = a.job_posting_id
       WHERE s.status = 'new' AND ($1::text IS NULL OR a.public_ref = $1) ORDER BY s.received_at DESC`, [appRef ?? null])).rows
     .filter((r) => stageFor(r.kind, r.stage) === r.suggested_stage)
     .map((r) => ({ id: r.id, kind: r.kind, suggestedStage: r.suggested_stage, senderDomain: r.sender_domain, receivedAt: r.received_at, messageId: r.message_id,
-      appRef: r.public_ref, title: r.title, employer: r.employer_canonical })));
+      appRef: r.public_ref, title: r.title, employer: r.employer_canonical, confirmationRef: r.confirmation_ref })));
 }
 
-/** "Yes, move it": the applicant's own move, so it counts as theirs. */
-export async function acceptEmailSignal(pool: pg.Pool, session: Session, id: string): Promise<string> {
+/**
+ * "Yes, move it": the applicant's own move, so it counts as theirs. When the employer
+ * confirms they received an application whose approved packet was being filled, that
+ * packet is recorded as sent, with the email's confirmation number (decision 13.8).
+ */
+export async function acceptEmailSignal(pool: pg.Pool, session: Session, id: string, cfg?: AppConfig): Promise<string> {
   const s = (await listEmailSignals(pool, session)).find((x) => x.id === id);
   if (!s) throw new DomainError("TC_NOT_FOUND");
-  await setStage(pool, session, s.appRef, { stage: s.suggestedStage, outcomeTag: s.kind === "rejection" ? null : undefined });
+  const open = s.kind === "acknowledgement" && cfg ? await withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    `SELECT 1 FROM application_packet k JOIN application a ON a.id = k.application_id
+      WHERE a.public_ref = $1 AND k.state IN ('approved_to_apply','filling','waiting_for_applicant','ready_to_submit')`, [s.appRef])).rowCount) : 0;
+  if (open && cfg) await markSubmitted(pool, cfg, session, s.appRef, s.confirmationRef);
+  else await setStage(pool, session, s.appRef, { stage: s.suggestedStage, outcomeTag: s.kind === "rejection" ? null : undefined, confirmationRef: s.confirmationRef ?? undefined });
   await withApplicant(pool, asApplicant(session), async (c) => {
     await c.query("UPDATE email_signal SET status = 'accepted', decided_at = now(), updated_at = now() WHERE id = $1", [id]);
     await recordAudit(c, "email.suggestion_accepted", { objectType: "email_signal", objectId: id, payload: { application_ref: s.appRef, kind: s.kind } });

@@ -1,4 +1,5 @@
 import type { ApplicationStage } from "../applicationStages";
+import { confirmationIn } from "../packet/map";
 
 /**
  * Connected email (decision 13.3). Rules only: mail is never sent to an AI service.
@@ -25,7 +26,11 @@ export interface TrackedForEmail {
   domains: string[];
 }
 
-export interface EmailSuggestion { messageId: string; applicationId: string; kind: EmailKind; stage: ApplicationStage; senderDomain: string; receivedAt: Date }
+export interface EmailSuggestion {
+  messageId: string; applicationId: string; kind: EmailKind; stage: ApplicationStage; senderDomain: string; receivedAt: Date;
+  /** From an acknowledgement only: the confirmation number exactly as the email showed it, or null. */
+  confirmationRef: string | null;
+}
 
 const RULES: Array<[EmailKind, RegExp]> = [
   // Order matters: a rejection often thanks you for applying, an offer often mentions the interview.
@@ -91,7 +96,9 @@ export function suggestFromEmail(m: MailMessage, apps: TrackedForEmail[]): Email
   if (candidates.length !== 1) return null;
   const a = candidates[0]!;
   const stage = stageFor(kind, a.stage);
-  return stage ? { messageId: m.id, applicationId: a.id, kind, stage, senderDomain: domain, receivedAt: m.receivedAt } : null;
+  if (!stage) return null;
+  const conf = kind === "acknowledgement" ? confirmationIn(`${m.subject}\n${m.snippet}`) : null;
+  return { messageId: m.id, applicationId: a.id, kind, stage, senderDomain: domain, receivedAt: m.receivedAt, confirmationRef: conf && /^[A-Za-z0-9-]{4,41}$/.test(conf) ? conf : null };
 }
 
 /** The Gmail search for mail from the employers being tracked, recent only. */
