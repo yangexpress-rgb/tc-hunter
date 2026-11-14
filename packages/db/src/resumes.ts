@@ -191,6 +191,8 @@ export async function redigestResumeFile(pool: pg.Pool, session: Session, fileId
     if (busy) throw new DomainError("TC_DIGEST_BUSY");
     if (last.import_batch_id) await discardDrafts(c, last.import_batch_id);
     await c.query("UPDATE resume_digest SET status = 'replaced', finished_at = coalesce(finished_at, now()) WHERE id = $1", [last.id]);
+    // A plain re-scan (no choices sent) keeps the choices made last time.
+    if (Object.keys(overrides).length === 0 && last.section_overrides) overrides = last.section_overrides;
     const clean = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => /^([0-9]+|c)-[a-z0-9-]*$/.test(k) && typeof v === "string").slice(0, 60));
     return queueDigest(c, fileId, last.run + 1, clean);
   });
