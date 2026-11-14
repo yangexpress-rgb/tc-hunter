@@ -1,4 +1,5 @@
 import type { DigestOutcome, DigestView } from "@tc-hunter/db";
+import type { ProfileDuplicate } from "@tc-hunter/domain";
 
 /** Plain names for each step of reading a stored resume into the profile. */
 export const DIGEST_STEPS: Array<[string, string]> = [
@@ -75,5 +76,35 @@ export function OutcomeList({ items }: { items: DigestOutcome[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+const DUP_KIND: Record<ProfileDuplicate["kind"], string> = {
+  experience: "Role", bullet: "Bullet", education: "School", skill: "Skill", credential: "Certification",
+};
+
+/** Copies already in the profile (mostly from earlier uploads), with one button to remove the extra ones. */
+export function DuplicateBanner({ dups, back, action }: { dups: ProfileDuplicate[]; back: string; action: (form: FormData) => Promise<void> }) {
+  if (!dups.length) return null;
+  return (
+    <section className="card dup-banner">
+      <p className="status">{dups.length} {dups.length === 1 ? "row is a copy" : "rows are copies"} of something already in your profile, most likely from uploading a resume more than once.</p>
+      <form action={action}>
+        <input type="hidden" name="back" value={back} />
+        <button className="small">Remove the extra copies</button>
+      </form>
+      <p className="muted">Only rows you haven't checked are removed. If a copied role has bullets the other one doesn't, they're moved over, not lost.</p>
+      <details className="layer2">
+        <summary>See the copies</summary>
+        <ul className="outcomes">
+          {dups.map((d) => (
+            <li key={d.id}>
+              <span className="muted">{DUP_KIND[d.kind]}:</span> {d.label}
+              {d.moveBulletIds?.length ? <span className="muted"> ({d.moveBulletIds.length} of its bullets will move over)</span> : null}
+            </li>
+          ))}
+        </ul>
+      </details>
+    </section>
   );
 }

@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
-import { duplicateFlags, getProfile, type FactTable } from "@tc-hunter/db";
+import { duplicateFlags, getProfile, profileDuplicates, type FactTable } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Chip, FactFields, Flash, ProfileNav, RowRef } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
 import { CATEGORY_LABELS, dateRange, employmentLabel, FIELD_SPECS, flashOf, pct, PROFICIENCY_LABELS, showMonth, SOURCE_LABELS, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { deleteFactAction, discardImportAction, updateAndVerifyAction, verifyFactAction } from "../actions";
+import { removeDuplicatesAction, deleteFactAction, discardImportAction, updateAndVerifyAction, verifyFactAction }  from "../actions";
+import { DuplicateBanner } from "@/components/profile/Digest";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ function DraftRow({ table, row, back, title, detail, dup }: { table: FactTable; 
 export default async function ReviewPage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, profile, dups] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), duplicateFlags(pool, session)]);
+  const [{ saved, error, params }, profile, dups, copies] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), duplicateFlags(pool, session), profileDuplicates(pool, session)]);
   const batchId = /^[0-9a-f-]{36}$/.test(params.batch ?? "") ? params.batch! : null;
   const batch = batchId ? profile.imports.find((b) => b.id === batchId) : null;
   const inScope = (r: Record<string, any>) => r.verification === "draft" && (!batchId || r.import_batch_id === batchId);
@@ -59,6 +60,8 @@ export default async function ReviewPage(props: PageProps) {
       <ProfileNav current="/profile/review" />
       {params.rows ? <p className="status" role="status">{t("profile.import.done", { n: params.rows })}</p> : <Flash saved={saved} error={error} />}
       {params.rows && error ? <Flash error={error} /> : null}
+
+      <DuplicateBanner dups={copies} back={back} action={removeDuplicatesAction} />
 
       {total === 0 ? <p className="status">{t("profile.review.empty")} <a href="/profile">Back to your profile</a></p> : (
         <p className="muted">{total} {total === 1 ? "row is" : "rows are"} waiting. Nothing here is used until you mark it right. Levels are only ever what your file says; you can change them yourself.</p>

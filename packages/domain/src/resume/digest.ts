@@ -198,11 +198,48 @@ const roleLabel = (title: string, employer: string | null) => (employer && emplo
 
 /** Bullets this close (share of words) count as possibly the same achievement. */
 export const SIMILAR_BULLET = 0.75;
+/** Bullets this close, with the same numbers, are the same achievement (a word or two of difference, a line break, a hyphen). */
+export const SAME_BULLET = 0.9;
+
+/** Letters and digits only: "manage-ment", "manage ment" and "management" compare equal. */
+const compact = (s: string | null | undefined) => (s ?? "").toLowerCase().replace(/[^a-z0-9+#]/g, "");
+const digits = (s: string) => (s.match(/\d+(?:[.,]\d+)?/g) ?? []).map((d) => d.replace(/,/g, "")).sort().join("|");
+
+/** How a new bullet compares with one already there. */
+export function compareBullets(existing: string, incoming: string): { decision: RowDecision; score: number } {
+  if (compact(existing) === compact(incoming)) return { decision: "same", score: 1 };
+  const score = overlap(existing, incoming);
+  // A changed number is never "the same": the applicant decides which one is right.
+  if (score >= SAME_BULLET && digits(existing) === digits(incoming)) return { decision: "same", score };
+  return { decision: score >= SIMILAR_BULLET ? "similar" : "add", score };
+}
+
+/** Same organisation, allowing for "Inc."/"Corp.", spacing, and an organisation left empty (read as the title). */
+function sameOrg(a: string | null, b: string | null, titleA: string, titleB: string): boolean {
+  const A = normOrg(a && compact(a) !== compact(titleA) ? a : null), B = normOrg(b && compact(b) !== compact(titleB) ? b : null);
+  if (!A || !B) return !A && !B;
+  if (compact(A) === compact(B)) return true;
+  const [short, long] = compact(A).length <= compact(B).length ? [compact(A), compact(B)] : [compact(B), compact(A)];
+  return short.length >= 4 && long.startsWith(short);
+}
+
+/** Months of a role, open-ended roles running to now. */
+const span = (start: string, end: string | null): [number, number] => {
+  const m = (d: string) => { const [y, mo] = d.split("-").map(Number) as [number, number]; return y * 12 + mo; };
+  const now = new Date();
+  return [m(start), end ? m(end) : now.getUTCFullYear() * 12 + now.getUTCMonth() + 1];
+};
+const periodsOverlap = (a: [number, number], b: [number, number]) => a[0] <= b[1] + 1 && b[0] <= a[1] + 1;
 
 /**
  * Decides, row by row, what a reading adds to the profile. Rows planned earlier
  * in the same reading count as existing too, so a file that repeats itself
  * (common with PDF text) doesn't create two copies.
+ *
+ * A role is the same role when the organisation and title match and the dates
+ * overlap (readers disagree on exact months, and a year-only date reads as January).
+ * Bullets are compared with every role at that organisation, so a role read with
+ * different dates still doesn't bring copies of bullets already there.
  */
 export function planDigest(parsed: ParsedResume, profile: ProfileSnapshot): DigestPlan {
   const plan: DigestPlan = { experience: [], education: [], skills: [], credentials: [] };
@@ -213,14 +250,17 @@ export function planDigest(parsed: ParsedResume, profile: ProfileSnapshot): Dige
   }));
 
   for (const e of parsed.experience) {
-    const sameRole = roles.filter((r) => normOrg(r.employer) === normOrg(e.employer) && normText(r.title) === normText(e.title));
-    const exact = sameRole.find((r) => monthsApart(r.start, e.start) <= 2);
+    const atOrg = roles.filter((r) => sameOrg(r.employer, e.employer, r.title, e.title));
+    const sameRole = atOrg.filter((r) => compact(r.title) === compact(e.title));
+    const mine = span(e.start, e.end);
+    const exact = sameRole.find((r) => monthsApart(r.start, e.start) <= 2)
+      ?? sameRole.find((r) => periodsOverlap(span(r.start, r.end), mine));
     let planned: PlannedExperience;
     let role: Role;
     if (exact) {
       planned = { row: e, decision: "same", match: exact.existing, intoExistingId: exact.existing.id ?? undefined,
         intoPlannedIndex: exact.existing.id ? undefined : exact.plannedIndex,
-        reason: exact.existing.id ? "Same role and start date" : "Listed twice in this file", bullets: [] };
+        reason: exact.existing.id ? "Same role and dates" : "Listed twice in this file", bullets: [] };
       role = exact;
     } else {
       const near = sameRole[0];
@@ -231,13 +271,19 @@ export function planDigest(parsed: ParsedResume, profile: ProfileSnapshot): Dige
         start: e.start, end: e.end, bullets: [] };
       roles.push(role);
     }
+    // Bullets already under this role, or under another role at the same organisation.
+    const pool = () => [...role.bullets, ...atOrg.filter((r) => r !== role).flatMap((r) => r.bullets)];
     for (const b of e.bullets) {
-      const same = role.bullets.find((x) => normText(x.text) === normText(b.text));
-      if (same) { planned.bullets.push({ row: b, decision: "same", match: same.existing, reason: "Same words" }); continue; }
-      let best: { existing: Existing; score: number } | null = null;
-      for (const x of role.bullets) {
-        const score = overlap(x.text, b.text);
-        if (score >= SIMILAR_BULLET && (!best || score > best.score)) best = { existing: x.existing, score };
+      let best: { existing: Existing; decision: RowDecision; score: number } | null = null;
+      for (const x of pool()) {
+        const c = compareBullets(x.text, b.text);
+        if (c.decision === "add") continue;
+        const rank = (d: RowDecision) => (d === "same" ? 2 : 1);
+        if (!best || rank(c.decision) > rank(best.decision) || (c.decision === best.decision && c.score > best.score)) best = { existing: x.existing, ...c };
+      }
+      if (best?.decision === "same") {
+        planned.bullets.push({ row: b, decision: "same", match: best.existing, reason: best.score === 1 ? "Same words" : "Nearly the same words, same numbers" });
+        continue;
       }
       planned.bullets.push(best
         ? { row: b, decision: "similar", match: best.existing, reason: `${Math.round(best.score * 100)}% the same words` }
@@ -290,4 +336,87 @@ export function planCounts(plan: DigestPlan): PlanCounts {
   }
   for (const list of [plan.education, plan.skills, plan.credentials]) for (const r of list) count(r.decision);
   return c;
+}
+
+// ---------------------------------------------------------------------------
+// Copies already in the profile
+// ---------------------------------------------------------------------------
+
+export interface ProfileDuplicate {
+  kind: RowKind;
+  /** The extra copy: always a row the applicant hasn't checked. */
+  id: string;
+  label: string;
+  /** The row that stays. */
+  keepId: string;
+  keepLabel: string;
+  /** For a copied role: its bullets that aren't already under the role that stays, moved there instead of lost. */
+  moveBulletIds?: string[];
+}
+
+/**
+ * Finds rows that are copies of other rows in the profile (for example from
+ * uploading a resume more than once before duplicate checks existed). Rows must
+ * be given in order of preference: checked rows first, then oldest first. Only
+ * unchecked rows are ever reported as copies, and a copied role's own new
+ * bullets are kept by moving them to the role that stays.
+ */
+export function findProfileDuplicates(profile: ProfileSnapshot): ProfileDuplicate[] {
+  const out: ProfileDuplicate[] = [];
+  type Kept = { id: string; employer: string | null; title: string; start: string; end: string | null; label: string; bullets: Array<{ id: string; text: string }> };
+  const kept: Kept[] = [];
+  const atOrg = (employer: string | null, title: string) => kept.filter((k) => sameOrg(k.employer, employer, k.title, title));
+  const sameBullet = (pool: Array<{ id: string; text: string }>, text: string) => pool.find((x) => compareBullets(x.text, text).decision === "same");
+
+  for (const e of profile.experience) {
+    const org = atOrg(e.employer, e.title);
+    const label = roleLabel(e.title, e.employer);
+    const match = e.checked ? undefined : org.find((k) => compact(k.title) === compact(e.title)
+      && (monthsApart(k.start, e.start) <= 2 || periodsOverlap(span(k.start, k.end), span(e.start, e.end))));
+    const ordered = [...e.bullets].sort((a, b) => Number(b.checked) - Number(a.checked));
+    if (match) {
+      const pool = org.flatMap((k) => k.bullets);
+      const move: string[] = [];
+      for (const b of ordered) {
+        const same = b.checked ? undefined : sameBullet(pool, b.text);
+        if (same) continue;  // goes with the copied role
+        move.push(b.id);
+        match.bullets.push({ id: b.id, text: b.text });
+      }
+      out.push({ kind: "experience", id: e.id, label, keepId: match.id, keepLabel: match.label, moveBulletIds: move });
+      continue;
+    }
+    const role: Kept = { id: e.id, employer: e.employer, title: e.title, start: e.start, end: e.end, label, bullets: [] };
+    kept.push(role);
+    for (const b of ordered) {
+      const same = b.checked ? undefined : sameBullet(org.flatMap((k) => k.bullets).concat(role.bullets), b.text);
+      if (same) out.push({ kind: "bullet", id: b.id, label: b.text, keepId: same.id, keepLabel: same.text });
+      else role.bullets.push({ id: b.id, text: b.text });
+    }
+  }
+
+  const schools: Array<{ id: string; inst: string; degree: string | null; field: string | null; label: string }> = [];
+  for (const r of profile.education) {
+    const label = [r.institution, r.degree].filter(Boolean).join(", ");
+    const same = r.checked ? undefined : schools.find((s) => normOrg(s.inst) === normOrg(r.institution) && normText(s.degree) === normText(r.degree)
+      && (!s.field || !r.field || normText(s.field) === normText(r.field)));
+    if (same) out.push({ kind: "education", id: r.id, label, keepId: same.id, keepLabel: same.label });
+    else schools.push({ id: r.id, inst: r.institution, degree: r.degree, field: r.field, label });
+  }
+
+  const skills: Array<{ id: string; keys: string[]; label: string }> = [];
+  for (const r of profile.skills) {
+    const keys = [r.name, ...r.aliases].map(skillKey);
+    const same = r.checked ? undefined : skills.find((s) => s.keys.some((k) => keys.includes(k)));
+    if (same) out.push({ kind: "skill", id: r.id, label: r.name, keepId: same.id, keepLabel: same.label });
+    else skills.push({ id: r.id, keys, label: r.name });
+  }
+
+  const creds: Array<{ id: string; name: string; issuer: string | null }> = [];
+  for (const r of profile.credentials) {
+    const same = r.checked ? undefined : creds.find((c) => normText(c.name) === normText(r.name) && (!c.issuer || !r.issuer || normOrg(c.issuer) === normOrg(r.issuer)));
+    if (same) out.push({ kind: "credential", id: r.id, label: r.name, keepId: same.id, keepLabel: same.name });
+    else creds.push({ id: r.id, name: r.name, issuer: r.issuer });
+  }
+  return out;
 }

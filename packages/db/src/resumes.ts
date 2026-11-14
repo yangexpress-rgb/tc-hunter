@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import type pg from "pg";
 import {
   decryptField, detectKind, extractText, mappedText, MAX_RESUME_BYTES, open, parseLinkedInExport, planCounts, planDigest,
-  publicSections, readResume, seal, splitSections, type DigestPlan, type InputSection, type ParsedResume, type ProfileSnapshot,
+  publicSections, readResume, findProfileDuplicates, type ProfileDuplicate, seal, splitSections, type DigestPlan, type InputSection, type ParsedResume, type ProfileSnapshot,
   type ResumeFileKind, type ResumeParser,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -362,15 +362,47 @@ async function profileSnapshot(c: pg.PoolClient): Promise<ProfileSnapshot> {
   const files = (await c.query("SELECT id, file_name FROM import_batch")).rows;
   const fileOf = (batch: string | null) => (batch ? files.find((f) => f.id === batch)?.file_name ?? null : null);
   const base = (r: Record<string, any>) => ({ id: r.id, checked: r.verification === "verified", fromFile: r.verification === "verified" ? null : fileOf(r.import_batch_id) });
-  const items = (await c.query("SELECT * FROM experience_item")).rows;
-  const bullets = (await c.query("SELECT * FROM experience_bullet")).rows;
+  // Checked rows first, then oldest first: the order findProfileDuplicates() keeps by.
+  const ORDER = "ORDER BY (verification = 'verified') DESC, created_at, id";
+  const items = (await c.query(`SELECT * FROM experience_item ${ORDER}`)).rows;
+  const bullets = (await c.query(`SELECT * FROM experience_bullet ${ORDER}`)).rows;
   return {
     experience: items.map((e) => ({ ...base(e), employer: e.employer_name, title: e.title, start: ymd(e.start_date)!, end: ymd(e.end_date),
       bullets: bullets.filter((b) => b.experience_item_id === e.id).map((b) => ({ ...base(b), text: b.text })) })),
-    education: (await c.query("SELECT * FROM education_item")).rows.map((e) => ({ ...base(e), institution: e.institution, degree: e.degree, field: e.field })),
-    skills: (await c.query("SELECT * FROM skill")).rows.map((s) => ({ ...base(s), name: s.canonical_name, aliases: s.aliases ?? [] })),
-    credentials: (await c.query("SELECT * FROM credential")).rows.map((x) => ({ ...base(x), name: x.name, issuer: x.issuer })),
+    education: (await c.query(`SELECT * FROM education_item ${ORDER}`)).rows.map((e) => ({ ...base(e), institution: e.institution, degree: e.degree, field: e.field })),
+    skills: (await c.query(`SELECT * FROM skill ${ORDER}`)).rows.map((s) => ({ ...base(s), name: s.canonical_name, aliases: s.aliases ?? [] })),
+    credentials: (await c.query(`SELECT * FROM credential ${ORDER}`)).rows.map((x) => ({ ...base(x), name: x.name, issuer: x.issuer })),
   };
+}
+
+/** Rows in the profile that are copies of other rows (never checked rows). */
+export async function profileDuplicates(pool: pg.Pool, session: Session): Promise<ProfileDuplicate[]> {
+  return withApplicant(pool, asApplicant(session), async (c) => findProfileDuplicates(await profileSnapshot(c)));
+}
+
+const DUP_TABLE: Record<ProfileDuplicate["kind"], string> = {
+  experience: "experience_item", bullet: "experience_bullet", education: "education_item", skill: "skill", credential: "credential",
+};
+
+/**
+ * Removes the extra copies found by profileDuplicates(), worked out again inside
+ * the same transaction. Only unchecked rows are removed; a copied role's bullets
+ * that aren't already under the role that stays are moved there first.
+ */
+export async function removeProfileDuplicates(pool: pg.Pool, session: Session): Promise<number> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const dups = findProfileDuplicates(await profileSnapshot(c));
+    let n = 0;
+    for (const d of dups) {
+      for (const b of d.moveBulletIds ?? []) {
+        await c.query(`UPDATE experience_bullet SET experience_item_id = $2,
+          sort_order = (SELECT coalesce(max(sort_order), 0) + 1 FROM experience_bullet WHERE experience_item_id = $2) WHERE id = $1`, [b, d.keepId]);
+      }
+      const r = await c.query(`DELETE FROM ${DUP_TABLE[d.kind]} WHERE id = $1 AND verification = 'draft'`, [d.id]);
+      n += r.rowCount ?? 0;
+    }
+    return n;
+  });
 }
 
 const matchOf = (m?: { label: string; checked: boolean; fromFile?: string | null }) =>
