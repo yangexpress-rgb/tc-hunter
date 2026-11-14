@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 import type pg from "pg";
 import {
   decryptField, detectKind, extractText, mappedText, MAX_RESUME_BYTES, open, parseLinkedInExport, planCounts, planDigest,
-  publicSections, readResume, findProfileDuplicates, type ProfileDuplicate, seal, splitSections, type DigestPlan, type InputSection, type ParsedResume, type ProfileSnapshot,
+  publicSections, readResume, readerText, sectionHints, mergeSections, findProfileDuplicates, type ProfileDuplicate, seal, splitSections, type DigestPlan, type InputSection, type ParsedResume, type ProfileSnapshot,
   type ResumeFileKind, type ResumeParser,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -189,13 +189,13 @@ export async function redigestResumeFile(pool: pg.Pool, session: Session, fileId
     if (busy) throw new DomainError("TC_DIGEST_BUSY");
     if (last.import_batch_id) await discardDrafts(c, last.import_batch_id);
     await c.query("UPDATE resume_digest SET status = 'replaced', finished_at = coalesce(finished_at, now()) WHERE id = $1", [last.id]);
-    const clean = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => /^[0-9]+-[a-z0-9-]*$/.test(k) && typeof v === "string").slice(0, 60));
+    const clean = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => /^([0-9]+|c)-[a-z0-9-]*$/.test(k) && typeof v === "string").slice(0, 60));
     return queueDigest(c, fileId, last.run + 1, clean);
   });
 }
 
 async function discardDrafts(c: pg.PoolClient, batchId: string): Promise<void> {
-  for (const t of ["experience_bullet", "skill", "credential", "education_item"]) {
+  for (const t of ["experience_bullet", "skill", "credential", "education_item", "honor_award"]) {
     await c.query(`DELETE FROM ${t} WHERE import_batch_id = $1 AND verification = 'draft'`, [batchId]);
   }
   await c.query(`DELETE FROM experience_item e WHERE import_batch_id = $1 AND verification = 'draft'
@@ -220,7 +220,7 @@ export async function duplicateFlags(pool: pg.Pool, session: Session): Promise<R
 // ---------------------------------------------------------------------------
 
 export interface DigestOutcome {
-  kind: "experience" | "bullet" | "education" | "skill" | "credential";
+  kind: "experience" | "bullet" | "education" | "skill" | "credential" | "award";
   label: string;
   /** add: saved as a draft. same: already there, not added. similar: saved as a draft and flagged. */
   decision: "add" | "same" | "similar";
@@ -230,7 +230,7 @@ export interface DigestOutcome {
   reason?: string;
   rowId?: string;
 }
-export interface DigestSummary { roles: number; bullets: number; education: number; skills: number; credentials: number;
+export interface DigestSummary { roles: number; bullets: number; education: number; skills: number; credentials: number; awards: number;
   add: number; same: number; similar: number; intoExisting: number; left_out: number }
 
 export interface DigestDeps {
@@ -276,6 +276,7 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
 
     let parsed: ParsedResume;
     let readerName: string;
+    let sectionMap: InputSection[] = [];
     if (file.fileKind === "zip") {
       const { parsed: li, sourceText } = (() => {
         try { return parseLinkedInExport(file.bytes); } catch { throw new DigestFailure("This doesn't look like a LinkedIn data download. Upload the file LinkedIn emailed you, as it is."); }
@@ -294,24 +295,35 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
       }
       const lines = text.split("\n").filter((l) => l.trim()).length;
 
-      // 2. Sorting: split at the headings, map each section to a place in the profile.
-      const split = splitSections(text, claimed.section_overrides ?? {});
-      const sections = publicSections(split);
-      await advance("sorting", `${lines} lines of text`);
-      if (sections.length === 0) {
-        throw new DigestFailure("We couldn't find any section headings (like Experience, Education or Skills) in this file, so we can't tell what goes where.");
-      }
-      const used = sections.filter((s) => s.target !== "skip");
-      const skipped = sections.filter((s) => s.target === "skip");
-      await advance("parsing",
-        `${sections.length} section${sections.length === 1 ? "" : "s"} found${skipped.length ? `; not using ${skipped.map((s) => `"${s.heading}"`).join(", ")}` : ""}`,
-        { section_map: JSON.stringify(sections) });
-      if (used.length === 0) throw new DigestFailure("Every section is set to \"Don't use\", so there was nothing to read. Change a section below and read it again.");
-
-      // 3. Parsing: the reader sees only the mapped sections, under their mapped headings.
+      // 2. Sorting and 3. reading.
+      const overrides: Record<string, string> = claimed.section_overrides ?? {};
+      const prior = await withApplicant(pool, sys, async (c) => (await c.query(
+        "SELECT section_map FROM resume_digest WHERE resume_file_id = $1 AND run < $2 ORDER BY run DESC LIMIT 1",
+        [claimed.resume_file_id, claimed.run])).rows[0]?.section_map ?? []) as InputSection[];
+      const known = prior.filter((s) => s.key.startsWith("c-")).map((s) => ({ heading: s.heading, suggested: s.suggested }));
+      const split = splitSections(text, overrides, known);
       const reader = deps.reader(file.names);
-      parsed = await readResume(mappedText(split), reader);
+      await advance("sorting", `${lines} lines of text`);
+
+      if (reader.sortsSections) {
+        // Claude reads the whole file (contact details removed) and finds the sections itself,
+        // following any choices the applicant made. Sections they chose not to use are left out.
+        await advance("parsing", "Claude is finding each section and reading it");
+        parsed = await readResume(readerText(split), reader, { hints: sectionHints(split), fallbackText: mappedText(split) });
+      } else {
+        const sections = publicSections(split);
+        if (sections.length === 0) {
+          throw new DigestFailure("We couldn't find any section headings (like Experience, Education or Skills) in this file, so we can't tell what goes where.");
+        }
+        const skipped = sections.filter((s) => s.target === "skip");
+        await advance("parsing",
+          `${sections.length} section${sections.length === 1 ? "" : "s"} found${skipped.length ? `; not using ${skipped.map((s) => `"${s.heading}"`).join(", ")}` : ""}`);
+        if (sections.every((s) => s.target === "skip")) throw new DigestFailure("Every section is set to \"Don't use\", so there was nothing to read. Change a section below and read it again.");
+        // The built-in reader sees only the mapped sections, under their mapped headings.
+        parsed = await readResume(mappedText(split), reader);
+      }
       readerName = parsed.parser;
+      sectionMap = mergeSections(split, parsed.sections, overrides);
     }
 
     // 4. Matching: compare every row with the profile, including drafts from earlier files.
@@ -319,11 +331,11 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
     const plan = planDigest(parsed, snapshot);
     const counts = planCounts(plan);
     const read = { roles: parsed.experience.length, bullets: parsed.experience.reduce((n, e) => n + e.bullets.length, 0),
-      education: parsed.education.length, skills: parsed.skills.length, credentials: parsed.credentials.length };
+      education: parsed.education.length, skills: parsed.skills.length, credentials: parsed.credentials.length, awards: parsed.awards?.length ?? 0 };
     const total = Object.values(read).reduce((a, b) => a + b, 0);
     await advance("matching",
-      `read ${total} row${total === 1 ? "" : "s"}: ${read.roles} role${read.roles === 1 ? "" : "s"}, ${read.bullets} bullet${read.bullets === 1 ? "" : "s"}, ${read.education} school${read.education === 1 ? "" : "s"}, ${read.skills} skill${read.skills === 1 ? "" : "s"}, ${read.credentials} certification${read.credentials === 1 ? "" : "s"}`,
-      { reader: readerName });
+      `read ${total} row${total === 1 ? "" : "s"}: ${read.roles} role${read.roles === 1 ? "" : "s"}, ${read.bullets} bullet${read.bullets === 1 ? "" : "s"}, ${read.education} school${read.education === 1 ? "" : "s"}, ${read.skills} skill${read.skills === 1 ? "" : "s"}, ${read.credentials} certification${read.credentials === 1 ? "" : "s"}${read.awards ? `, ${read.awards} award${read.awards === 1 ? "" : "s"}` : ""}`,
+      { reader: readerName, section_map: JSON.stringify(sectionMap) });
     await advance("saving",
       `${counts.add + counts.similar} new, ${counts.same} already in your profile${counts.similar ? `, ${counts.similar} that look${counts.similar === 1 ? "s" : ""} like something you already have` : ""}`);
 
@@ -372,6 +384,7 @@ async function profileSnapshot(c: pg.PoolClient): Promise<ProfileSnapshot> {
     education: (await c.query(`SELECT * FROM education_item ${ORDER}`)).rows.map((e) => ({ ...base(e), institution: e.institution, degree: e.degree, field: e.field })),
     skills: (await c.query(`SELECT * FROM skill ${ORDER}`)).rows.map((s) => ({ ...base(s), name: s.canonical_name, aliases: s.aliases ?? [] })),
     credentials: (await c.query(`SELECT * FROM credential ${ORDER}`)).rows.map((x) => ({ ...base(x), name: x.name, issuer: x.issuer })),
+    awards: (await c.query(`SELECT * FROM honor_award ${ORDER}`)).rows.map((x) => ({ ...base(x), title: x.title, issuer: x.issuer })),
   };
 }
 
@@ -381,7 +394,7 @@ export async function profileDuplicates(pool: pg.Pool, session: Session): Promis
 }
 
 const DUP_TABLE: Record<ProfileDuplicate["kind"], string> = {
-  experience: "experience_item", bullet: "experience_bullet", education: "education_item", skill: "skill", credential: "credential",
+  experience: "experience_item", bullet: "experience_bullet", education: "education_item", skill: "skill", credential: "credential", award: "honor_award",
 };
 
 /**
@@ -429,10 +442,10 @@ async function saveDraftRows(c: pg.PoolClient, plan: DigestPlan, f: {
       const employer = e.row.employer ?? (e.row.type === "project" || e.row.type === "coursework" ? null : e.row.title);
       itemId = (await c.query(
         `INSERT INTO experience_item (applicant_id, employer_name, title, location, start_date, end_date, date_precision,
-           employment_type, sort_order, source, parse_confidence, import_batch_id)
-         VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+           employment_type, sort_order, source, parse_confidence, import_batch_id, description)
+         VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
         [employer, e.row.title, e.row.location ?? null, e.row.start, e.row.end && e.row.end >= e.row.start ? e.row.end : null, e.row.precision,
-         e.row.type, nextOrder + i + 1, source, conf(e.row.confidence), batchId])).rows[0].id;
+         e.row.type, nextOrder + i + 1, source, conf(e.row.confidence), batchId, e.row.description ?? null])).rows[0].id;
       outcomes.push({ kind: "experience", label: short(label), decision: e.decision, match: matchOf(e.match), reason: e.reason, rowId: itemId });
     }
     roleIds[i] = itemId;
@@ -446,10 +459,10 @@ async function saveDraftRows(c: pg.PoolClient, plan: DigestPlan, f: {
       }
       const id = (await c.query(
         `INSERT INTO experience_bullet (applicant_id, experience_item_id, text, metric_value, metric_unit, metric_context,
-           sort_order, source, parse_confidence, import_batch_id)
-         VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+           sort_order, source, parse_confidence, import_batch_id, kind)
+         VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
         [itemId, b.row.text, b.row.metric?.value ?? null, b.row.metric?.unit ?? null, b.row.metric?.context ?? null, base + j + 1, source,
-         conf(b.row.confidence), batchId])).rows[0].id;
+         conf(b.row.confidence), batchId, b.row.kind ?? (b.row.metric ? "outcome" : "responsibility")])).rows[0].id;
       outcomes.push({ kind: "bullet", label: short(b.row.text), decision: b.decision, under, match: matchOf(b.match), reason: b.reason, rowId: id });
     }
   }
@@ -484,6 +497,14 @@ async function saveDraftRows(c: pg.PoolClient, plan: DigestPlan, f: {
        VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [cr.row.name, cr.row.kind, cr.row.issuer ?? null, cr.row.issuedOn ?? null, cr.row.expiresOn ?? null, source, conf(cr.row.confidence), batchId])).rows[0].id;
     outcomes.push({ kind: "credential", label: short(cr.row.name), decision: cr.decision, match: matchOf(cr.match), reason: cr.reason, rowId: id });
+  }
+  for (const a of plan.awards) {
+    if (a.decision === "same") { outcomes.push({ kind: "award", label: short(a.row.title), decision: "same", match: matchOf(a.match), reason: a.reason }); continue; }
+    const id = (await c.query(
+      `INSERT INTO honor_award (applicant_id, title, issuer, awarded_on, description, source, parse_confidence, import_batch_id)
+       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [a.row.title, a.row.issuer ?? null, a.row.awardedOn ?? null, a.row.description ?? null, source, conf(a.row.confidence), batchId])).rows[0].id;
+    outcomes.push({ kind: "award", label: short(a.row.title), decision: a.decision, match: matchOf(a.match), reason: a.reason, rowId: id });
   }
   return { batchId, outcomes };
 }

@@ -56,7 +56,7 @@ export function DigestProgress({ digest }: { digest: DigestView }) {
 }
 
 const KIND_LABELS: Record<DigestOutcome["kind"], string> = {
-  experience: "Role", bullet: "Bullet", education: "School", skill: "Skill", credential: "Certification",
+  experience: "Role", bullet: "Bullet", education: "School", skill: "Skill", credential: "Certification", award: "Award",
 };
 
 export function OutcomeList({ items }: { items: DigestOutcome[] }) {
@@ -80,7 +80,7 @@ export function OutcomeList({ items }: { items: DigestOutcome[] }) {
 }
 
 const DUP_KIND: Record<ProfileDuplicate["kind"], string> = {
-  experience: "Role", bullet: "Bullet", education: "School", skill: "Skill", credential: "Certification",
+  experience: "Role", bullet: "Bullet", education: "School", skill: "Skill", credential: "Certification", award: "Award",
 };
 
 /** Copies already in the profile (mostly from earlier uploads), with one button to remove the extra ones. */

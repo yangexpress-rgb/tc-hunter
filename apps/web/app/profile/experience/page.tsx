@@ -3,7 +3,7 @@ import { sortExperience, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Chip, FactFields, Flash, ProfileNav, RowRef } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
-import { dateRange, employmentLabel, FIELD_SPECS, flashOf, pct, SOURCE_LABELS, type PageProps } from "@/lib/profile";
+import { dateRange, duration, employmentLabel, FIELD_SPECS, flashOf, pct, SOURCE_LABELS, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { removeDuplicatesAction, addFactAction, deleteFactAction, updateFactAction, verifyFactAction }  from "../actions";
 import { DuplicateBanner } from "@/components/profile/Digest";
@@ -11,6 +11,71 @@ import { DuplicateBanner } from "@/components/profile/Digest";
 export const dynamic = "force-dynamic";
 
 const UNITS: Record<string, string> = { percent: "%", usd: "$", count: "", multiplier: "x" };
+
+/** Sections in the order LinkedIn shows them. */
+const GROUPS: Array<[string, string[]]> = [
+  ["Experience", ["full_time", "part_time", "contract", "internship"]],
+  ["Projects", ["project"]],
+  ["Volunteering", ["volunteer"]],
+  ["Activities and coursework", ["other", "coursework"]],
+];
+
+function Bullet({ b, back }: { b: Record<string, any>; back: string }) {
+  return (
+    <li>
+      <span>{b.text}</span> <Chip checked={b.verification === "verified"} />
+      {b.verification !== "verified" ? (
+        <form action={verifyFactAction} className="inline"><RowRef table="experience_bullet" id={b.id} back={back} /><button className="small">{t("profile.check_cta")}</button></form>
+      ) : null}
+      <Details summary="Details">
+        {b.metric_value !== null ? <p>Number kept exactly: {b.metric_unit === "usd" ? "$" : ""}{Number(b.metric_value).toLocaleString()}{UNITS[b.metric_unit] && b.metric_unit !== "usd" ? UNITS[b.metric_unit] : ""} {b.metric_context ?? ""}</p> : null}
+        <p className="muted">{SOURCE_LABELS[b.source]}{pct(b.parse_confidence) ? ` · we're ${pct(b.parse_confidence)} sure we read this right` : ""}</p>
+        <form action={updateFactAction}><RowRef table="experience_bullet" id={b.id} back={back} /><FactFields spec={FIELD_SPECS.experience_bullet} values={b} /><button className="small">Save</button></form>
+        <form action={deleteFactAction}><RowRef table="experience_bullet" id={b.id} back={back} /><button className="small secondary">Remove</button></form>
+      </Details>
+    </li>
+  );
+}
+
+/** One role, read top to bottom like LinkedIn: when, what, where, then what you did and what came of it. */
+function Role({ e, back }: { e: Record<string, any> & { bullets: Array<Record<string, any>> }; back: string }) {
+  const resp = e.bullets.filter((b) => b.kind === "responsibility");
+  const outs = e.bullets.filter((b) => b.kind !== "responsibility");
+  const span = duration(e.start_date, e.end_date);
+  return (
+    <article className="card fact role">
+      <header className="fact-head">
+        <div>
+          <p className="role-dates">{dateRange(e.start_date, e.end_date, e.date_precision)}{span ? ` · ${span}` : ""}</p>
+          <h3>{e.title}</h3>
+          <p className="muted">{[e.employer_name !== e.title ? e.employer_name : null, employmentLabel(e.employment_type), e.location].filter(Boolean).join(" · ")}</p>
+        </div>
+        <Chip checked={e.verification === "verified"} />
+      </header>
+      {e.description ? <p className="role-description">{e.description}</p> : null}
+      {resp.length ? <><h4>Responsibilities</h4><ul className="bullets">{resp.map((b) => <Bullet key={b.id} b={b} back={back} />)}</ul></> : null}
+      {outs.length ? <><h4>Outcomes</h4><ul className="bullets">{outs.map((b) => <Bullet key={b.id} b={b} back={back} />)}</ul></> : null}
+      <div className="row-actions">
+        {e.verification !== "verified" ? (
+          <form action={verifyFactAction}><RowRef table="experience_item" id={e.id} back={back} /><button className="small">{t("profile.check_cta")}</button></form>
+        ) : null}
+      </div>
+      <Details summary="Add a responsibility or outcome">
+        <form action={addFactAction}>
+          <RowRef table="experience_bullet" back={back} />
+          <input type="hidden" name="experience_item_id" value={e.id} />
+          <FactFields spec={FIELD_SPECS.experience_bullet} />
+          <button className="small">Add</button>
+        </form>
+      </Details>
+      <Details summary="Edit or remove">
+        <p className="muted">{SOURCE_LABELS[e.source]}{pct(e.parse_confidence) ? ` · we're ${pct(e.parse_confidence)} sure we read this right` : ""}</p>
+        <form action={updateFactAction}><RowRef table="experience_item" id={e.id} back={back} /><FactFields spec={FIELD_SPECS.experience_item} values={e} /><button className="small">Save</button></form>
+        <form action={deleteFactAction}><RowRef table="experience_item" id={e.id} back={back} /><button className="small secondary">Remove this role and everything under it</button></form>
+      </Details>
+    </article>
+  );
+}
 
 /** Experience (brief 5.1, P2): jobs, internships, projects, volunteering and coursework, sortable by date or relevance. */
 export default async function ExperiencePage(props: PageProps) {
@@ -40,51 +105,16 @@ export default async function ExperiencePage(props: PageProps) {
           : <span className="muted"> (add target roles in <a href="/profile/preferences">What you want</a> to sort by fit)</span>}
       </p>
 
-      {rows.map((e) => (
-        <article className="card fact" key={e.id}>
-          <header className="fact-head">
-            <div>
-              <h3>{e.title}{e.employer_name ? <span className="muted"> · {e.employer_name}</span> : null}</h3>
-              <p className="muted">{employmentLabel(e.employment_type)} · {dateRange(e.start_date, e.end_date, e.date_precision)}{e.location ? ` · ${e.location}` : ""}</p>
-            </div>
-            <Chip checked={e.verification === "verified"} />
-          </header>
-          <ul className="bullets">
-            {e.bullets.map((b) => (
-              <li key={b.id}>
-                <span>{b.text}</span> <Chip checked={b.verification === "verified"} />
-                {b.verification !== "verified" ? (
-                  <form action={verifyFactAction} className="inline"><RowRef table="experience_bullet" id={b.id} back={back} /><button className="small">{t("profile.check_cta")}</button></form>
-                ) : null}
-                <Details summary="Details">
-                  {b.metric_value !== null ? <p>Number kept exactly: {b.metric_unit === "usd" ? "$" : ""}{Number(b.metric_value).toLocaleString()}{UNITS[b.metric_unit] && b.metric_unit !== "usd" ? UNITS[b.metric_unit] : ""} {b.metric_context ?? ""}</p> : null}
-                  <p className="muted">{SOURCE_LABELS[b.source]}{pct(b.parse_confidence) ? ` · we're ${pct(b.parse_confidence)} sure we read this right` : ""}</p>
-                  <form action={updateFactAction}><RowRef table="experience_bullet" id={b.id} back={back} /><FactFields spec={FIELD_SPECS.experience_bullet} values={b} /><button className="small">Save</button></form>
-                  <form action={deleteFactAction}><RowRef table="experience_bullet" id={b.id} back={back} /><button className="small secondary">Remove</button></form>
-                </Details>
-              </li>
-            ))}
-          </ul>
-          <div className="row-actions">
-            {e.verification !== "verified" ? (
-              <form action={verifyFactAction}><RowRef table="experience_item" id={e.id} back={back} /><button className="small">{t("profile.check_cta")}</button></form>
-            ) : null}
-          </div>
-          <Details summary="Add an achievement">
-            <form action={addFactAction}>
-              <RowRef table="experience_bullet" back={back} />
-              <input type="hidden" name="experience_item_id" value={e.id} />
-              <FactFields spec={FIELD_SPECS.experience_bullet} />
-              <button className="small">Add</button>
-            </form>
-          </Details>
-          <Details summary="Edit or remove">
-            <p className="muted">{SOURCE_LABELS[e.source]}{pct(e.parse_confidence) ? ` · we're ${pct(e.parse_confidence)} sure we read this right` : ""}</p>
-            <form action={updateFactAction}><RowRef table="experience_item" id={e.id} back={back} /><FactFields spec={FIELD_SPECS.experience_item} values={e} /><button className="small">Save</button></form>
-            <form action={deleteFactAction}><RowRef table="experience_item" id={e.id} back={back} /><button className="small secondary">Remove this and its achievements</button></form>
-          </Details>
-        </article>
-      ))}
+      {GROUPS.map(([label, types]) => {
+        const list = rows.filter((e) => types.includes(e.employment_type));
+        if (!list.length) return null;
+        return (
+          <section key={label} className="role-group">
+            <h2>{label}</h2>
+            {list.map((e) => <Role key={e.id} e={e} back={back} />)}
+          </section>
+        );
+      })}
 
       <section className="card">
         <h2>Add experience</h2>

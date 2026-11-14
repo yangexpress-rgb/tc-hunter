@@ -28,11 +28,16 @@ export function groundInSource(parsed: ParsedResume, sourceText: string): Parsed
   }).map((e) => ({
     ...e,
     location: has(e.location) ? e.location : undefined,
+    // A description is kept only if it is word for word in the file.
+    description: e.description && has(e.description) ? e.description : undefined,
     bullets: e.bullets.filter((b) => {
       const ok = has(b.text);
       if (!ok) notes.push(`Left out a bullet under "${e.title}" that wasn't word for word from your file.`);
       return ok;
-    }).map((b) => ({ ...b, metric: extractMetric(b.text) })),
+    }).map((b) => {
+      const metric = extractMetric(b.text);
+      return { ...b, metric, kind: b.kind ?? (metric ? "outcome" as const : "responsibility" as const) };
+    }),
   }));
 
   const education = parsed.education.filter((e) => {
@@ -70,5 +75,11 @@ export function groundInSource(parsed: ParsedResume, sourceText: string): Parsed
     return ok;
   }).map((c) => ({ ...c, issuer: has(c.issuer) ? c.issuer : undefined }));
 
-  return { ...parsed, experience, education, skills, credentials, notes };
+  const awards = (parsed.awards ?? []).filter((a) => {
+    const ok = has(a.title);
+    if (!ok) notes.push(`Left out the award "${a.title}" because we couldn't find it in your file.`);
+    return ok;
+  }).map((a) => ({ ...a, issuer: has(a.issuer) ? a.issuer : undefined, description: a.description && has(a.description) ? a.description : undefined }));
+
+  return { ...parsed, experience, education, skills, credentials, awards, notes };
 }

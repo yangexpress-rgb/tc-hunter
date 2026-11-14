@@ -8,9 +8,9 @@ const parsed = (p: Partial<ParsedResume>): ParsedResume =>
 describe("resume digest: sections", () => {
   it("an employer name in capitals is never taken for a heading", () => {
     const s = splitSections(["Name", "", "EXPERIENCE", "ACME CORP", "Analyst", "Jan 2020 – Present", "", "HONORS", "Dean's List"].join("\n"));
-    expect(s.sections.map((x) => [x.heading, x.target])).toEqual([["EXPERIENCE", "experience"], ["HONORS", "skip"]]);
+    expect(s.sections.map((x) => [x.heading, x.target])).toEqual([["EXPERIENCE", "experience"], ["HONORS", "awards"]]);
     expect(mappedText(s)).toContain("ACME CORP");
-    expect(mappedText(s)).not.toContain("Dean's List");
+    expect(mappedText(s)).toContain("AWARDS\nDean's List");
   });
 
   it("ignores choices that aren't real places", () => {
