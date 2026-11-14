@@ -1,4 +1,5 @@
-import { latestDiscovery, listGoals, listSources, namedCompanies } from "@tc-hunter/db";
+import { latestDiscovery, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
+import { LookAgainButton, ScanStatusBox } from "@/components/jobs/ScanStatus";
 import { companyKey, goalName, noBoardSentence, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -35,7 +36,7 @@ const health = (h: string) => (h === "blocked" ? t("jobs.sources.unavailable") :
 export default async function SourcesPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
-  const [{ saved, error, params }, sources, goals, last, named] = await Promise.all([flashOf(props), listSources(pool, session), listGoals(pool, session), latestDiscovery(pool, session), namedCompanies(pool, session)]);
+  const [{ saved, error, params }, sources, goals, last, named, scan] = await Promise.all([flashOf(props), listSources(pool, session), listGoals(pool, session), latestDiscovery(pool, session), namedCompanies(pool, session), scanStatus(pool, session)]);
   // Companies named in a goal: read first, and shown as such (Yong, 2026-11-14).
   const namedIds = new Set(named.map((n) => n.sourceId).filter(Boolean));
   const namedKeys = new Set(named.map((n) => n.key));
@@ -106,14 +107,15 @@ export default async function SourcesPage(props: PageProps) {
       <p><a href="/jobs">← Jobs</a></p>
       <h1>{t("jobs.sources.title")}</h1>
       <Flash saved={saved} error={error} />
-      {params.refreshed ? <p className="status" role="status">We're looking again. This takes a few minutes.</p> : null}
 
       <section className="card stack">
         <p>For each of your <a href="/profile/goals">goals</a>, we read the careers sites of the companies you named first, then search job sites, then find other employers that fit and read their own jobs pages. Jobs that fit come back to Jobs, scored. You don't need to do anything here.</p>
         <p className="muted">{last?.finished_at
           ? `Last looked ${ago(last.finished_at)}: checked ${last.companies_checked} ${last.companies_checked === 1 ? "employer" : "employers"}, found ${last.boards_found} with jobs pages we can read.`
           : goals.some((g) => g.active) ? "We haven't looked yet. It starts with the next search." : "Add a goal and we'll start looking."}</p>
-        <form action={refreshAction}><input type="hidden" name="back" value="/jobs/sources" /><button>Look again now</button></form>
+        <ScanStatusBox initial={scan} />
+        <form action={refreshAction}><input type="hidden" name="back" value="/jobs/sources" />
+          <LookAgainButton title="Start a new search now with your latest goals: find employers, read every place again, and score every job again" /></form>
       </section>
 
       <section className="card" id="status">

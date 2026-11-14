@@ -301,18 +301,38 @@ const PLAIN_REFUSAL: Record<string, string> = {
 };
 
 /** One scan for one applicant (design 5.2): every followed source, then matching, then posting watch. */
-export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: { discover?: boolean } = {}): Promise<Record<string, number>> {
+export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: { discover?: boolean; fresh?: boolean } = {}): Promise<Record<string, number>> {
+  // The run is recorded first, so the screens can show what it's doing as it goes (Yong, 2026-11-14).
+  const runId = await withApplicant(pool, ctx, async (c) =>
+    (await c.query(`INSERT INTO scan_run (applicant_id, progress) VALUES (app_applicant_id(), '{"step":"Starting"}') RETURNING id`)).rows[0].id as string);
+  const progress = async (step: string, done?: number, total?: number) => {
+    await withApplicant(pool, ctx, (c) => c.query("UPDATE scan_run SET progress = $2, updated_at = now() WHERE id = $1",
+      [runId, JSON.stringify({ step, ...(total ? { done: done ?? 0, total } : {}) })]));
+  };
+  try {
+    return await scanSteps(pool, ctx, deps, opts, runId, progress);
+  } catch (e) {
+    // A search that stops part way says so, in plain words, rather than looking like it's still going.
+    await withApplicant(pool, ctx, (c) => c.query("UPDATE scan_run SET finished_at = now(), failed = $2, progress = '{}' WHERE id = $1",
+      [runId, `The search stopped part way: ${String((e as Error).message ?? e).slice(0, 200)}`]));
+    throw e;
+  }
+}
+
+async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: { discover?: boolean; fresh?: boolean }, runId: string,
+  progress: (step: string, done?: number, total?: number) => Promise<void>): Promise<Record<string, number>> {
   // First, find places to look from the goals, when goals changed or a week has passed (or the person pressed Refresh).
   let found: Record<string, number> = {};
   if (deps.discover && (opts.discover || await withApplicant(pool, ctx, (c) => discoveryDue(c)))) {
-    const d = await runDiscovery(pool, ctx, deps.fetcher, deps.discover);
+    await progress("Finding employers for your goals");
+    const d = await runDiscovery(pool, ctx, deps.fetcher, deps.discover, progress);
     found = { companies_checked: d.companiesChecked, boards_found: d.boardsFound, newly_followed: d.newlyFollowed };
   }
   const now = deps.now?.() ?? new Date();
   const wall = Date.now(); // freshness and back-off use the real clock, like the database's last_success_at
-  const fresh = (deps.freshMinutes ?? 30) * 60_000;
-  const { runId, sources, firstCount, targets, queries } = await withApplicant(pool, ctx, async (c) => {
-    const run = await c.query("INSERT INTO scan_run (applicant_id) VALUES (app_applicant_id()) RETURNING id");
+  // "Look again now" reads every place again, however recently (Yong, 2026-11-14).
+  const fresh = opts.fresh ? 0 : (deps.freshMinutes ?? 30) * 60_000;
+  const { sources, firstCount, targets, queries } = await withApplicant(pool, ctx, async (c) => {
     const src = (await c.query(
       `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted AND s.kind <> 'job_search' ORDER BY s.name`)).rows;
     const prefs = await prefsFor(c);
@@ -323,7 +343,7 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
     const ids = await namedSourceIds(c);
     const keys = new Set(goals.flatMap((g) => g.companies).map(companyKey).filter(Boolean));
     const named = (x: Record<string, any>) => ids.has(x.id) || (x.kind !== "pasted_link" && keys.has(companyKey(x.name)));
-    return { runId: run.rows[0].id as string, sources: [...src.filter(named), ...src.filter((x) => !named(x))], firstCount: src.filter(named).length,
+    return { sources: [...src.filter(named), ...src.filter((x) => !named(x))], firstCount: src.filter(named).length,
       targets: wanted.length ? wanted : exp, queries: searchQueries(goals) };
   });
 
@@ -331,7 +351,12 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
   const events: string[] = [];
   const notes: Array<{ source: string; note: string }> = [];
 
+  // One step per place: each named company, each job site, each other employer.
+  const siteCount = queries.length ? (deps.search ?? []).length : 0;
+  const total = sources.length + siteCount;
+  let done = 0;
   const readBoard = async (s: Record<string, any>) => {
+    await progress(`Reading ${s.name}`, done++, total);
     if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
       return;
@@ -381,7 +406,8 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
          ON CONFLICT (applicant_id, job_source_id) DO UPDATE SET updated_at = now() RETURNING muted`, [id]);
       return { id, muted: r.rows[0].muted as boolean };
     });
-    if (follow.muted) continue;
+    if (follow.muted) { done++; continue; }
+    await progress(`Searching ${site.name}`, done++, total);
     try {
       let taken = 0;
       for (const q of queries) {
@@ -415,13 +441,14 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
   // 3. Then the other employers' own jobs pages.
   for (const s of sources.slice(firstCount)) await readBoard(s);
 
+  await progress("Scoring what we found against your goals", total, total);
   return withApplicant(pool, ctx, async (c) => {
     // Postings read for this applicant may have been closed or changed by another scan: include recent events too.
     const recent = (await c.query("SELECT id FROM job_posting_event WHERE detected_at > now() - interval '8 days'")).rows.map((r) => r.id as string);
     const m = await matchApplicant(c, now);
     const alerts = await watchAlerts(c, [...new Set([...events, ...recent])]);
     await c.query(
-      `UPDATE scan_run SET finished_at = now(), sources_checked = $2, new_count = $3, updated_count = $4, expired_count = $5,
+      `UPDATE scan_run SET finished_at = now(), progress = '{}', sources_checked = $2, new_count = $3, updated_count = $4, expired_count = $5,
          jobs_checked = $6, related_count = $7, source_notes = $8 WHERE id = $1`,
       [runId, sources.length + searched, m.newMatches, updated, closed, checked, m.related, JSON.stringify(notes)]);
     await recordAudit(c, "scan.finished", { objectType: "scan_run", objectId: runId, payload: { sources: sources.length, checked, new_jobs: m.newMatches, updated, closed } });
@@ -465,7 +492,7 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolea
   if (!item) return false;
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
-    const result = item.kind === "scan" ? await runScan(pool, ctx, deps, { discover: (item.payload as { discover?: boolean }).discover === true })
+    const result = item.kind === "scan" ? await runScan(pool, ctx, deps, { discover: (item.payload as { discover?: boolean }).discover === true, fresh: (item.payload as { fresh?: boolean }).fresh === true })
       : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))
       : item.kind === "resume_digest" ? { status: await (deps.digest ? runDigest(pool, ctx, String((item.payload as { digest_id?: string }).digest_id), deps.digest) : Promise.reject(new Error("resume reading not set up"))) }
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
@@ -474,6 +501,11 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolea
   } catch (e) {
     await pool.query("SELECT finish_work($1, false, $2, NULL)", [item.id, String((e as Error).message ?? e).slice(0, 500)]);
   }
+  // Pressed "Look again now" while this search was running: start a new one with the latest goals.
+  if (item.kind === "scan") await withApplicant(pool, ctx, async (c) => {
+    const again = (await c.query("SELECT payload->>'again' = 'true' AS again FROM work_item WHERE id = $1", [item.id])).rows[0]?.again;
+    if (again) await c.query(`INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', '{"discover":true,"fresh":true}') ON CONFLICT DO NOTHING`);
+  });
   return true;
 }
 
@@ -513,11 +545,20 @@ export async function listSources(pool: pg.Pool, session: Session) {
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }
 
-/** Queues a scan. With `discover`, it first looks again for employers that fit the goals. */
-export async function requestScan(pool: pg.Pool, session: Session, opts: { discover?: boolean } = {}): Promise<void> {
-  await withApplicant(pool, asApplicant(session), (c) => c.query(
-    "INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', $1) ON CONFLICT DO NOTHING",
-    [JSON.stringify(opts.discover ? { discover: true } : {})]));
+/**
+ * Queues a scan. With `discover`, it first looks again for employers that fit the goals.
+ * With `fresh` ("Look again now"), every place is read again; if a search is already
+ * running, a new one starts as soon as it ends, so the latest goals are always used.
+ */
+export async function requestScan(pool: pg.Pool, session: Session, opts: { discover?: boolean; fresh?: boolean } = {}): Promise<void> {
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const payload = { ...(opts.discover ? { discover: true } : {}), ...(opts.fresh ? { fresh: true } : {}) };
+    const r = await c.query("INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', $1) ON CONFLICT DO NOTHING RETURNING id", [JSON.stringify(payload)]);
+    if (r.rowCount) return;
+    // One is already waiting or running: a waiting one takes on this request; a running one is followed by a fresh one.
+    await c.query("UPDATE work_item SET payload = payload || $1::jsonb WHERE kind = 'scan' AND status = 'queued'", [JSON.stringify(payload)]);
+    if (opts.fresh) await c.query(`UPDATE work_item SET payload = payload || '{"again":true}' WHERE kind = 'scan' AND status = 'running'`);
+  });
 }
 
 export async function requestLink(pool: pg.Pool, session: Session, p: { url: string; title?: string; employer?: string; location?: string; text?: string }): Promise<string> {
@@ -534,7 +575,45 @@ export async function pendingWork(pool: pg.Pool, session: Session) {
 
 export async function latestScan(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    "SELECT * FROM scan_run WHERE finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 1")).rows[0] ?? null);
+    "SELECT * FROM scan_run WHERE finished_at IS NOT NULL AND failed IS NULL ORDER BY started_at DESC LIMIT 1")).rows[0] ?? null);
+}
+
+export interface ScanStatus {
+  /** waiting: pressed, not started yet; running: under way; done or failed: the latest search's outcome; none: never searched. */
+  state: "waiting" | "running" | "done" | "failed" | "none";
+  step: string | null;
+  done: number | null;
+  total: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  /** The finished search's numbers. */
+  places: number;
+  jobsRead: number;
+  newJobs: number;
+  closed: number;
+  /** Places that couldn't be read, and why; and why the search stopped, if it did. */
+  problems: Array<{ source: string; note: string }>;
+  failed: string | null;
+}
+
+/** What the search is doing now, or how the last one went, for the live status on Jobs and Where we look. */
+export async function scanStatus(pool: pg.Pool, session: Session): Promise<ScanStatus> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const w = (await c.query("SELECT status, last_error, created_at, finished_at FROM work_item WHERE kind = 'scan' ORDER BY created_at DESC LIMIT 1")).rows[0];
+    const r = (await c.query("SELECT * FROM scan_run ORDER BY started_at DESC LIMIT 1")).rows[0];
+    const base: ScanStatus = { state: "none", step: null, done: null, total: null, startedAt: null, finishedAt: null, places: 0, jobsRead: 0, newJobs: 0, closed: 0, problems: [], failed: null };
+    if (w?.status === "queued") return { ...base, state: "waiting", startedAt: w.created_at };
+    if (w?.status === "running" && r && !r.finished_at) {
+      const p = r.progress ?? {};
+      return { ...base, state: "running", step: p.step ?? "Starting", done: p.done ?? null, total: p.total ?? null, startedAt: r.started_at };
+    }
+    if (!r) return w?.status === "failed" ? { ...base, state: "failed", failed: "The search couldn't start. It will try again on the next scheduled search." } : base;
+    const notes = (Array.isArray(r.source_notes) ? r.source_notes : []) as Array<{ source: string; note: string }>;
+    const failed = r.failed ?? (!r.finished_at && w?.status === "failed" ? "The search stopped part way. It will try again on the next scheduled search." : null);
+    return { ...base, state: failed ? "failed" : r.finished_at ? "done" : "running", step: r.finished_at ? null : r.progress?.step ?? "Starting",
+      startedAt: r.started_at, finishedAt: r.finished_at, places: r.sources_checked, jobsRead: r.jobs_checked, newJobs: r.new_count, closed: r.expired_count,
+      problems: notes, failed };
+  });
 }
 
 export { normalizeEmployer };

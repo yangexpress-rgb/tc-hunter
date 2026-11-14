@@ -1,4 +1,5 @@
-import { jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
+import { jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork, scanStatus } from "@tc-hunter/db";
+import { LookAgainButton, ScanStatusBox } from "@/components/jobs/ScanStatus";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -28,13 +29,12 @@ export default async function JobsPage(props: PageProps) {
   const view = params.view === "list" ? "list" : "goals";
   const gsort: GoalSort = (GOAL_SORTS as readonly string[]).includes(params.gsort ?? "") ? params.gsort as GoalSort : "score";
   const gdir = params.gdir === "asc" ? "asc" : params.gdir === "desc" ? "desc" : (["company", "role", "location", "type", "status"].includes(gsort) ? "asc" : "desc");
-  const [sources, scan, work, alerts, adjustments, summary, goals] = await Promise.all([
+  const [sources, scan, work, alerts, adjustments, summary, goals, live] = await Promise.all([
     listSources(pool, session), latestScan(pool, session), pendingWork(pool, session),
-    listAlerts(pool, session), listAdjustments(pool, session), jobsSummary(pool, session), listGoals(pool, session),
+    listAlerts(pool, session), listAdjustments(pool, session), jobsSummary(pool, session), listGoals(pool, session), scanStatus(pool, session),
   ]);
   const source = sources.some((s) => s.id === params.source) ? params.source : undefined;
   const { rows, counts } = await listMatches(pool, session, { status, sort, ladder, source, showFiltered });
-  const busy = work.some((w) => w.kind === "scan" && (w.status === "queued" || w.status === "running"));
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
     const all = { tab: status, sort, ladder, source, filtered: showFiltered ? "1" : undefined, view: view === "list" ? "list" : undefined,
@@ -48,20 +48,14 @@ export default async function JobsPage(props: PageProps) {
   return (
     <>
       <TopBar signedIn />
-      {busy ? <meta httpEquiv="refresh" content="8" /> : null}
       <h1>{t("jobs.title")}</h1>
       <Flash saved={saved} error={error} />
 
       <section className="card scan-line">
-        <p className="status" role="status">
-          {busy ? t("jobs.scanning")
-            : sources.length === 0 && !goals.some((g) => g.active) ? t("jobs.no_sources")
-            : scan ? `Last looked ${ago(scan.finished_at)}: ${scan.sources_checked} ${scan.sources_checked === 1 ? "place" : "places"} checked, ${scan.new_count} new ${scan.new_count === 1 ? "job" : "jobs"} for you${scan.expired_count ? `, ${scan.expired_count} closed` : ""}.`
-            : t("jobs.never_scanned")}
-        </p>
+        {sources.length === 0 && !goals.some((g) => g.active) && live.state === "none" ? <p className="status">{t("jobs.no_sources")}</p> : <ScanStatusBox initial={live} />}
         <div className="inline-actions">
           <form action={refreshAction}><input type="hidden" name="back" value={here} />
-            <button disabled={busy} title="Score every job again against your goals, and look for new ones">Refresh</button></form>
+            <LookAgainButton label="Refresh" title="Start a new search now with your latest goals, and score every job again" /></form>
           {sources.length === 0 && !goals.some((g) => g.active) ? <a className="button" href="/profile/goals">Add a goal</a> : null}
           <a href="/jobs/sources">{t("jobs.sources.title")}</a>
           <a href="/jobs/paste">{t("jobs.paste.title")}</a>
@@ -83,7 +77,7 @@ export default async function JobsPage(props: PageProps) {
         </section>
       ) : null}
 
-      {params.refreshed ? <p className="status" role="status">Refreshed: every job is scored again against your goals{sources.length ? ", and we're looking for new ones" : ""}.</p> : null}
+      {params.refreshed ? <p className="status" role="status">Every job is scored again against your latest goals, and a new search has started.</p> : null}
 
       <nav className="tabs view-switch" aria-label="How to show jobs">
         <a href={q({ view: "goals" })} aria-current={view === "goals" ? "page" : undefined}>By goal</a>

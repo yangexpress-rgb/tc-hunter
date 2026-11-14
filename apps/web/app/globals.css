@@ -341,3 +341,5 @@ table.jobs-matrix td { vertical-align: middle; }
 table.jobs-matrix td.wrap { white-space: normal; min-width: 160px; }
 table.jobs-matrix tr.is-filtered td { color: var(--muted); }
 table.jobs-matrix tr.is-unseen td:nth-child(2) a { font-weight: 600; }
+.scan-status progress { width: 100%; height: 8px; accent-color: var(--accent, currentColor); }
+.scan-status .error.small { font-weight: 500; }
