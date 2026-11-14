@@ -4,7 +4,7 @@ import { t } from "@tc-hunter/domain/messages";
 
 const PROFILE_LINKS: Array<[string, string]> = [
   ["/profile", "About you"], ["/profile/experience", "Experience"], ["/profile/education", "Education"],
-  ["/profile/skills", "Skills"], ["/profile/credentials", "Certifications"], ["/profile/stories", "Stories"],
+  ["/profile/skills", "Skills"], ["/profile/credentials", "Certifications & awards"], ["/profile/stories", "Stories"],
   ["/profile/answers", "Saved answers"], ["/profile/preferences", "What you want"], ["/profile/import", "Bring in a resume"],
 ];
 

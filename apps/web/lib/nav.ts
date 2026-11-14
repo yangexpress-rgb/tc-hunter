@@ -15,7 +15,7 @@ export const NAV: NavSection[] = [
     { href: "/profile/experience", label: "Experience" },
     { href: "/profile/education", label: "Education" },
     { href: "/profile/skills", label: "Skills" },
-    { href: "/profile/credentials", label: "Certifications" },
+    { href: "/profile/credentials", label: "Certifications & awards" },
     { href: "/profile/stories", label: "Stories" },
     { href: "/profile/answers", label: "Saved answers" },
     { href: "/profile/preferences", label: "What you want" },
