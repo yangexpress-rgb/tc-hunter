@@ -594,6 +594,9 @@ export interface ScanStatus {
   /** Places that couldn't be read, and why; and why the search stopped, if it did. */
   problems: Array<{ source: string; note: string }>;
   failed: string | null;
+  /** How often it runs by itself, and when the next one is due (null when only on request). */
+  schedule: "daily" | "weekly" | "manual";
+  nextRunAt: string | null;
 }
 
 /** What the search is doing now, or how the last one went, for the live status on Jobs and Where we look. */
@@ -601,7 +604,13 @@ export async function scanStatus(pool: pg.Pool, session: Session): Promise<ScanS
   return withApplicant(pool, asApplicant(session), async (c) => {
     const w = (await c.query("SELECT status, last_error, created_at, finished_at FROM work_item WHERE kind = 'scan' ORDER BY created_at DESC LIMIT 1")).rows[0];
     const r = (await c.query("SELECT * FROM scan_run ORDER BY started_at DESC LIMIT 1")).rows[0];
-    const base: ScanStatus = { state: "none", step: null, done: null, total: null, startedAt: null, finishedAt: null, places: 0, jobsRead: 0, newJobs: 0, closed: 0, problems: [], failed: null };
+    // The schedule (enqueue_due_scans): 20 hours after the last search for daily, 7 days for weekly; checked every 15 minutes.
+    const schedule = ((await c.query("SELECT scan_schedule FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.scan_schedule ?? "daily") as ScanStatus["schedule"];
+    const lastStart = (await c.query("SELECT max(started_at) AS t FROM scan_run")).rows[0]?.t as Date | null;
+    const gap = schedule === "weekly" ? 7 * 86_400_000 : 20 * 3_600_000;
+    const nextRunAt = schedule === "manual" ? null
+      : new Date(Math.max(Date.now() + 15 * 60_000, (lastStart ? new Date(lastStart).getTime() + gap : 0) + 15 * 60_000)).toISOString();
+    const base: ScanStatus = { state: "none", step: null, done: null, total: null, startedAt: null, finishedAt: null, places: 0, jobsRead: 0, newJobs: 0, closed: 0, problems: [], failed: null, schedule, nextRunAt };
     if (w?.status === "queued") return { ...base, state: "waiting", startedAt: w.created_at };
     if (w?.status === "running" && r && !r.finished_at) {
       const p = r.progress ?? {};

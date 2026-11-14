@@ -24,7 +24,7 @@ export interface DiscoverDeps {
 const asApplicant = (s: Session): RequestContext => ({ userAccountId: s.userAccountId, applicantId: s.applicantId, actor: "applicant" });
 const RECHECK_DAYS = 30;
 
-/** Is a new look due? Never looked, a goal changed since, or a week has passed. */
+/** Is a new look due? Never looked, a goal changed since, or a day has passed (Yong, 2026-11-14: the whole search runs daily). */
 export async function discoveryDue(c: pg.PoolClient): Promise<boolean> {
   const r = (await c.query(
     `SELECT EXISTS (SELECT 1 FROM hunt_goal WHERE active) AS has_goals,
@@ -36,7 +36,7 @@ export async function discoveryDue(c: pg.PoolClient): Promise<boolean> {
   if (!r.has_goals) return false;
   if (!r.last) return true;
   if (r.goals_changed && new Date(r.goals_changed) > new Date(r.last)) return true;
-  return Date.now() - new Date(r.last).getTime() > 7 * 86_400_000;
+  return Date.now() - new Date(r.last).getTime() > 20 * 3_600_000;
 }
 
 export interface DiscoveryResult { companiesChecked: number; boardsFound: number; newlyFollowed: number; unfollowed: number }
