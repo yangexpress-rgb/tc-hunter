@@ -5,7 +5,7 @@ import {
   type Fetcher, type MailReader, type RawPosting, type SearchQuery, type SearchSite,
 } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, connectEmail, latestScan, scanStatus, listMatches, listSources, requestEmailCheck, requestScan, runNextWork, saveGoal, unfollowSource,
+  addEvidence, addFact, connectEmail, latestScan, recoverInterruptedWork, scanStatus, listMatches, listSources, requestEmailCheck, requestScan, runNextWork, saveGoal, unfollowSource,
   type AppConfig, type GoalInput, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -127,6 +127,40 @@ describe("live status of a search (Yong: no response after Look again now)", () 
     while (await runNextWork(pool, { ...deps, search: [pressing] })) { /* drain */ }
     const runs = (await ownerQuery("SELECT count(*)::int AS n FROM scan_run WHERE applicant_id = $1", [tom.applicantId])).rows[0].n;
     expect(runs).toBe(2);
+  });
+
+  it("a search cut off by an app update is closed in plain words and started again", async () => {
+    const kim = (await newApplicant(pool, cfg, "Kim")).session;
+    await saveGoal(pool, kim, goal({ roles: ["Operations Analyst"] }));
+    await requestScan(pool, kim, { discover: true, fresh: true });
+    // The worker is stopped mid-way through reading the places.
+    let cut = false;
+    const dying: SearchSite = { id: "adzuna", name: "Adzuna", search: async () => { cut = true; throw new Error("container stopped"); } };
+    const claimed = (await pool.query("SELECT * FROM claim_work()")).rows[0];
+    expect(claimed.kind).toBe("scan");
+    await ownerQuery(`INSERT INTO scan_run (applicant_id, progress) VALUES ($1, '{"step":"Reading Celonis","done":3,"total":21}')`, [kim.applicantId]);
+    expect(await scanStatus(pool, kim)).toMatchObject({ state: "running", step: "Reading Celonis", done: 3, total: 21 });
+    expect(await recoverInterruptedWork(pool)).toBeGreaterThanOrEqual(1);
+    const after = await scanStatus(pool, kim);
+    expect(after.state).toBe("waiting");  // queued again, payload kept
+    const runs = (await ownerQuery("SELECT failed FROM scan_run WHERE applicant_id = $1", [kim.applicantId])).rows;
+    expect(runs[0].failed).toBe("The search was cut off by an app update while reading Celonis. It starts again automatically.");
+    const payload = (await ownerQuery("SELECT payload FROM work_item WHERE applicant_id = $1 AND status = 'queued'", [kim.applicantId])).rows[0].payload;
+    expect(payload).toMatchObject({ discover: true, fresh: true });
+    while (await runNextWork(pool, deps)) { /* drain */ }
+    expect((await scanStatus(pool, kim)).state).toBe("done");
+    expect(cut).toBe(false);
+  });
+
+  it("a search silent for 15 minutes shows as stopped, in plain words", async () => {
+    const lee = (await newApplicant(pool, cfg, "Lee")).session;
+    await saveGoal(pool, lee, goal({ roles: ["Operations Analyst"] }));
+    await requestScan(pool, lee);
+    await pool.query("SELECT * FROM claim_work()");
+    await ownerQuery(`INSERT INTO scan_run (applicant_id, progress, updated_at) VALUES ($1, '{"step":"Reading Celonis"}', now() - interval '20 minutes')`, [lee.applicantId]);
+    expect(await scanStatus(pool, lee)).toMatchObject({ state: "failed", failed: "The search stopped responding while reading Celonis. It starts again automatically within a few minutes." });
+    await recoverInterruptedWork(pool);
+    while (await runNextWork(pool, deps)) { /* drain */ }
   });
 
   it("a search that stops part way says so, instead of looking busy forever", async () => {
