@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { ClaudeResumeParser, readLinkedInProfile, SourceRefusedError, unplacedLines, type Fetcher } from "../src";
+import { ClaudeResumeParser, contactBlockEnd, readLinkedInProfile, SourceRefusedError, stripContactDetails, unplacedLines, type Fetcher } from "../src";
 
 const TEXT = readFileSync(join(__dirname, "..", "..", "..", "fixtures", "f1", "sample-resume.txt"), "utf8");
 
@@ -59,6 +59,17 @@ describe("Claude reads the whole resume thoroughly", () => {
     expect(left).not.toContain("Certified Supply Chain Professional (CSCP) — APICS, 2022");
     expect(left).not.toContain("EDUCATION");
     expect(left).not.toContain("Mar 2021 – Present");
+  });
+});
+
+describe("the top of the file", () => {
+  it("drops contact lines above the first heading but keeps anything else there", () => {
+    const text = ["Pat Lee", "Cary, NC", "pat@example.test | (919) 555-0100", "Duke University, Fuqua School of Business — MBA, 2006",
+      "Project Management Professional (PMP), Project Management Institute", "", "EXPERIENCE", "Director — Lenovo"].join("\n");
+    const out = stripContactDetails(text, { names: ["Pat Lee"], firstSectionLine: contactBlockEnd(text) });
+    expect(out).toContain("Duke University, Fuqua School of Business — MBA, 2006");
+    expect(out).toContain("Project Management Professional (PMP)");
+    for (const hidden of ["Pat", "Cary, NC", "pat@example.test", "555-0100"]) expect(out).not.toContain(hidden);
   });
 });
 

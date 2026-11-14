@@ -136,13 +136,15 @@ function mergeReadings(a: ParsedResume, b: ParsedResume): ParsedResume {
 }
 
 /** What happened on each call, for the worker's log (counts and stop reasons only, never resume text). */
-export interface ReadTrace { parts: Record<string, string>; unplacedBefore: number; unplacedAfter: number }
+export interface ReadTrace { parts: Record<string, string>; unplacedBefore: number; unplacedAfter: number; sentChars: number;
+  /** What Claude returned, before the honesty check. */
+  raw: { roles: number; schools: number; certs: number; awards: number; skills: number } }
 
 export class ClaudeResumeParser implements ResumeParser {
   readonly name = `claude:${MODEL}`;
   readonly sortsSections = true;
   /** Filled in by the last parse(). */
-  trace: ReadTrace = { parts: {}, unplacedBefore: 0, unplacedAfter: 0 };
+  trace: ReadTrace = { parts: {}, unplacedBefore: 0, unplacedAfter: 0, sentChars: 0, raw: { roles: 0, schools: 0, certs: 0, awards: 0, skills: 0 } };
   constructor(private client: Anthropic = new Anthropic(), private names: string[] = []) {}
 
   private async ask<T extends z.ZodTypeAny>(part: string, schema: T, system: string, content: string): Promise<z.infer<T> | null> {
@@ -169,12 +171,13 @@ export class ClaudeResumeParser implements ResumeParser {
   private model = MODEL;
 
   async parse(text: string, hints?: ReadHints): Promise<ParsedResume> {
-    this.trace = { parts: {}, unplacedBefore: 0, unplacedAfter: 0 };
+    this.trace = { parts: {}, unplacedBefore: 0, unplacedAfter: 0, sentChars: 0, raw: { roles: 0, schools: 0, certs: 0, awards: 0, skills: 0 } };
     const local = parseResumeText(text);
     const names = [...this.names, ...(local.contact.name ? [local.contact.name] : [])];
     const redacted = stripContactDetails(text, { names, firstSectionLine: contactBlockEnd(text) });
     const hintText = hints?.sections.length
       ? `\n\nThe person has said where these sections go; follow it:\n${hints.sections.map((h) => `- "${h.heading}": ${h.target}`).join("\n")}` : "";
+    this.trace.sentChars = redacted.length;
     const content = `<resume>\n${redacted}\n</resume>${hintText}`;
 
     const [roles, rest] = await Promise.all([
@@ -213,6 +216,8 @@ export class ClaudeResumeParser implements ResumeParser {
       }
     }
     this.trace.unplacedAfter = unplacedLines(redacted, parsed).length;
+    this.trace.raw = { roles: parsed.experience.length, schools: parsed.education.length, certs: parsed.credentials.length,
+      awards: parsed.awards?.length ?? 0, skills: parsed.skills.length };
     return parsed;
   }
 }

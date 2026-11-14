@@ -193,6 +193,11 @@ export async function redigestResumeFile(pool: pg.Pool, session: Session, fileId
     await c.query("UPDATE resume_digest SET status = 'replaced', finished_at = coalesce(finished_at, now()) WHERE id = $1", [last.id]);
     // A plain re-scan (no choices sent) keeps the choices made last time.
     if (Object.keys(overrides).length === 0 && last.section_overrides) overrides = last.section_overrides;
+    // The section form sends every section. Only a section the person moved away from our suggestion is their
+    // choice; the rest stay ours, so a later, better reading (Claude) can still place them. Without this, a
+    // heading the built-in rules couldn't place ("Don't use") was frozen as the person's choice and never read again.
+    const suggested = new Map(((last.section_map ?? []) as InputSection[]).map((x) => [x.key, x.suggested]));
+    overrides = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => !suggested.has(k) || suggested.get(k) !== v));
     const clean = Object.fromEntries(Object.entries(overrides).filter(([k, v]) => /^([0-9]+|c)-[a-z0-9-]*$/.test(k) && typeof v === "string").slice(0, 60));
     return queueDigest(c, fileId, last.run + 1, clean);
   });
@@ -335,9 +340,13 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
       const unplaced = unplacedLines(stripContactDetails(sent, { names: file.names, firstSectionLine: contactBlockEnd(sent) }), parsed);
       for (const l of unplaced.slice(0, 30)) parsed.notes.push(`Not placed in any section: "${short(l, 120)}"`);
       if (unplaced.length > 30) parsed.notes.push(`…and ${unplaced.length - 30} more lines not placed in any section.`);
+      // Counts and section headings only: never the resume's text.
       deps.onRead?.({ reader: readerName, trace: (reader as { trace?: unknown }).trace ?? null, unplaced: unplaced.length,
-        roles: parsed.experience.length, education: parsed.education.length, credentials: parsed.credentials.length,
-        awards: parsed.awards?.length ?? 0, skills: parsed.skills.length });
+        extracted_chars: text.length, extracted_lines: lines, top_lines: split.header.length,
+        sections: split.sections.map((x) => ({ h: x.heading.slice(0, 40), to: x.target, chosen: x.chosen, n: x.lineCount })),
+        kept: { roles: parsed.experience.length, schools: parsed.education.length, certs: parsed.credentials.length,
+          awards: parsed.awards?.length ?? 0, skills: parsed.skills.length },
+        dropped_by_check: parsed.notes.filter((n) => n.startsWith("Left out")).length });
     }
 
     // 4. Matching: compare every row with the profile, including drafts from earlier files.
