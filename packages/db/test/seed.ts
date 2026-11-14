@@ -85,8 +85,8 @@ export async function seedEverything(
     await one("application", "INSERT INTO application (applicant_id, job_posting_id, match_id) VALUES ($1, $2, $3) RETURNING id",
       [me, jobId, ids.match]);
     ids.application_stage_event = (await c.query("SELECT id FROM application_stage_event WHERE application_id = $1", [ids.application])).rows[0].id;
-    await one("application_packet", `INSERT INTO application_packet (applicant_id, application_id, tailored_resume_document_id, packet_hash)
-      VALUES ($1, $2, $3, 'hash-v1') RETURNING id`, [me, ids.application, ids.document]);
+    await one("application_packet", `INSERT INTO application_packet (applicant_id, application_id, tailored_resume_document_id, packet_hash, ats)
+      VALUES ($1, $2, $3, 'hash-v1', 'greenhouse') RETURNING id`, [me, ids.application, ids.document]);
     ids.packet_state_event = (await c.query("SELECT id FROM packet_state_event WHERE packet_id = $1", [ids.application_packet])).rows[0].id;
     await one("packet_field", `INSERT INTO packet_field (applicant_id, packet_id, ordinal, question_as_shown, answer_value_enc, source)
       VALUES ($1, $2, 1, 'Notice period', $3, 'answer_bank') RETURNING id`,

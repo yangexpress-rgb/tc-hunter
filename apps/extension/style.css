@@ -9,3 +9,5 @@ button.secondary { background: #fff; color: #1d1d1f; }
 .hint { color: #6e6e73; font-size: 12px; margin-top: 4px; }
 .error { color: #b00020; } .ok { color: #2f7d32; }
 .foot { margin-top: 12px; font-size: 12px; }
+button.link { background: none; border: none; color: #0b57d0; padding: 0; text-decoration: underline; }
+button:disabled { opacity: .45; cursor: default; }

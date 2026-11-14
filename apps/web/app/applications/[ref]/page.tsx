@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { budgetNow, getApplication, getPacket, listDevices, listEmailSignals, trackerSummary } from "@tc-hunter/db";
+import { budgetNow, getApplication, hasFreshStepUp, getPacket, listDevices, listEmailSignals, trackerSummary } from "@tc-hunter/db";
 import { APPLICATION_STAGES, CLOSED, OUTCOME_LABEL, STAGE_LABEL, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -48,7 +48,7 @@ export default async function ApplicationPage(props: Props) {
   const resume = (a.docs as Array<{ public_ref: string; type: string; version: number; status: string }>).find((d) => d.type === "tailored_resume");
   const letter = (a.docs as Array<{ public_ref: string; type: string; version: number; status: string }>).find((d) => d.type === "cover_letter");
   const budget = stage === "ready_to_apply" || stage === "tailoring" || stage === "interested" ? await budgetNow(pool, session) : null;
-  const packetActive = !!packet && ["approved_to_apply", "filling", "waiting_for_applicant", "ready_to_submit"].includes(packet.state);
+  const packetActive = !!packet && (["approved_to_apply", "filling", "waiting_for_applicant", "ready_to_submit"].includes(packet.state) || packet.outcomeUnknown);
   const confirmation = typeof params.confirmation === "string" && /^[A-Za-z0-9#:/._ -]{1,100}$/.test(params.confirmation) ? params.confirmation : "";
 
   return (
@@ -75,8 +75,11 @@ export default async function ApplicationPage(props: Props) {
 
       {params.approved === "1" ? <p className="status" role="status">Approved. Nothing has been typed or sent yet.</p> : null}
       {params.submitted === "1" ? <p className="status" role="status">Recorded as applied. Your receipt is ready below.</p> : null}
+      {params.send_approved === "1" ? <p className="status" role="status">Approved. Go back to their form and choose Send it.</p> : null}
+      {params.not_sent === "1" ? <p className="status" role="status">Noted. Check your answers below and approve again when you&apos;re ready.</p> : null}
+      {params.confirmed === "1" ? <p className="status" role="status">Thanks, that&apos;s confirmed.</p> : null}
       {packet ? (
-        <PacketCard p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} />
+        <PacketCard p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} />
       ) : null}
 
       {(stage === "ready_to_apply" || stage === "tailoring" || stage === "interested") && !packetActive ? (

@@ -12,6 +12,8 @@ try { chromium = createRequire(import.meta.url)("playwright").chromium; } catch 
 
 const html = readFileSync(join(__dirname, "demo-form.html"), "utf8");
 const helper = readFileSync(join(__dirname, "..", "fill.js"), "utf8");
+const submitter = readFileSync(join(__dirname, "..", "submit.js"), "utf8");
+const background = readFileSync(join(__dirname, "..", "background.js"), "utf8");
 const manifest = JSON.parse(readFileSync(join(__dirname, "..", "manifest.json"), "utf8"));
 
 describe("extension manifest", () => {
@@ -21,8 +23,15 @@ describe("extension manifest", () => {
     expect(manifest.host_permissions).toBeUndefined();
     expect(manifest.content_scripts).toBeUndefined();
   });
-  it("the helper has no way to click or submit", () => {
+  it("the form helper has no way to click or submit", () => {
     expect(helper).not.toMatch(/\.click\(|\.submit\(|requestSubmit|dispatchEvent\(new (Mouse|Pointer|Submit)Event/);
+  });
+  it("the only click anywhere is the one Submit press, after the key is spent", () => {
+    expect(submitter.match(/\.click\(/g)).toHaveLength(1);
+    expect(submitter).not.toMatch(/\.submit\(|requestSubmit/);
+    expect(background).not.toMatch(/\.click\(/);
+    expect(background.indexOf("/api/ext/submit/start")).toBeLessThan(background.indexOf("clickOnce"));
+    expect(manifest.background).toEqual({ service_worker: "background.js" });
   });
 });
 
@@ -77,6 +86,28 @@ describe.skipIf(!chromium)("F5 assisted on the demo form", () => {
     await page.check("#certify");
     await page.click("#submit"); // the applicant's own click, not the helper's
     expect(await page.evaluate(() => (window as any).__tcHunter.findConfirmation())).toBe("GH-DEMO-48213");
+  });
+
+  it("Phase 5: presses Submit once, only if the form is exactly as approved", async () => {
+    // A secure page, as every real hiring system's form is (the fingerprint uses the browser's own hashing).
+    await page.route("https://boards.greenhouse.io/demo/**", (r: any) => r.fulfill({ status: 200, contentType: "text/html", body: html }));
+    await page.goto("https://boards.greenhouse.io/demo/jobs/1");
+    await page.addScriptTag({ content: helper });
+    await page.addScriptTag({ content: submitter });
+    await page.fill("#first_name", "Yong"); await page.fill("#email", "yong@example.test"); await page.check("#certify");
+    const approved = await page.evaluate(() => (window as any).__tcHunter.snapshot());
+    expect(approved).toMatch(/^[0-9a-f]{64}$/);
+    const sel = "#submit_app, button[type=submit]";
+    expect(await page.evaluate(([s, h]: string[]) => (window as any).__tcHunterSubmit.canClick(s, h), [sel, approved])).toEqual({ ok: true });
+    await page.fill("#notice", "changed after approval");
+    expect(await page.evaluate(([s, h]: string[]) => (window as any).__tcHunterSubmit.clickOnce(s, h), [sel, approved])).toEqual({ clicked: false, why: "changed" });
+    expect(await page.evaluate(() => (window as any).__submitted ?? false)).toBe(false);
+    await page.fill("#notice", "");
+    expect(await page.evaluate(([s, h]: string[]) => (window as any).__tcHunterSubmit.clickOnce(s, h), [sel, approved])).toEqual({ clicked: true });
+    expect(await page.evaluate(() => (window as any).__submitted)).toBe(true);
+    expect(await page.evaluate(([s, h]: string[]) => (window as any).__tcHunterSubmit.clickOnce(s, h), [sel, approved])).toEqual({ clicked: false, why: "already" });
+    const now = await page.evaluate(() => (window as any).__tcHunterSubmit.pageNow());
+    expect(now.text).toContain("GH-DEMO-48213");
   });
 
   it("notices a 'you're a person' check", async () => {

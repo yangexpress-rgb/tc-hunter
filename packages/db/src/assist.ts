@@ -1,15 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
 import {
-  decryptField, documentText, encryptField, packetHash, proposeField, receiptPdf, willFill,
-  type FormField, type PacketProfile, type ProposedField, type StepKind,
+  ADAPTERS, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, looksConfirmed, packetHash, proposeField, receiptPdf, willFill,
+  type Ats, type FormField, type PacketProfile, type ProposedField, type StepKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import type { AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
 import { exportDocument } from "./documents";
-import { consumeSubmissionKey, DomainError, recordSubmitted } from "./packets";
+import { approveSubmission, consumeSubmissionKey, DomainError, markOutcomeUnknown, recordSubmitted } from "./packets";
+import { once } from "./requestKey";
 import { asApplicant, dataKeyFor } from "./profile";
 import { budgetNow } from "./tracker";
 
@@ -153,8 +154,9 @@ export async function buildPacket(pool: pg.Pool, cfg: AppConfig, session: Sessio
     await c.query("UPDATE application_packet SET state = 'abandoned' WHERE application_id = $1 AND state NOT IN ('submitted','abandoned','failed')", [app.id]);
     const version = (await c.query("SELECT coalesce(max(version), 0) + 1 AS v FROM application_packet WHERE application_id = $1", [app.id])).rows[0].v as number;
     const k = (await c.query(
-      `INSERT INTO application_packet (applicant_id, application_id, version, tailored_resume_document_id, cover_letter_document_id, form_host)
-       VALUES (app_applicant_id(), $1, $2, $3, $4, $5) RETURNING id`, [app.id, version, resume.id, letter?.id ?? null, host])).rows[0];
+      `INSERT INTO application_packet (applicant_id, application_id, version, tailored_resume_document_id, cover_letter_document_id, form_host, ats, form_fingerprint)
+       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [app.id, version, resume.id, letter?.id ?? null, host, detectAts(form.url), formFingerprint(fields)])).rows[0];
     const proposed = fields.map((f) => proposeField(f, profile));
     for (const [i, f] of proposed.entries()) await insertField(c, dk, k.id, i, f);
     const hash = packetHash(dk, { jobRef: app.job_ref, resume: docLabel(resume)!, letter: docLabel(letter), fields: proposed });
@@ -198,6 +200,7 @@ export interface PacketFieldView {
 }
 
 export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string) {
+  await expireSubmitLeases(pool, automation(session));
   return withApplicant(pool, asApplicant(session), async (c) => {
     const k = (await c.query(
       `SELECT k.*, a.public_ref AS app_ref, p.title, p.employer_canonical, r.public_ref AS r_ref, r.version AS r_v, l.public_ref AS l_ref, l.version AS l_v,
@@ -221,6 +224,9 @@ export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session,
       confirmationRef: k.confirmation_ref as string | null, formHost: k.form_host as string | null, title: k.title as string, employer: k.employer_canonical as string,
       resume: `${k.r_ref} v${k.r_v}`, resumeRef: k.r_ref as string, letter: k.l_ref ? `${k.l_ref} v${k.l_v}` : null, letterRef: k.l_ref as string | null,
       receiptRef: k.receipt_ref as string | null, fields, events,
+      ats: k.ats as Ats | null, filledHash: k.filled_hash as string | null, submitApproved: !!k.submit_approved_hash && !String(k.submit_approved_hash).startsWith("assisted:"),
+      submitStarted: !!k.submission_key_used_at, outcomeUnknown: k.state === "failed" && k.failure_reason === "outcome_unknown",
+      guided: guidedCheck(k.ats, fields.map((f) => ({ key: "", label: f.label, step: f.step, answer: f.answer, confidence: f.confidence, source: f.source as never }))),
     };
   });
 }
@@ -316,7 +322,7 @@ export async function markSubmitted(pool: pg.Pool, cfg: AppConfig, session: Sess
     if (["waiting_for_applicant", "approved_to_apply", "filling"].includes(k.state)) await c.query("UPDATE application_packet SET state = 'ready_to_submit' WHERE id = $1", [k.id]);
     else if (k.state !== "ready_to_submit") throw new DomainError("TC_PACKET_BAD_TRANSITION");
     await c.query("UPDATE application_packet SET submit_approved_hash = $2, submission_key = gen_random_uuid() WHERE id = $1",
-      [k.id, sha(`${k.packet_hash}|assisted|${conf ?? ""}`)]);
+      [k.id, `assisted:${sha(`${k.packet_hash}|assisted|${conf ?? ""}`)}`]);
     if (!(await consumeSubmissionKey(c, k.id))) throw new DomainError("TC_SUBMISSION_KEY_USED");
     // The receipt is attached while the packet is still open; once submitted, the packet is closed for good.
     const receipt = (await c.query(
@@ -345,3 +351,175 @@ export async function receiptFile(pool: pg.Pool, cfg: AppConfig, session: Sessio
 }
 
 export async function packetBudget(pool: pg.Pool, session: Session) { return budgetNow(pool, session); }
+
+// ---------------------------------------------------------------------------
+// Guided Automation (Phase 5): TC Hunter presses Submit once, after approval
+// ---------------------------------------------------------------------------
+
+/**
+ * The applicant has done their own steps on the employer's form. The extension re-reads
+ * the form: if it still has the shape it had when read and every answer is one TC Hunter
+ * is sure of, the packet is ready for the applicant to approve sending. Otherwise it
+ * stays Assisted Fill and the applicant presses Submit themselves.
+ */
+export async function readyToSubmit(pool: pg.Pool, owner: DeviceOwner, packetId: string, form: { fields: unknown; filledHash: string }) {
+  if (!/^[0-9a-f]{64}$/.test(String(form.filledHash))) throw new DomainError("TC_BAD_INPUT");
+  const fields = cleanForm(form.fields);
+  return withApplicant(pool, automation(owner.session), async (c) => {
+    const k = (await c.query("SELECT k.*, a.public_ref AS app_ref FROM application_packet k JOIN application a ON a.id = k.application_id WHERE k.id = $1 FOR UPDATE OF k", [packetId])).rows[0];
+    if (!k) throw new DomainError("TC_NOT_FOUND");
+    if (!["filling", "waiting_for_applicant", "ready_to_submit"].includes(k.state)) throw new DomainError("TC_PACKET_BAD_TRANSITION");
+    const rows = (await c.query("SELECT question_as_shown, answer_value_enc, source, step_kind, confidence FROM packet_field WHERE packet_id = $1 ORDER BY ordinal", [packetId])).rows;
+    const check = guidedCheck(k.ats, rows.map((f) => ({ key: "", label: f.question_as_shown, step: f.step_kind, answer: f.answer_value_enc ? "x" : null, confidence: Number(f.confidence ?? 0), source: f.source })));
+    if (formFingerprint(fields) !== k.form_fingerprint) check.reasons.unshift("The employer's form changed since TC Hunter read it, so you press Submit yourself.");
+    if (check.reasons.length) return { guided: false, reasons: check.reasons, state: k.state as string };
+    if (k.state === "waiting_for_applicant") await c.query("UPDATE application_packet SET state = 'filling' WHERE id = $1", [packetId]);
+    if (k.state !== "ready_to_submit") await c.query("UPDATE application_packet SET state = 'ready_to_submit' WHERE id = $1", [packetId]);
+    if (k.filled_hash !== form.filledHash) {
+      // A different filled form: any earlier approval to send no longer applies.
+      await c.query("UPDATE application_packet SET filled_hash = $2, submit_approved_hash = NULL, submit_approved_at = NULL, submission_key = NULL WHERE id = $1", [packetId, form.filledHash]);
+    }
+    await recordAudit(c, "packet.ready", { objectType: "application_packet", objectId: packetId, payload: { application_ref: k.app_ref, packet_version: k.version, ats: k.ats } });
+    return { guided: true, reasons: [], state: "ready_to_submit" };
+  });
+}
+
+/** "Approve sending": the applicant's own approval, with a fresh "confirm it's you", bound to the filled form they checked. */
+export async function approveSending(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string, filledHash: string, requestKey: string) {
+  const p = await getPacket(pool, cfg, session, appRef);
+  if (!p) throw new DomainError("TC_NOT_FOUND");
+  if (p.state !== "ready_to_submit" || !p.guided.guided) throw new DomainError("TC_PACKET_BAD_TRANSITION");
+  if (!p.filledHash || p.filledHash !== filledHash) throw new DomainError("TC_APPROVAL_STALE");
+  return approveSubmission(pool, cfg, session, p.id, filledHash, requestKey);
+}
+
+const ADAPTER_INFO = (ats: Ats | null) => {
+  const a = ats ? (ADAPTERS as Record<string, (typeof ADAPTERS)[keyof typeof ADAPTERS]>)[ats] : undefined;
+  return a ? { submit: a.submit } : null;
+};
+
+/**
+ * The single submit. The extension asks just before it clicks; the single-use key is
+ * spent here, so a second click, a retried request or a second browser finds it used.
+ * From this moment any unclear result is "we couldn't confirm it", never a retry.
+ */
+export async function startSubmit(pool: pg.Pool, owner: DeviceOwner, packetId: string, filledHash: string) {
+  return withApplicant(pool, automation(owner.session), async (c) => {
+    const k = (await c.query("SELECT k.*, a.public_ref AS app_ref FROM application_packet k JOIN application a ON a.id = k.application_id WHERE k.id = $1 FOR UPDATE OF k", [packetId])).rows[0];
+    if (!k) throw new DomainError("TC_NOT_FOUND");
+    if (k.state !== "ready_to_submit" || !k.submit_approved_hash || String(k.submit_approved_hash).startsWith("assisted:")) throw new DomainError("TC_SUBMIT_NOT_APPROVED");
+    if (k.submit_approved_hash !== filledHash) throw new DomainError("TC_FORM_CHANGED");
+    if (!(await consumeSubmissionKey(c, packetId))) throw new DomainError("TC_SUBMISSION_KEY_USED");
+    const n = (await c.query("SELECT coalesce(max(attempt_no), 0) + 1 AS n FROM submission_attempt WHERE packet_id = $1", [packetId])).rows[0].n;
+    await c.query(
+      `INSERT INTO submission_attempt (applicant_id, packet_id, attempt_no, submit_clicked_at, lease_owner, lease_expires_at)
+       VALUES (app_applicant_id(), $1, $2, now(), $3, now() + interval '3 minutes')`, [packetId, n, owner.deviceId]);
+    await recordAudit(c, "packet.submit_started", { objectType: "application_packet", objectId: packetId, payload: { application_ref: k.app_ref, packet_version: k.version, ats: k.ats } });
+    return { go: true, ...ADAPTER_INFO(k.ats) };
+  });
+}
+
+async function attachReceipt(c: pg.PoolClient, k: { id: string; application_id: string }) {
+  const receipt = (await c.query(
+    `INSERT INTO document (applicant_id, type, version, job_posting_id, match_id, created_by, source_json, generation_meta)
+     SELECT app_applicant_id(), 'receipt', 1, a.job_posting_id, a.match_id, 'app', jsonb_build_object('packet_id', $1::text), '{}'::jsonb
+       FROM application a WHERE a.id = $2 RETURNING id`, [k.id, k.application_id])).rows[0];
+  await c.query("UPDATE application_packet SET receipt_document_id = $2 WHERE id = $1", [k.id, receipt.id]);
+}
+
+const CONF_RE = /^[A-Za-z0-9-]{4,41}$/;
+
+/**
+ * What the page showed after the click. The rules decide, not the extension: the
+ * hiring system's thank-you means sent (with the confirmation number exactly as shown,
+ * or none); anything else means "we couldn't confirm it", which stops everything until
+ * the applicant says what happened (decision 13.8). The page text is not kept.
+ */
+export async function finishSubmit(pool: pg.Pool, owner: DeviceOwner, packetId: string, page: { url?: unknown; text?: unknown; error?: unknown; final?: unknown }) {
+  const url = String(page.url ?? "").slice(0, 2000), text = String(page.text ?? "").slice(0, 20000);
+  return withApplicant(pool, automation(owner.session), async (c) => {
+    const k = (await c.query("SELECT k.*, a.public_ref AS app_ref FROM application_packet k JOIN application a ON a.id = k.application_id WHERE k.id = $1 FOR UPDATE OF k", [packetId])).rows[0];
+    if (!k) throw new DomainError("TC_NOT_FOUND");
+    if (k.state === "submitted") return { outcome: "sent", confirmationRef: k.confirmation_ref as string | null, appRef: k.app_ref as string };
+    if (k.state === "failed") return { outcome: "unclear", confirmationRef: null, appRef: k.app_ref as string };
+    if (k.state !== "ready_to_submit" || !k.submission_key_used_at) throw new DomainError("TC_PACKET_BAD_TRANSITION");
+    const ok = !page.error && looksConfirmed(k.ats, url, text);
+    if (ok) {
+      const found = confirmationIn(text);
+      const conf = found && CONF_RE.test(found) ? found : null;
+      await attachReceipt(c, k);
+      await recordSubmitted(c, packetId, conf);
+      await c.query("UPDATE submission_attempt SET outcome = 'succeeded', updated_at = now() WHERE packet_id = $1 AND outcome = 'in_progress'", [packetId]);
+      return { outcome: "sent", confirmationRef: conf, appRef: k.app_ref as string };
+    }
+    // Still waiting for the thank-you page: the extension looks again, up to its time limit, then reports final.
+    if (page.final === false && !page.error) return { outcome: "waiting", confirmationRef: null, appRef: k.app_ref as string };
+    await settleUnclear(c, k);
+    return { outcome: "unclear", confirmationRef: null, appRef: k.app_ref as string };
+  });
+}
+
+/** What the extension needs to know about this application's packet right now. */
+export async function extStatus(pool: pg.Pool, owner: DeviceOwner, appRef: string) {
+  await expireSubmitLeases(pool, automation(owner.session));
+  return withApplicant(pool, automation(owner.session), async (c) => {
+    const k = (await c.query(
+      `SELECT k.id, k.state, k.ats, k.filled_hash, k.submit_approved_hash, k.submission_key_used_at, k.failure_reason FROM application_packet k
+         JOIN application a ON a.id = k.application_id WHERE a.public_ref = $1 AND k.state <> 'abandoned' ORDER BY k.version DESC LIMIT 1`, [appRef])).rows[0];
+    if (!k) return { packetId: null, state: null };
+    const rows = (await c.query("SELECT question_as_shown, answer_value_enc, source, step_kind, confidence FROM packet_field WHERE packet_id = $1", [k.id])).rows;
+    const check = guidedCheck(k.ats, rows.map((f) => ({ key: "", label: f.question_as_shown, step: f.step_kind, answer: f.answer_value_enc ? "x" : null, confidence: Number(f.confidence ?? 0), source: f.source })));
+    const approved = !!k.submit_approved_hash && !String(k.submit_approved_hash).startsWith("assisted:");
+    return {
+      packetId: k.id as string, state: k.state as string, ats: k.ats as string | null, guided: check.guided, reasons: check.reasons, submit: ADAPTER_INFO(k.ats)?.submit ?? null,
+      filledHash: k.filled_hash as string | null, submitApproved: approved && !k.submission_key_used_at, outcomeUnknown: k.state === "failed" && k.failure_reason === "outcome_unknown",
+    };
+  });
+}
+
+/** No clear result after the click: stop, look in Gmail if it's connected, and ask the applicant. Never retried. */
+async function settleUnclear(c: pg.PoolClient, k: { id: string; app_ref: string; version: number }) {
+  await markOutcomeUnknown(c, k.id);
+  await c.query("UPDATE submission_attempt SET outcome = 'unknown', updated_at = now() WHERE packet_id = $1 AND outcome = 'in_progress'", [k.id]);
+  await recordAudit(c, "packet.outcome_unknown", { objectType: "application_packet", objectId: k.id, payload: { application_ref: k.app_ref, packet_version: k.version } });
+  if ((await c.query("SELECT 1 FROM email_connection WHERE status = 'connected'")).rowCount) {
+    await c.query("INSERT INTO work_item (applicant_id, kind) VALUES (app_applicant_id(), 'email_check') ON CONFLICT DO NOTHING");
+  }
+}
+
+/** A browser that started a submit and then went quiet (closed, crashed, lost connection): the result is unclear. */
+export async function expireSubmitLeases(pool: pg.Pool, ctx: RequestContext): Promise<number> {
+  return withApplicant(pool, ctx, async (c) => {
+    const rows = (await c.query(
+      `SELECT k.id, k.version, a.public_ref AS app_ref FROM submission_attempt s JOIN application_packet k ON k.id = s.packet_id JOIN application a ON a.id = k.application_id
+        WHERE s.outcome = 'in_progress' AND s.lease_expires_at < now() AND k.state = 'ready_to_submit' FOR UPDATE OF k`)).rows;
+    for (const k of rows) await settleUnclear(c, k);
+    return rows.length;
+  });
+}
+
+/**
+ * The applicant's answer to "We couldn't confirm this went through". "It went through"
+ * records it as sent (with a confirmation number if they have one) and makes the receipt;
+ * "It didn't" sends the packet back for review, so nothing is sent again without a new approval.
+ */
+export async function resolveOutcome(pool: pg.Pool, session: Session, appRef: string, wentThrough: boolean, confirmationRef: string | null, requestKey: string) {
+  const conf = confirmationRef?.trim() || null;
+  if (conf && !CONF_RE.test(conf)) throw new DomainError("TC_BAD_INPUT");
+  return withApplicant(pool, asApplicant(session), (c) => once(c, requestKey, `resolve:${appRef}`, async () => {
+    const k = (await c.query(
+      `SELECT k.*, a.public_ref AS app_ref FROM application_packet k JOIN application a ON a.id = k.application_id
+        WHERE a.public_ref = $1 AND k.state <> 'abandoned' ORDER BY k.version DESC LIMIT 1 FOR UPDATE OF k`, [appRef])).rows[0];
+    if (!k) throw new DomainError("TC_NOT_FOUND");
+    if (k.state !== "failed" || k.failure_reason !== "outcome_unknown") throw new DomainError("TC_PACKET_BAD_TRANSITION");
+    if (wentThrough) {
+      await attachReceipt(c, k);
+      await c.query("UPDATE application_packet SET state = 'submitted', confirmation_ref = $2 WHERE id = $1", [k.id, conf]);
+    } else {
+      await c.query("UPDATE application_packet SET state = 'packet_ready_for_review' WHERE id = $1", [k.id]);
+    }
+    await recordAudit(c, "packet.outcome_resolved", { objectType: "application_packet", objectId: k.id,
+      payload: { application_ref: k.app_ref, applicant_says: wentThrough ? "went_through" : "did_not" } });
+    return { state: wentThrough ? "submitted" : "packet_ready_for_review" };
+  }));
+}

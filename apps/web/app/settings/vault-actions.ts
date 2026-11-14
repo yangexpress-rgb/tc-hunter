@@ -13,6 +13,12 @@ export async function stepUpAction(form: FormData): Promise<void> {
   const s = await requireSession();
   const { pool, cfg } = app();
   const ok = await stepUp(pool, cfg, s, { password: String(form.get("password") ?? "") || undefined, code: String(form.get("code") ?? "").trim() || undefined });
+  // From an application's "Approve sending", go straight back there.
+  const back = String(form.get("back") ?? "");
+  if (/^\/applications\/A-\d{1,12}(#packet)?$/.test(back)) {
+    const [path, hash] = back.split("#");
+    redirect(`${path}?${ok ? "confirmed=1" : "e=TC_STEP_UP_FAILED"}${hash ? `#${hash}` : ""}`);
+  }
   redirect(ok ? "/settings?confirmed=1" : "/settings?e=TC_STEP_UP_FAILED");
 }
 

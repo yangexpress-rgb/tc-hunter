@@ -47,6 +47,7 @@ This is the household setup (design §7.1). It runs the same way on a small VPS.
     2. In Chrome or Edge, open `chrome://extensions`, turn on *Developer mode*, choose *Load unpacked* and pick that folder.
     3. In TC Hunter: Settings › Your browser › *Pair this browser* (confirm it's you first). Paste the address and key it shows into the extension's settings (right-click the TC Hunter button › Options) and allow access to the TC Hunter address when asked.
     4. Each person pairs their own browser; a key only ever sees that person's applications. Removing it in Settings stops it at once.
+    5. **Sending for you (Phase 5).** On Greenhouse, Lever, Ashby and SmartRecruiters forms the extension can press Submit once you approve sending in TC Hunter. The first time you choose *Send it*, the browser asks to let the extension see those four sites' pages, so it can read the employer's thank-you page. After updating the folder, choose *Reload* on `chrome://extensions`.
 
 ## Backups
 

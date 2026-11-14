@@ -152,5 +152,18 @@
     return null;
   }
 
-  window.__tcHunter = { readForm, fillForm, findConfirmation, stepFor };
+  /** A fingerprint of the form exactly as it is filled now (every answer, tick and attached file name). Nothing leaves the page but the hash. */
+  async function snapshot() {
+    const pairs = [];
+    for (const el of document.querySelectorAll("input, select, textarea")) {
+      const key = keyOf(el); if (!key || el.type === "password" || el.type === "hidden" || el.type === "submit" || el.type === "button") continue;
+      const v = el.type === "checkbox" || el.type === "radio" ? `${el.value}:${el.checked}` : el.type === "file" ? [...(el.files || [])].map((f) => `${f.name}:${f.size}`).join(",") : el.value;
+      pairs.push([el.type === "radio" ? `${key}=${el.value}` : key, v]);
+    }
+    const bytes = new TextEncoder().encode(JSON.stringify(pairs));
+    const d = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  window.__tcHunter = { readForm, fillForm, findConfirmation, stepFor, snapshot };
 })();

@@ -24,6 +24,9 @@ export const AUDIT_ALLOWED_KEYS = {
   "extension.revoked": [],
   "packet.built": ["application_ref", "packet_version", "fields", "left_for_applicant"],
   "packet.filled": ["application_ref", "packet_version", "filled", "left_for_applicant"],
+  "packet.ready": ["application_ref", "packet_version", "ats"],
+  "packet.submit_started": ["application_ref", "packet_version", "ats"],
+  "packet.outcome_unknown": ["application_ref", "packet_version"],
   "packet.approved": ["application_ref", "packet_version", "packet_hash"],
   "packet.submit_approved": ["application_ref", "packet_version", "submit_hash"],
   "packet.submitted": [
