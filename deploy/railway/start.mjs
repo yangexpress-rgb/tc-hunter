@@ -9,7 +9,7 @@
 //   backup  nightly encrypted off-site copy (deploy/backup/backup.sh), when configured
 //
 // If the web app or the worker stops, everything stops and Railway restarts the container.
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { createGate, gateOptions } from "../egress-proxy/proxy.mjs";
 
@@ -46,7 +46,19 @@ if (missing.length) {
   process.exit(1);
 }
 
-// 3. Outbound gates.
+// 3. Database: apply migrations and set the tc_app password on every start, as the owner.
+// (railway.json also runs this before each deploy, but Railway can skip that step when
+// only variables change, which left tc_app with an old password. Running it here too
+// keeps the two always in step. It is idempotent.)
+if (env.DATABASE_OWNER_URL && env.DB_APP_PASSWORD) {
+  const m = spawnSync(process.execPath, ["--import", "tsx", "packages/db/src/migrate.ts"], { env, stdio: "inherit" });
+  if (m.status !== 0) {
+    log("start.migrate_failed", { code: m.status });
+    process.exit(1);
+  }
+}
+
+// 4. Outbound gates.
 const NO_PROXY = "localhost,127.0.0.1,.railway.internal";
 await Promise.all([
   [3128, "*"],
@@ -56,7 +68,7 @@ await Promise.all([
   ok();
 }))));
 
-// 4. Web app and worker.
+// 5. Web app and worker.
 const children = new Map();
 let stopping = false;
 
@@ -80,7 +92,7 @@ run("worker", ["--import", "tsx", "apps/worker/src/main.ts"], {
   NODE_OPTIONS: [env.NODE_OPTIONS, "--max-old-space-size=256"].filter(Boolean).join(" "),
 });
 
-// 5. Nightly backup (condition 1 of accepted proposal P6, kept for Railway).
+// 6. Nightly backup (condition 1 of accepted proposal P6, kept for Railway).
 const backupReady = Boolean(env.BACKUP_REMOTE && env.BACKUP_AGE_RECIPIENT && env.DATABASE_OWNER_URL);
 let backupRunning = false;
 
@@ -120,7 +132,7 @@ if (backupReady) {
   log("backup.off", { reason: "set BACKUP_REMOTE, BACKUP_AGE_RECIPIENT and DATABASE_OWNER_URL to turn on nightly backups" });
 }
 
-// 6. Railway sends SIGTERM on redeploy: stop the children cleanly.
+// 7. Railway sends SIGTERM on redeploy: stop the children cleanly.
 function shutdown(code) {
   if (stopping) return;
   stopping = true;

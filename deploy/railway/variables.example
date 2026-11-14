@@ -3,6 +3,7 @@
 
 # Database: Railway fills this from the Postgres service. The app itself connects as the
 # restricted tc_app role (derived from this URL plus DB_APP_PASSWORD), never as the owner.
+PORT=3000
 DATABASE_OWNER_URL=${{Postgres.DATABASE_URL}}
 # openssl rand -hex 32
 DB_APP_PASSWORD=
