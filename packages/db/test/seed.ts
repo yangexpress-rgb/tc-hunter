@@ -121,6 +121,7 @@ export async function seedEverything(
     await one("honor_award", "INSERT INTO honor_award (applicant_id, title) VALUES ($1, 'Seed award') RETURNING id", [me]);
     await one("reader_prompt", "INSERT INTO reader_prompt (applicant_id, body) VALUES ($1, 'Seed instructions') RETURNING id", [me]);
     await one("hunt_goal", "INSERT INTO hunt_goal (applicant_id, roles) VALUES ($1, '{Director}') RETURNING id", [me]);
+    await one("discovery_run", "INSERT INTO discovery_run (applicant_id) VALUES ($1) RETURNING id", [me]);
     return ids;
   });
 }

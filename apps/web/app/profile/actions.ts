@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
   removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
-  verifyFact, verifyRole, type FactTable,
+  verifyFact, verifyRole, requestScan, type FactTable,
 } from "@tc-hunter/db";
 import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
@@ -288,7 +288,8 @@ export async function saveGoalAction(form: FormData) {
   const s = await requireSession();
   const id = String(form.get("id") ?? "").trim() || undefined;
   const amount = num(form.get("comp_amount"));
-  await act(form, () => saveGoal(app().pool, s, {
+  // A changed goal means new employers to find: the next scan looks for them first.
+  await act(form, async () => { await saveGoal(app().pool, s, {
     active: form.get("active") === "on",
     timeFrame: String(form.get("time_frame") ?? "now") as never,
     employmentTypes: form.getAll("employment_types").map(String) as never,
@@ -300,12 +301,12 @@ export async function saveGoalAction(form: FormData) {
       : { amount, currency: String(form.get("comp_currency") ?? "USD").trim().toUpperCase().slice(0, 3) || "USD", period: String(form.get("comp_period") ?? "year") as never },
     locations: list(form.get("locations")),
     workplaceTypes: form.getAll("workplace_types").map(String) as never,
-  }, id), "/profile/goals");
+  }, id); await requestScan(app().pool, s); }, "/profile/goals");
 }
 
 export async function deleteGoalAction(form: FormData) {
   const s = await requireSession();
-  await act(form, () => deleteGoal(app().pool, s, String(form.get("id"))), "/profile/goals");
+  await act(form, async () => { await deleteGoal(app().pool, s, String(form.get("id"))); await requestScan(app().pool, s); }, "/profile/goals");
 }
 
 /** The settings that cover the whole search, whatever the goal. */
