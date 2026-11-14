@@ -1,7 +1,8 @@
 import type pg from "pg";
 import {
   decryptField, EmailAuthError, employerDomains, encryptField, gmailQuery, stageFor, suggestFromEmail,
-  type ApplicationStage, type EmailKind, type MailReader, type SecretStore, type SecretValue, type TrackedForEmail,
+  jobsFromLinkedInAlert, LINKEDIN_ALERT_QUERY, postingFromAlertJob,
+  type ApplicationStage, type EmailKind, type MailReader, type RequirementsReader, type SecretStore, type SecretValue, type TrackedForEmail,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
@@ -12,6 +13,7 @@ import { asApplicant, dataKeyFor } from "./profile";
 import { setStage } from "./tracker";
 import { markSubmitted, resolveOutcome } from "./assist";
 import { randomUUID } from "node:crypto";
+import { ingestPosting, matchApplicant, upsertSource } from "./jobs";
 
 /**
  * Connected email (decision 13.3, Yong 2026-11-14). One read-only Gmail per applicant.
@@ -24,6 +26,8 @@ export interface EmailDeps {
   reader: (token: SecretValue) => MailReader;
   cfg: AppConfig;
   now?: () => Date;
+  /** Reads the requirements of jobs found in LinkedIn job alert emails. Without it, alerts aren't read. */
+  postings?: RequirementsReader;
 }
 
 const ACTIVE: ApplicationStage[] = ["interested", "tailoring", "ready_to_apply", "applied", "screening", "interview", "offer"];
@@ -89,7 +93,7 @@ export async function enqueueDueEmailChecks(pool: pg.Pool): Promise<number> {
 }
 
 /** The worker's look at one applicant's mailbox. Messages are read in memory and dropped. */
-export async function runEmailCheck(pool: pg.Pool, ctx: RequestContext, deps: EmailDeps): Promise<{ looked: number; suggestions: number }> {
+export async function runEmailCheck(pool: pg.Pool, ctx: RequestContext, deps: EmailDeps): Promise<{ looked: number; suggestions: number; alert_jobs?: number }> {
   const conn = await withApplicant(pool, ctx, async (c) => (await c.query("SELECT vault_ref, address_enc, status FROM email_connection")).rows[0]);
   if (!conn || conn.status !== "connected") return { looked: 0, suggestions: 0 };
   const mark = (error: string | null, reconnect = false) => withApplicant(pool, ctx, (c) => c.query(
@@ -123,12 +127,38 @@ export async function runEmailCheck(pool: pg.Pool, ctx: RequestContext, deps: Em
         n += r.rowCount ?? 0;
       }
     });
+    const alertJobs = await readLinkedInAlerts(pool, ctx, reader, deps);
     await mark(null);
-    return { looked: messages.length, suggestions: n };
+    return { looked: messages.length, suggestions: n, alert_jobs: alertJobs };
   } catch (e) {
     if (e instanceof EmailAuthError) { await mark(e.reason, e.reason === "revoked" || e.reason === "wrong_scope"); return { looked: 0, suggestions: 0 }; }
     throw e;
   }
+}
+
+/**
+ * LinkedIn job alerts in the connected Gmail (Yong, 2026-11-14): the jobs they list go
+ * into the catalogue under "LinkedIn job alerts" and are scored against the goals like
+ * any other job. The email itself is read in memory and dropped.
+ */
+async function readLinkedInAlerts(pool: pg.Pool, ctx: RequestContext, reader: MailReader, deps: EmailDeps): Promise<number> {
+  if (!reader.alertBodies || !deps.postings) return 0;
+  const mails = await reader.alertBodies(LINKEDIN_ALERT_QUERY, 20);
+  const jobs = new Map<string, ReturnType<typeof postingFromAlertJob>>();
+  for (const m of mails) for (const j of jobsFromLinkedInAlert(m.text, m.isHtml)) if (!jobs.has(j.linkedinId)) jobs.set(j.linkedinId, postingFromAlertJob(j, m.receivedAt));
+  if (!jobs.size) return 0;
+  return withApplicant(pool, ctx, async (c) => {
+    const sourceId = await upsertSource(c, { type: "feed", kind: "job_search", key: "linkedin_alerts", name: "LinkedIn job alerts", url: "https://www.linkedin.com/jobs/" });
+    await c.query(`INSERT INTO applicant_job_source (applicant_id, job_source_id, origin, reason) VALUES (app_applicant_id(), $1, 'search', 'Your LinkedIn job alerts')
+      ON CONFLICT (applicant_id, job_source_id) DO NOTHING`, [sourceId]);
+    const muted = (await c.query("SELECT muted FROM applicant_job_source WHERE job_source_id = $1", [sourceId])).rows[0]?.muted;
+    if (muted) return 0;
+    const ids: string[] = [];
+    for (const raw of jobs.values()) ids.push((await ingestPosting(c, sourceId, raw, deps.postings!)).postingId);
+    await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, last_success_at = now(), last_checked_at = now() WHERE id = $1", [sourceId]);
+    await matchApplicant(c, deps.now?.() ?? new Date(), ids, "scan");
+    return ids.length;
+  });
 }
 
 export interface EmailSignalRow {

@@ -1,4 +1,4 @@
-import { getPreferences, listGoals } from "@tc-hunter/db";
+import { emailStatus, getPreferences, listGoals } from "@tc-hunter/db";
 import { GOAL_TYPES, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { EditDialog } from "@/components/profile/EditDialog";
@@ -97,7 +97,15 @@ function GoalItem({ g }: { g: Goal }) {
 export default async function GoalsPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
-  const [{ saved, error }, goals, p] = await Promise.all([flashOf(props), listGoals(pool, session), getPreferences(pool, session)]);
+  const { cfg } = app();
+  const [{ saved, error }, goals, p, mail] = await Promise.all([flashOf(props), listGoals(pool, session), getPreferences(pool, session), emailStatus(pool, cfg, session)]);
+  const linkedin = (g: Goal) => {
+    const q = new URLSearchParams({ keywords: g.roles[0] ?? g.occupation ?? "" });
+    const where = g.locations.find((l) => !/^remote$/i.test(l.trim()));
+    if (where) q.set("location", where);
+    if (g.workplaceTypes.includes("remote") && !where) q.set("f_WT", "2");
+    return `https://www.linkedin.com/jobs/search/?${q}`;
+  };
   const v = p ?? {};
   return (
     <>
@@ -111,6 +119,24 @@ export default async function GoalsPage(props: PageProps) {
         {goals.length ? <p className="muted small">Each job is scored against every goal in use, and keeps the one it fits best.</p> : null}
         {goals.map((g) => <GoalItem key={g.id} g={g} />)}
       </ProfileSection>
+
+      {goals.some((g) => g.active && (g.roles.length || g.occupation)) ? (
+        <section className="card profile-section" id="linkedin">
+          <header className="section-head"><h2>Bring in LinkedIn's jobs too</h2></header>
+          <p>LinkedIn doesn't let other apps search it, and we never sign in as you. LinkedIn can email you new jobs, though, and we read those emails for you:</p>
+          <ol>
+            <li>{mail?.status === "connected" ? <>Your Gmail is connected{mail.address ? ` (${mail.address})` : ""}. Make sure LinkedIn sends alerts to this address.</> : <><a href="/settings#email">Connect your Gmail</a>, the one LinkedIn emails.</>}</li>
+            <li>Open each goal's search on LinkedIn below, and switch on <strong>Set alert</strong> (daily, by email).</li>
+            <li>That's it. Jobs in those emails show up in Jobs under the goal they fit, scored like any other.</li>
+          </ol>
+          <ul className="plain">
+            {goals.filter((g) => g.active && (g.roles.length || g.occupation)).map((g) => (
+              <li key={g.id}><a href={linkedin(g)} target="_blank" rel="noreferrer">{goalName(g)} on LinkedIn</a></li>
+            ))}
+          </ul>
+          <p className="muted small">From each alert we keep only the job's title, company, place and link, never the rest of the email.</p>
+        </section>
+      ) : null}
 
       <section className="card profile-section" id="settings">
         <header className="section-head">

@@ -66,9 +66,27 @@ export async function revokeGmail(token: SecretValue, f: Fetch = fetch): Promise
 export interface MailReader {
   address(): Promise<string>;
   search(query: string, max: number): Promise<MailMessage[]>;
+  /** Full text, used only for LinkedIn's job alert emails (query: LINKEDIN_ALERT_QUERY). Read in memory, never stored. */
+  alertBodies?(query: string, max: number): Promise<Array<{ id: string; receivedAt: Date; text: string; isHtml: boolean }>>;
 }
 
-/** Reads message headers and Gmail's short preview only, never full bodies or attachments. */
+const b64url = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+function bodyOf(part: any): { text: string; isHtml: boolean } | null {
+  const walk = (p: any, type: string): string | null => {
+    if (p?.mimeType === type && p.body?.data) return b64url(String(p.body.data));
+    for (const c of p?.parts ?? []) { const t = walk(c, type); if (t) return t; }
+    return null;
+  };
+  const plain = walk(part, "text/plain");
+  if (plain) return { text: plain, isHtml: false };
+  const html = walk(part, "text/html");
+  return html ? { text: html, isHtml: true } : null;
+}
+
+/**
+ * Reads message headers and Gmail's short preview only, never attachments. Full text is
+ * read for one kind of message only: LinkedIn's job alert emails, to pick out the jobs listed.
+ */
 export class GmailReader implements MailReader {
   #token: SecretValue;
   #access: string | null = null;
@@ -96,6 +114,19 @@ export class GmailReader implements MailReader {
       const m = await this.get(`/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`);
       const h = (n: string) => String((m.payload?.headers ?? []).find((x: { name: string }) => x.name.toLowerCase() === n)?.value ?? "");
       out.push({ id: String(m.id), from: h("from"), subject: h("subject"), snippet: String(m.snippet ?? ""), receivedAt: new Date(Number(m.internalDate)) });
+    }
+    return out;
+  }
+  async alertBodies(query: string, max: number): Promise<Array<{ id: string; receivedAt: Date; text: string; isHtml: boolean }>> {
+    if (!/^from:\(jobalerts-noreply@linkedin\.com/.test(query)) throw new Error("full text is only read for LinkedIn job alerts");
+    const list = await this.get(`/messages?${new URLSearchParams({ q: query, maxResults: String(Math.min(max, 50)) })}`);
+    const out: Array<{ id: string; receivedAt: Date; text: string; isHtml: boolean }> = [];
+    for (const { id } of (list.messages ?? []) as Array<{ id: string }>) {
+      const m = await this.get(`/messages/${encodeURIComponent(id)}?format=full`);
+      const from = String((m.payload?.headers ?? []).find((x: { name: string }) => x.name.toLowerCase() === "from")?.value ?? "");
+      if (!/@linkedin\.com>?$/i.test(from.trim())) continue;  // only LinkedIn's own mail, whatever the search returned
+      const b = bodyOf(m.payload);
+      if (b) out.push({ id: String(m.id), receivedAt: new Date(Number(m.internalDate)), ...b });
     }
     return out;
   }

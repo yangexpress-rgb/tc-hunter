@@ -6,7 +6,9 @@
 export const USER_AGENT = "TCHunter/1.0 (personal job search for one household; polite, cached, rate-limited)";
 
 export interface FetchResult { status: number; text: string; url: string; contentType: string }
-export interface Fetcher { get(url: string, opts?: { kind?: "api" | "page" }): Promise<FetchResult> }
+/** headers: extra request headers (an API key a job-search site asks for). body: sends a JSON POST instead of a GET. */
+export interface FetchOpts { kind?: "api" | "page"; headers?: Record<string, string>; body?: unknown }
+export interface Fetcher { get(url: string, opts?: FetchOpts): Promise<FetchResult> }
 
 export class SourceRefusedError extends Error {
   constructor(public readonly reason: "robots" | "refused" | "rate_limited" | "not_found" | "unreachable" | "too_big", public readonly detail: string) {
@@ -14,7 +16,7 @@ export class SourceRefusedError extends Error {
   }
 }
 
-type RawFetch = (url: string, init: { headers: Record<string, string>; signal: AbortSignal; redirect: "follow" }) => Promise<{
+type RawFetch = (url: string, init: { headers: Record<string, string>; signal: AbortSignal; redirect: "follow"; method?: string; body?: string }) => Promise<{
   status: number; url: string; headers: { get(n: string): string | null }; text(): Promise<string>;
 }>;
 
@@ -62,14 +64,18 @@ export class PoliteFetcher implements Fetcher {
     this.last.set(host, Date.now());
   }
 
-  private async once(url: string, accept: string): Promise<FetchResult> {
+  private async once(url: string, accept: string, extra: Pick<FetchOpts, "headers" | "body"> = {}): Promise<FetchResult> {
     const u = new URL(url);
     if (u.protocol !== "https:") throw new SourceRefusedError("unreachable", "only https addresses are fetched");
     await this.pace(u.host);
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), this.opts.timeoutMs ?? 20000);
     try {
-      const r = await this.raw(url, { headers: { "User-Agent": USER_AGENT, Accept: accept }, signal: ctl.signal, redirect: "follow" });
+      const post = extra.body !== undefined;
+      const r = await this.raw(url, {
+        headers: { "User-Agent": USER_AGENT, Accept: accept, ...(post ? { "Content-Type": "application/json" } : {}), ...(extra.headers ?? {}) },
+        signal: ctl.signal, redirect: "follow", ...(post ? { method: "POST", body: JSON.stringify(extra.body) } : {}),
+      });
       const text = await r.text();
       if (text.length > (this.opts.maxBytes ?? 5_000_000)) throw new SourceRefusedError("too_big", `${text.length} bytes`);
       return { status: r.status, text, url: r.url || url, contentType: r.headers.get("content-type") ?? "" };
@@ -79,7 +85,7 @@ export class PoliteFetcher implements Fetcher {
     } finally { clearTimeout(t); }
   }
 
-  async get(url: string, opts: { kind?: "api" | "page" } = {}): Promise<FetchResult> {
+  async get(url: string, opts: FetchOpts = {}): Promise<FetchResult> {
     const u = new URL(url);
     if (opts.kind === "page") {
       if (!this.robots.has(u.host)) {
@@ -91,7 +97,7 @@ export class PoliteFetcher implements Fetcher {
       const rules = this.robots.get(u.host);
       if (rules && !robotsAllows(rules, u.pathname + u.search)) throw new SourceRefusedError("robots", `${u.host} asks automated readers not to open ${u.pathname}`);
     }
-    const r = await this.once(url, opts.kind === "page" ? "text/html,application/xhtml+xml" : "application/json");
+    const r = await this.once(url, opts.kind === "page" ? "text/html,application/xhtml+xml" : "application/json", { headers: opts.headers, body: opts.body });
     if (r.status === 401 || r.status === 403) throw new SourceRefusedError("refused", `${u.host} answered ${r.status}`);
     if (r.status === 429) throw new SourceRefusedError("rate_limited", `${u.host} answered 429`);
     if (r.status === 404 || r.status === 410) throw new SourceRefusedError("not_found", `${u.host} answered ${r.status}`);
