@@ -14,8 +14,8 @@ export const NAV: NavSection[] = [
     { href: "/profile", label: "About you" },
     { href: "/profile/stories", label: "Stories" },
     { href: "/profile/answers", label: "Saved answers" },
-    { href: "/profile/preferences", label: "What you want" },
-    { href: "/profile/import", label: "Resumes", also: ["/profile/resumes", "/profile/review"] },
+    { href: "/profile/goals", label: "Goals", also: ["/profile/preferences"] },
+    { href: "/profile/import", label: "Initial Input", also: ["/profile/resumes", "/profile/review"] },
   ] },
   { key: "jobs", label: "Jobs", icon: "◎", tabs: [
     { href: "/jobs", label: "Matches" },

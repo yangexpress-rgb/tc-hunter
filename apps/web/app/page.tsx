@@ -23,7 +23,7 @@ export default async function Home() {
   const next = counts.experienceRows === 0
     ? { title: t("home.next_action.profile"), note: t("home.next_action.profile_soon"), href: "/profile/import" }
     : counts.draftRows > 0 ? { title: t("home.next_action.review"), note: nudges.find((n) => n.key === "draft_rows")?.text, href: "/profile/review" }
-    : !counts.hasPreferences ? { title: t("home.next_action.preferences"), href: "/profile/preferences" }
+    : !counts.hasPreferences ? { title: t("home.next_action.preferences"), href: "/profile/goals" }
     : jobs.following === 0 ? { title: t("home.next_action.sources"), note: t("home.next_action.sources_note"), href: "/jobs/sources" }
     : alerts.length ? { title: t("home.next_action.alerts"), note: alerts[0]!.message, href: "/jobs" }
     : signals.length ? { title: signals.length === 1 ? `${signals[0]!.employer} replied. Update your application?` : `${signals.length} employer replies to look at`, note: "Spotted in your email. Nothing changes until you say so.", href: signals.length === 1 ? `/applications/${signals[0]!.appRef}` : "/applications" }

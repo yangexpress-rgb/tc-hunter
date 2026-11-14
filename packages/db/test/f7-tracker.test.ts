@@ -1,6 +1,6 @@
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { activityReport, reportCsv, RulesRequirementsReader, SourceRefusedError, WEIGHTS, type Fetcher } from "@tc-hunter/domain";
+import { activityReport, reportCsv, RULES_VERSION, RulesRequirementsReader, SourceRefusedError, WEIGHTS, type Fetcher } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, budgetNow, calibrationState, getApplication, getReport, getWeeklyReview, listApplications, listMatches, requestLink,
   requestTailor, resetCalibration, rescoreMatches, runNextWork, savePreferences, setInterview, setNextStep, setNotes, setOutcome, setStage, trackerSummary, trackJob,
@@ -152,20 +152,20 @@ describe("score calibration (P10)", () => {
   it("accepted weights re-score matches and are recorded with them; undo goes back", async () => {
     await rescoreMatches(pool, yong); // the baseline, with today's applications
     const before = (await ownerQuery("SELECT score, rules_version FROM match WHERE applicant_id = $1 ORDER BY id", [yong.applicantId])).rows;
-    expect(new Set(before.map((r) => r.rules_version))).toEqual(new Set(["match-1"]));
+    expect(new Set(before.map((r) => r.rules_version))).toEqual(new Set([RULES_VERSION]));
     const w = { ...WEIGHTS, skills: WEIGHTS.skills - 25, keywords: WEIGHTS.keywords + 25 };
     await withApplicant(pool, { userAccountId: yong.userAccountId, applicantId: yong.applicantId, actor: "applicant" }, (c) => c.query(
-      "INSERT INTO score_calibration (applicant_id, weights, rules_version, based_on, message) VALUES (app_applicant_id(), $1, 'match-1+cal-1', 20, 'test')", [JSON.stringify(w)]));
+      "INSERT INTO score_calibration (applicant_id, weights, rules_version, based_on, message) VALUES (app_applicant_id(), $1, $2, 20, 'test')", [JSON.stringify(w), `${RULES_VERSION}+cal-1`]));
     await rescoreMatches(pool, yong);
     const after = (await ownerQuery("SELECT score, rules_version FROM match WHERE applicant_id = $1 ORDER BY id", [yong.applicantId])).rows;
-    expect(new Set(after.map((r) => r.rules_version))).toEqual(new Set(["match-1+cal-1"]));
+    expect(new Set(after.map((r) => r.rules_version))).toEqual(new Set([`${RULES_VERSION}+cal-1`]));
     expect(after.map((r) => r.score)).not.toEqual(before.map((r) => r.score));
     expect((await calibrationState(pool, yong)).active!.weights).toEqual(w);
     await resetCalibration(pool, yong);
     const undone = (await ownerQuery("SELECT score, rules_version FROM match WHERE applicant_id = $1 ORDER BY id", [yong.applicantId])).rows;
     expect(undone).toEqual(before);
     const audit = (await ownerQuery("SELECT payload_summary AS payload FROM audit_event WHERE action = 'calibration.changed' AND applicant_id = $1", [yong.applicantId])).rows;
-    expect(audit.map((r) => r.payload)).toEqual([{ active: false, rules_version: "match-1" }]);
+    expect(audit.map((r) => r.payload)).toEqual([{ active: false, rules_version: RULES_VERSION }]);
   });
 
   it("weights that don't add up to 100, or set by anyone but the applicant, are refused", async () => {

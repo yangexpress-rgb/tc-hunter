@@ -34,7 +34,7 @@ export function localInput(d: Date | string | null, timeZone: string): string {
 
 /** The weekly budget (P5): advice, never a block. */
 export function BudgetLine({ budget }: { budget: { cap: number | null; used: number } }) {
-  if (!budget.cap) return <p className="muted">{budget.used} {budget.used === 1 ? "application" : "applications"} this week. <a href="/profile/preferences">Set a weekly aim</a></p>;
+  if (!budget.cap) return <p className="muted">{budget.used} {budget.used === 1 ? "application" : "applications"} this week. <a href="/profile/goals#settings">Set a weekly aim</a></p>;
   const over = budget.used >= budget.cap;
   return (
     <p className={over ? "warn" : "muted"}>

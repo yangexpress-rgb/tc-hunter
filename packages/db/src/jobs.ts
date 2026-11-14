@@ -2,7 +2,7 @@ import type pg from "pg";
 import { runEmailCheck, type EmailDeps } from "./email";
 import {
   dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
-  normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreMatch, sha256Hex, canonicalJson,
+  normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, titleIsRelated, levelOf,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
 } from "@tc-hunter/domain";
@@ -12,6 +12,7 @@ import { runDigest, type DigestDeps } from "./resumes";
 import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
+import { goalFromRow } from "./profile";
 
 /**
  * Module B and C on the server (design 5.2, 5.3). The catalogue (sources,
@@ -157,16 +158,26 @@ async function profileFor(c: pg.PoolClient): Promise<MatchProfile> {
   };
 }
 
-async function prefsFor(c: pg.PoolClient): Promise<MatchPrefs> {
+/** The search's settings plus each goal in use, one set of preferences per goal (match-2). */
+async function prefsFor(c: pg.PoolClient): Promise<MatchPrefs[]> {
   const p = (await c.query("SELECT * FROM hunt_preference WHERE active")).rows[0] ?? {};
-  return {
+  const settings = {
+    industriesExclude: p.industries_exclude ?? [], employersExclude: p.employers_exclude ?? [],
+    mustHaveKeywords: p.must_have_keywords ?? [], dealBreakers: p.deal_breakers ?? [],
+  };
+  const goals = (await c.query("SELECT * FROM hunt_goal ORDER BY created_at")).rows.map(goalFromRow);
+  const ladder = ladderGoal(goals);
+  const inUse = goals.filter((g) => g.active);
+  if (inUse.length) return inUse.map((g) => prefsForGoal(g, settings, ladder));
+  // No goal switched on: what's left on the older single set of preferences (empty once moved to goals).
+  return [{
+    ...settings,
     targetTitles: p.target_titles ?? [], locations: (p.locations ?? []).map((l: { label?: string }) => l.label ?? "").filter(Boolean),
     workplaceTypes: p.workplace_types ?? [],
     salaryFloor: p.salary_floor_amount ? { amount: Number(p.salary_floor_amount), currency: (p.salary_floor_currency ?? "USD").trim(), period: p.salary_floor_period ?? "year" } : null,
-    industriesInclude: p.industries_include ?? [], industriesExclude: p.industries_exclude ?? [], employersExclude: p.employers_exclude ?? [],
-    mustHaveKeywords: p.must_have_keywords ?? [], dealBreakers: p.deal_breakers ?? [],
-    longTermTargetRole: p.long_term_target_role ?? null, targetFunction: p.target_function ?? null,
-  };
+    industriesInclude: p.industries_include ?? [],
+    longTermTargetRole: ladder?.roles[0] ?? p.long_term_target_role ?? null, targetFunction: ladder ? ladder.occupation : p.target_function ?? null,
+  }];
 }
 
 const postingFor = (r: Record<string, any>): MatchPosting => ({
@@ -205,13 +216,14 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
          SELECT p.* FROM job_posting p JOIN match m ON m.job_posting_id = p.id`)).rows;
   const existing = new Map((await c.query("SELECT id, job_posting_id, status, found_by FROM match")).rows.map((m) => [m.job_posting_id, m]));
   const applied = new Set((await c.query("SELECT job_posting_id FROM application WHERE stage NOT IN ('interested','tailoring','ready_to_apply')")).rows.map((r) => r.job_posting_id));
-  const targets = prefs.targetTitles.length ? prefs.targetTitles : profile.experience.map((e) => e.title);
+  const wanted = goalTargets(prefs);
+  const targets = wanted.length ? wanted : profile.experience.map((e) => e.title);
   let related = 0, created = 0;
   for (const p of postings) {
     const prior = existing.get(p.id);
     if (!prior && !postingIds && !titleIsRelated(p.title, targets)) continue;
     related++;
-    const res = scoreMatch(profile, prefs, postingFor(p), { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
+    const res = scoreBestGoal(profile, prefs, postingFor(p), { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
     const r = await c.query(
       `INSERT INTO match (applicant_id, job_posting_id, score, components, matched_skills, gap_skills, filtered, filter_reasons, reason_line, ladder_tag, ladder_label,
          adjustments, rules_version, parser_version, computed_at, found_by)
@@ -294,7 +306,8 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
       `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id ORDER BY s.name`)).rows;
     const prefs = await prefsFor(c);
     const exp = (await c.query("SELECT title FROM experience_item WHERE verification = 'verified'")).rows.map((r) => r.title as string);
-    return { runId: run.rows[0].id as string, sources: src, targets: prefs.targetTitles.length ? prefs.targetTitles : exp };
+    const wanted = goalTargets(prefs);
+    return { runId: run.rows[0].id as string, sources: src, targets: wanted.length ? wanted : exp };
   });
 
   let checked = 0, fresh0 = 0, updated = 0, closed = 0;

@@ -211,7 +211,7 @@ export function weeklyReview(i: ReportInput, week: string): WeeklyReview {
 }
 
 export interface Calibration { weights: Weights; message: string; basedOn: number; up: keyof Weights; down: keyof Weights }
-const COMPONENT_LABEL: Record<keyof Weights, string> = { skills: "Required skills", experience: "Experience", preferences: "What you want", keywords: "Field and keywords", recency: "Fresh and open" };
+const COMPONENT_LABEL: Record<keyof Weights, string> = { skills: "Required skills", experience: "Experience", preferences: "Your goals", keywords: "Field and keywords", recency: "Fresh and open" };
 
 /**
  * Score calibration, visible (P10): after 20 or more applications with a known

@@ -38,7 +38,7 @@ export const L1 = {
   "home.next_action.profile": "Start by building your profile",
   "home.next_action.profile_soon": "Bring in your resume, or add your experience by hand.",
   "home.next_action.review": "Check your imported rows",
-  "home.next_action.preferences": "Tell us what jobs you want",
+  "home.next_action.preferences": "Add a goal: the jobs you want",
   "home.next_action.improve": "Strengthen your profile",
   "home.next_action.done": "Your profile is in good shape",
   "home.next_action.done_note": "We'll tell you here when new jobs match you.",
@@ -49,7 +49,7 @@ export const L1 = {
   "profile.checked": "Checked",
   "profile.draft": "From your resume, not confirmed yet",
   "profile.check_cta": "Confirm",
-  "profile.import.title": "Bring in your resume",
+  "profile.import.title": "Initial input",
   "profile.import.intro": "Upload your resume (PDF, Word or text) or your LinkedIn data download. Everything comes in as a draft for you to check, row by row. Nothing counts until you say it's right.",
   "profile.import.done": "We read {n} rows from your file. Please check each one.",
   "profile.import.unreadable": "We couldn't read that file. Try a PDF, a Word document, or your LinkedIn data download.",
@@ -72,7 +72,7 @@ export const L1 = {
   "profile.answers.your_step": "A right-to-work answer. TC Hunter types it into forms that ask, from this approved answer only, and you check the form before you submit.",
   "profile.stories.title": "Your stories",
   "profile.stories.hint": "Short stories about things you did: the situation, your task, what you did and the result. Each one must be tied to something in your experience.",
-  "profile.preferences.title": "What you're looking for",
+  "profile.preferences.title": "Goals",
   "profile.saved": "Saved.",
 
   // Settings, Phase 1

@@ -1,4 +1,4 @@
-import { coachNudges, getPreferences, getProfile, profileDuplicates } from "@tc-hunter/db";
+import { coachNudges, getProfile, listGoals, profileDuplicates } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -18,9 +18,9 @@ export const dynamic = "force-dynamic";
 export default async function ProfilePage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, profile, nudges, prefs, copies] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
-    getPreferences(pool, session), profileDuplicates(pool, session)]);
-  const targets: string[] = [...(prefs?.target_titles ?? []), ...(prefs?.long_term_target_role ? [prefs.long_term_target_role] : [])];
+  const [{ saved, error, params }, profile, nudges, goals, copies] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
+    listGoals(pool, session), profileDuplicates(pool, session)]);
+  const targets: string[] = [...new Set(goals.flatMap((g) => g.roles))];
   const a = profile.about;
   return (
     <>
