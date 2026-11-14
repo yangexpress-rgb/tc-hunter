@@ -10,7 +10,7 @@ import { open as openSealed, seal } from "./crypto";
  * holds only an opaque vault_ref (site_account.vault_ref). Each applicant has
  * their own vault: Yong's store cannot be opened with Leo's id and vice versa.
  */
-export type SecretKind = "site_password" | "site_session";
+export type SecretKind = "site_password" | "site_session" | "email_token";
 
 /** Wraps a secret so it cannot leak through logging, JSON or string conversion. */
 export class SecretValue {

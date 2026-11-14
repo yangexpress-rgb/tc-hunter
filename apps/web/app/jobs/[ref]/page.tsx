@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { getMatchByRef, getPreferences, listDocuments, tailorWork } from "@tc-hunter/db";
-import { t } from "@tc-hunter/domain";
+import { getMatchByRef, getPreferences, listApplications, listDocuments, tailorWork } from "@tc-hunter/db";
+import { STAGE_LABEL, t, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -9,6 +9,7 @@ import { TopBar } from "@/components/TopBar";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { tailorAction } from "@/app/documents/actions";
+import { trackAction } from "@/app/applications/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +30,8 @@ export default async function JobPage(props: Props) {
   const { pool } = app();
   const [{ saved, error, params }, m] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref)]);
   if (!m) notFound();
-  const [docs, work, prefs] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session)]);
+  const [docs, work, prefs, apps] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session)]);
+  const tracked = apps.find((a) => a.job_ref === m.public_ref);
   const preparing = work && (work.status === "queued" || work.status === "running");
   const minScore = prefs?.min_score_to_tailor ?? null;
   const back = `/jobs/${m.public_ref}`;
@@ -59,6 +61,15 @@ export default async function JobPage(props: Props) {
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
       <FeedbackButtons matchId={m.id} status={status} back={back} />
       {preparing ? <meta httpEquiv="refresh" content="4" /> : null}
+      {tracked ? (
+        <p className="tracked">You're tracking this job: <a href={`/applications/${tracked.public_ref}`}>{STAGE_LABEL[tracked.stage as ApplicationStage]}</a></p>
+      ) : (
+        <form action={trackAction} className="inline-actions">
+          <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
+          <button className="secondary">Track this job</button>
+          <span className="hint">Adds it to your applications so you can keep notes and follow-ups.</span>
+        </form>
+      )}
 
       <section className="card tailor-card" aria-label="Your resume for this job">
         <h2>Your resume for this job</h2>

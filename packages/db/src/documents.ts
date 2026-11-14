@@ -11,6 +11,7 @@ import type { AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
+import { ensureApplication } from "./tracker";
 
 /**
  * Tailoring Studio (design 5.4). A tailored resume or cover letter is a `document`
@@ -172,6 +173,7 @@ export async function requestTailor(pool: pg.Pool, session: Session, jobRef: str
   return withApplicant(pool, asApplicant(session), async (c) => {
     const m = (await c.query("SELECT m.id FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
     if (!m) throw new DomainError("TC_NOT_FOUND");
+    await ensureApplication(c, jobRef, "tailoring");
     const r = await c.query(
       `INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING RETURNING id`,
       [JSON.stringify({ match_id: m.id, kinds })]);
@@ -367,6 +369,10 @@ export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Se
          generation_meta = coalesce(generation_meta, '{}'::jsonb) || jsonb_build_object('rendered_at', $5::text), updated_at = now() WHERE id = $1`,
       [docId, hashOf(source), sha(r.pdf), sha(r.docx), when.toISOString()]);
     await recordAudit(c, "document.approved", { objectType: "document", objectId: docId, payload: { document_ref: d.public_ref, type: d.type, version: d.version, content_hash: hashOf(source) } });
+    if (d.type === "resume") {
+      const jobRef = (await c.query("SELECT public_ref FROM job_posting WHERE id = $1", [d.job_posting_id])).rows[0]?.public_ref;
+      if (jobRef) await ensureApplication(c, jobRef, "ready_to_apply");
+    }
   });
 }
 

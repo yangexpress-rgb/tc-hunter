@@ -132,7 +132,9 @@ export function ladderTag(postingTitle: string, la: Level, prefs: Pick<MatchPref
   return { tag: "same_level", label: "Same level as now" };
 }
 
-export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: MatchPosting, ctx: { now: Date; dismissed?: boolean; applied?: boolean; adjustments?: Adjustment[] }): MatchResult {
+export type Weights = Record<keyof typeof WEIGHTS, number>;
+
+export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: MatchPosting, ctx: { now: Date; dismissed?: boolean; applied?: boolean; adjustments?: Adjustment[]; weights?: Weights; rulesVersion?: string }): MatchResult {
   const text = `${posting.title}\n${posting.descriptionText}`;
   const filterReasons: string[] = [];
 
@@ -241,7 +243,11 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
     { key: "preferences", label: "What you want", weight: 20, raw: prefPoints / 20, points: prefPoints, detail: prefLines },
     { key: "keywords", label: "Field and keywords", weight: 10, raw: keywordRaw, points: 10 * keywordRaw, detail: kwDetail },
     { key: "recency", label: "Fresh and open", weight: 10, raw: (7 * recRaw + 3 * avail) / 10, points: 7 * recRaw + 3 * avail, detail: recDetail },
-  ].map((c) => ({ ...c, raw: Math.round(c.raw * 1000) / 1000, points: round1(c.points) })) as Component[];
+  ].map((c) => {
+    // Calibrated weights (P10), only when the applicant accepted them: same raw values, re-weighted, shown as such.
+    const w = ctx.weights?.[c.key as keyof typeof WEIGHTS];
+    return w === undefined ? c : { ...c, weight: w, points: c.raw * w };
+  }).map((c) => ({ ...c, raw: Math.round(c.raw * 1000) / 1000, points: round1(c.points) })) as Component[];
 
   // Visible preference adjustments from the applicant's own feedback (never hidden maths).
   const applied: MatchResult["adjustments"] = [];
@@ -265,7 +271,7 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
 
   return {
     score, components, matchedSkills: matched, gapSkills: gaps, filtered: filterReasons.length > 0, filterReasons, reasonLine,
-    ladderTag: ladder?.tag ?? null, ladderLabel: ladder?.label ?? null, adjustments: applied, rulesVersion: RULES_VERSION,
+    ladderTag: ladder?.tag ?? null, ladderLabel: ladder?.label ?? null, adjustments: applied, rulesVersion: ctx.rulesVersion ?? RULES_VERSION,
   };
 }
 

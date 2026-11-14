@@ -54,7 +54,10 @@ services:
       TC_PUBLIC_ORIGIN: ${TC_PUBLIC_ORIGIN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TC_RESUME_READER: ${TC_RESUME_READER:-}
-      # Outbound calls (the Claude resume reader) go only through egress-proxy, which allows only listed hosts.
+      # Connected Gmail (optional, read-only). Leave empty to keep email off.
+      TC_GOOGLE_CLIENT_ID: ${TC_GOOGLE_CLIENT_ID:-}
+      TC_GOOGLE_CLIENT_SECRET: ${TC_GOOGLE_CLIENT_SECRET:-}
+      # Outbound calls (the Claude resume reader, Google sign-in) go only through egress-proxy, which allows only listed hosts.
       HTTPS_PROXY: http://egress-proxy:3128
       NO_PROXY: db,localhost
       NODE_USE_ENV_PROXY: "1"
@@ -92,9 +95,17 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TC_POSTING_READER: ${TC_POSTING_READER:-}
       TC_TAILOR_WRITER: ${TC_TAILOR_WRITER:-}
+      # Connected Gmail: the worker reads the applicant's token from their vault (read-only mount) to look for employer replies.
+      TC_GOOGLE_CLIENT_ID: ${TC_GOOGLE_CLIENT_ID:-}
+      TC_GOOGLE_CLIENT_SECRET: ${TC_GOOGLE_CLIENT_SECRET:-}
+      TC_PUBLIC_ORIGIN: ${TC_PUBLIC_ORIGIN:-}
+      TC_VAULT_KEY: ${TC_VAULT_KEY:?set TC_VAULT_KEY in deploy/.env}
+      TC_VAULT_DIR: /vault
       HTTPS_PROXY: http://egress-worker:3128
       NO_PROXY: db,localhost
       NODE_USE_ENV_PROXY: "1"
+    volumes:
+      - vault-data:/vault:ro
     depends_on:
       migrate: { condition: service_completed_successfully }
     read_only: true
@@ -120,7 +131,7 @@ services:
     restart: unless-stopped
     command: ["node", "/proxy/proxy.mjs"]
     environment:
-      ALLOW_HOSTS: api.anthropic.com
+      ALLOW_HOSTS: api.anthropic.com,oauth2.googleapis.com
     volumes:
       - ./egress-proxy:/proxy:ro
     read_only: true
