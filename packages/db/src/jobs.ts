@@ -487,9 +487,14 @@ const SEARCH_HOME: Record<SearchSiteId, string> = {
 };
 
 /** Takes and runs one piece of queued work. Returns false when there was nothing to do. */
-export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolean> {
+/** What the worker did, for its log (no personal data): false when there was nothing to do. */
+export type WorkDone = false | { kind: string; ok: boolean; ms: number; attempt: number; result?: Record<string, unknown>; error?: string };
+
+export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDone> {
   const item = (await pool.query("SELECT * FROM claim_work()")).rows[0] as ClaimedWork | undefined;
   if (!item) return false;
+  const t0 = Date.now();
+  let done: WorkDone;
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
     const result = item.kind === "scan" ? await runScan(pool, ctx, deps, { discover: (item.payload as { discover?: boolean }).discover === true, fresh: (item.payload as { fresh?: boolean }).fresh === true })
@@ -498,15 +503,19 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolea
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
       : await runIngestLink(pool, ctx, item.payload as never, deps);
     await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
+    const counts = Object.fromEntries(Object.entries((result ?? {}) as Record<string, unknown>).filter(([, v]) => typeof v === "number"));
+    done = { kind: item.kind, ok: true, ms: Date.now() - t0, attempt: item.attempts, result: counts };
   } catch (e) {
-    await pool.query("SELECT finish_work($1, false, $2, NULL)", [item.id, String((e as Error).message ?? e).slice(0, 500)]);
+    const error = String((e as Error).message ?? e).slice(0, 500);
+    await pool.query("SELECT finish_work($1, false, $2, NULL)", [item.id, error]);
+    done = { kind: item.kind, ok: false, ms: Date.now() - t0, attempt: item.attempts, error: error.slice(0, 200) };
   }
   // Pressed "Look again now" while this search was running: start a new one with the latest goals.
   if (item.kind === "scan") await withApplicant(pool, ctx, async (c) => {
     const again = (await c.query("SELECT payload->>'again' = 'true' AS again FROM work_item WHERE id = $1", [item.id])).rows[0]?.again;
     if (again) await c.query(`INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', '{"discover":true,"fresh":true}') ON CONFLICT DO NOTHING`);
   });
-  return true;
+  return done;
 }
 
 // ---------------------------------------------------------------------------

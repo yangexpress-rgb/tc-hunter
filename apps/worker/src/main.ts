@@ -62,6 +62,8 @@ async function main() {
       // A fresh fetcher per piece of work: robots rules are read again each time.
       const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search });
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
+      // Counts and timings only, never names or content, so a stuck or failed search can be traced.
+      else log[did.ok ? "info" : "warn"]("work.finished", { kind: did.kind, ok: did.ok, seconds: Math.round(did.ms / 1000), attempt: did.attempt, ...(did.result ?? {}), ...(did.error ? { error: did.error } : {}) });
     } catch (e) {
       log.warn("worker.error", { message: String((e as Error).message ?? e).slice(0, 200) });
       await new Promise((r) => setTimeout(r, IDLE_MS * 4));
