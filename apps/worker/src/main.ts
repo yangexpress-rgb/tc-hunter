@@ -6,7 +6,7 @@
 import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, loadSecretStore, resumeReaderName, runNextWork, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeLetterProposer, ClaudeRequirementsReader, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
-  GmailReader, googleClientFrom, RulesResumeProposer, type RequirementsReader,
+  ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type RequirementsReader,
 } from "@tc-hunter/domain";
 
 const log = createLogger();
@@ -25,6 +25,11 @@ const tailor = {
 const google = googleClientFrom(process.env);
 const email: EmailDeps | undefined = google && process.env.TC_VAULT_DIR
   ? { vault: loadSecretStore(), cfg, reader: (token) => new GmailReader(google, token) } : undefined;
+// Resume digest (decision 13.6): Claude with contact details and the applicant's names removed, or the built-in rules.
+const digest = {
+  cfg,
+  reader: (names: string[]) => (resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, names) : new RulesResumeParser()),
+};
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
@@ -43,7 +48,7 @@ async function main() {
         if (queued || mail) log.info("worker.scheduled", { scans: queued, email_checks: mail });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest });
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
     } catch (e) {
       log.warn("worker.error", { message: String((e as Error).message ?? e).slice(0, 200) });

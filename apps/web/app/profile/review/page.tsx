@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { getProfile, type FactTable } from "@tc-hunter/db";
+import { duplicateFlags, getProfile, type FactTable } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Chip, FactFields, Flash, ProfileNav, RowRef } from "@/components/profile/Fact";
@@ -11,13 +11,18 @@ import { deleteFactAction, discardImportAction, updateAndVerifyAction, verifyFac
 export const dynamic = "force-dynamic";
 
 /** One draft row: what we read, a one-click "This is right", and a fix-then-confirm form. */
-function DraftRow({ table, row, back, title, detail }: { table: FactTable; row: Record<string, any>; back: string; title: ReactNode; detail?: ReactNode }) {
+type Dup = { label: string; reason: string; checked: boolean };
+
+function DraftRow({ table, row, back, title, detail, dup }: { table: FactTable; row: Record<string, any>; back: string; title: ReactNode; detail?: ReactNode; dup?: Dup }) {
   return (
     <article className="card fact draft-row">
       <header className="fact-head">
         <div><h3>{title}</h3>{detail ? <p className="muted">{detail}</p> : null}</div>
         <Chip checked={false} />
       </header>
+      {dup ? (
+        <p className="dup-note">Might be a duplicate of “{dup.label}”{dup.checked ? ", which you've already checked" : ""}{dup.reason ? ` (${dup.reason.toLowerCase()})` : ""}. If it's the same, remove this one.</p>
+      ) : null}
       <div className="row-actions">
         <form action={verifyFactAction}><RowRef table={table} id={row.id} back={back} /><button className="small">{t("profile.check_cta")}</button></form>
         <form action={deleteFactAction}><RowRef table={table} id={row.id} back={back} /><button className="small secondary">Remove, it's wrong</button></form>
@@ -34,7 +39,7 @@ function DraftRow({ table, row, back, title, detail }: { table: FactTable; row: 
 export default async function ReviewPage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, profile] = await Promise.all([flashOf(props), getProfile(pool, cfg, session)]);
+  const [{ saved, error, params }, profile, dups] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), duplicateFlags(pool, session)]);
   const batchId = /^[0-9a-f-]{36}$/.test(params.batch ?? "") ? params.batch! : null;
   const batch = batchId ? profile.imports.find((b) => b.id === batchId) : null;
   const inScope = (r: Record<string, any>) => r.verification === "draft" && (!batchId || r.import_batch_id === batchId);
@@ -59,6 +64,8 @@ export default async function ReviewPage(props: PageProps) {
         <p className="muted">{total} {total === 1 ? "row is" : "rows are"} waiting. Nothing here is used until you mark it right. Levels are only ever what your file says; you can change them yourself.</p>
       )}
 
+      {batch?.resume_file_id ? <p className="muted">From <a href={`/profile/resumes/${batch.resume_file_id}`}>{batch.file_name ?? "your file"}</a>. That page shows what was skipped as already in your profile.</p> : null}
+
       {notes.length ? (
         <Details summary="Things we left out of this file">
           <ul>{notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
@@ -69,12 +76,12 @@ export default async function ReviewPage(props: PageProps) {
       {items.map((e) => (
         <section key={e.id} className="group">
           {inScope(e) ? (
-            <DraftRow table="experience_item" row={e} back={back}
+            <DraftRow table="experience_item" row={e} back={back} dup={dups[e.id]}
               title={<>{e.title}{e.employer_name ? <span className="muted"> · {e.employer_name}</span> : null}</>}
               detail={`${employmentLabel(e.employment_type)} · ${dateRange(e.start_date, e.end_date, e.date_precision)}`} />
           ) : <h3>{e.title}{e.employer_name ? <span className="muted"> · {e.employer_name}</span> : null}</h3>}
           {e.bullets.filter(inScope).map((b) => (
-            <DraftRow key={b.id} table="experience_bullet" row={b} back={back} title={b.text}
+            <DraftRow key={b.id} table="experience_bullet" row={b} back={back} title={b.text} dup={dups[b.id]}
               detail={b.metric_value !== null ? `Number kept exactly as written: ${Number(b.metric_value).toLocaleString()}` : undefined} />
           ))}
         </section>
@@ -82,19 +89,19 @@ export default async function ReviewPage(props: PageProps) {
 
       {education.length ? <h2>{t("profile.education.title")}</h2> : null}
       {education.map((r) => (
-        <DraftRow key={r.id} table="education_item" row={r} back={back} title={r.institution}
+        <DraftRow key={r.id} table="education_item" row={r} back={back} title={r.institution} dup={dups[r.id]}
           detail={[r.degree, r.field].filter(Boolean).join(", ") + (r.end_date ? ` · ${showMonth(r.end_date)}` : "")} />
       ))}
 
       {skills.length ? <h2>{t("profile.skills.title")}</h2> : null}
       {skills.map((r) => (
-        <DraftRow key={r.id} table="skill" row={r} back={back} title={r.canonical_name}
+        <DraftRow key={r.id} table="skill" row={r} back={back} title={r.canonical_name} dup={dups[r.id]}
           detail={`${CATEGORY_LABELS.find(([k]) => k === r.category)?.[1] ?? r.category} · ${r.proficiency ? `${PROFICIENCY_LABELS.find(([k]) => k === r.proficiency)?.[1]} (as your file says)` : "Level not set"}`} />
       ))}
 
       {credentials.length ? <h2>{t("profile.credentials.title")}</h2> : null}
       {credentials.map((r) => (
-        <DraftRow key={r.id} table="credential" row={r} back={back} title={r.name} detail={[r.issuer, r.issued_on ? showMonth(r.issued_on) : null].filter(Boolean).join(" · ")} />
+        <DraftRow key={r.id} table="credential" row={r} back={back} title={r.name} dup={dups[r.id]} detail={[r.issuer, r.issued_on ? showMonth(r.issued_on) : null].filter(Boolean).join(" · ")} />
       ))}
 
       {batchId && total > 0 ? (

@@ -12,7 +12,7 @@ import type {
  */
 export const RULES_PARSER_VERSION = "rules-1";
 
-type Section = "experience" | "projects" | "internships" | "volunteer" | "coursework" | "education" | "skills" | "credentials" | "summary" | "other";
+export type Section = "experience" | "projects" | "internships" | "volunteer" | "coursework" | "activities" | "education" | "skills" | "credentials" | "summary" | "other";
 
 const HEADINGS: Array<[RegExp, Section]> = [
   [/^(work |professional |relevant )?experience|^employment( history)?|^work history|^career history/i, "experience"],
@@ -20,6 +20,7 @@ const HEADINGS: Array<[RegExp, Section]> = [
   [/^internships?/i, "internships"],
   [/^volunteer(ing| experience| work)?|^community (service|involvement)/i, "volunteer"],
   [/^(relevant )?coursework|^courses/i, "coursework"],
+  [/^(leadership|campus|student|extracurricular)?\s*(activities|leadership)( experience| (and|&) activities)?$/i, "activities"],
   [/^education|^academic background/i, "education"],
   [/^(technical |core |key )?skills|^competencies|^technologies|^tools/i, "skills"],
   [/^certifications?|^licen[cs]es?|^certifications? (and|&) licen[cs]es?|^credentials|^clearances?/i, "credentials"],
@@ -27,7 +28,7 @@ const HEADINGS: Array<[RegExp, Section]> = [
 ];
 
 const SECTION_TYPE: Partial<Record<Section, EmploymentType>> = {
-  projects: "project", internships: "internship", volunteer: "volunteer", coursework: "coursework",
+  projects: "project", internships: "internship", volunteer: "volunteer", coursework: "coursework", activities: "other",
 };
 
 const BULLET_RE = /^\s*(?:[•●▪◦‣∙*–-]|\d+[.)])\s+/;
@@ -36,7 +37,7 @@ const PHONE_RE = /(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/;
 const URL_RE = /\b(?:https?:\/\/)?(?:www\.)?(?:linkedin\.com|github\.com|gitlab\.com|[a-z0-9-]+\.(?:dev|io|me))\/?[^\s,|]*/gi;
 const CITY_RE = /\b([A-Z][a-zA-Z.]+(?:\s[A-Z][a-zA-Z.]+)*,\s?(?:[A-Z]{2}|[A-Z][a-z]+))\b/;
 
-function headingOf(line: string): Section | null {
+export function headingOf(line: string): Section | null {
   const s = line.trim().replace(/[:\s]+$/, "");
   if (!s || s.length > 40 || BULLET_RE.test(line)) return null;
   // Headings are short and either upper-case, title-case or end with a colon.
@@ -256,7 +257,7 @@ export function parseResumeText(text: string): ParsedResume {
   }
   const get = (s: Section) => buckets.get(s) ?? [];
   const notes: string[] = [];
-  const experience = (["experience", "internships", "projects", "volunteer", "coursework"] as const).flatMap((s) => parseExperience(get(s), s));
+  const experience = (["experience", "internships", "projects", "volunteer", "coursework", "activities"] as const).flatMap((s) => parseExperience(get(s), s));
   // Coursework listed as a plain list (no dates) becomes skills-free notes, not invented rows.
   if (get("coursework").some((l) => l.trim()) && !experience.some((e) => e.type === "coursework")) {
     notes.push("Coursework was listed without dates, so it was not added as experience. You can add it by hand.");

@@ -25,3 +25,4 @@ export async function readResume(text: string, parser: ResumeParser = new RulesR
   }
   return groundInSource(parsed, text);
 }
+export * from "./digest";

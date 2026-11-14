@@ -188,3 +188,21 @@ table.report thead th { color: var(--muted); font-weight: 600; font-size: 13px; 
 .qr svg { display: block; width: 100%; height: auto; }
 .recovery ul.codes { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; margin: 8px 0 12px; }
 .recovery code { font-size: 15px; letter-spacing: 0.04em; }
+
+/* Resume digest */
+.digest-steps { list-style: none; padding: 0; margin: 12px 0; }
+.digest-steps li { padding: 4px 0 4px 26px; position: relative; }
+.digest-steps li::before { position: absolute; left: 0; width: 18px; text-align: center; }
+.digest-steps li.done::before { content: "✓"; color: var(--accent); font-weight: 700; }
+.digest-steps li.now::before { content: "●"; color: var(--accent); }
+.digest-steps li.now { font-weight: 600; }
+.digest-steps li.todo { color: var(--muted); }
+.digest-steps li.todo::before { content: "○"; }
+.digest-steps li.failed { color: var(--error); }
+.digest-steps li.failed::before { content: "✕"; }
+.outcomes { padding-left: 18px; }
+.outcomes li + li { margin-top: 6px; }
+.outcomes .small, .dup-note { font-size: 14px; }
+.dup-note { border-left: 3px solid var(--error); padding: 4px 10px; margin: 8px 0; }
+.resume-text { white-space: pre-wrap; font-size: 14px; max-height: 480px; overflow: auto; }
+ul.plain-list { list-style: none; padding: 0; }

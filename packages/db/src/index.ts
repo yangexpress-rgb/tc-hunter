@@ -16,3 +16,4 @@ export * from "./documents";
 export * from "./tracker";
 export * from "./email";
 export * from "./assist";
+export * from "./resumes";
