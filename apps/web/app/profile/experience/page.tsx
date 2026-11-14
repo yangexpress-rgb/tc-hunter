@@ -1,11 +1,12 @@
-import { getPreferences, getProfile } from "@tc-hunter/db";
+import { getPreferences, getProfile, profileDuplicates } from "@tc-hunter/db";
 import { sortExperience, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Chip, FactFields, Flash, ProfileNav, RowRef } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
 import { dateRange, employmentLabel, FIELD_SPECS, flashOf, pct, SOURCE_LABELS, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { addFactAction, deleteFactAction, updateFactAction, verifyFactAction } from "../actions";
+import { removeDuplicatesAction, addFactAction, deleteFactAction, updateFactAction, verifyFactAction }  from "../actions";
+import { DuplicateBanner } from "@/components/profile/Digest";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ const UNITS: Record<string, string> = { percent: "%", usd: "$", count: "", multi
 export default async function ExperiencePage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, profile, prefs] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), getPreferences(pool, session)]);
+  const [{ saved, error, params }, profile, prefs, copies] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), getPreferences(pool, session), profileDuplicates(pool, session)]);
   const targets: string[] = [...(prefs?.target_titles ?? []), ...(prefs?.long_term_target_role ? [prefs.long_term_target_role] : [])];
   const by = params.sort === "relevance" && targets.length ? "relevance" : "date";
   const sortable = profile.experience.map((e) => ({
@@ -32,6 +33,7 @@ export default async function ExperiencePage(props: PageProps) {
       <ProfileNav current="/profile/experience" />
       <p className="muted">{t("profile.experience.hint")}</p>
       <Flash saved={saved} error={error} />
+      <DuplicateBanner dups={copies} back={back} action={removeDuplicatesAction} />
       <p className="sortbar">
         Sort: <a href="/profile/experience" aria-current={by === "date" ? "true" : undefined}>Most recent</a>
         {targets.length ? <a href="/profile/experience?sort=relevance" aria-current={by === "relevance" ? "true" : undefined}>Closest to the roles you want</a>

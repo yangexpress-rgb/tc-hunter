@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type pg from "pg";
 import type Anthropic from "@anthropic-ai/sdk";
-import { ClaudeResumeParser, RulesResumeParser, RulesRequirementsReader, SourceRefusedError, type Fetcher } from "@tc-hunter/domain";
+import { ClaudeResumeParser, readResume, RulesResumeParser, RulesRequirementsReader, SourceRefusedError, type Fetcher } from "@tc-hunter/domain";
 import {
   duplicateFlags, exportMyData, getResumeFile, listResumeFiles, readResumeFile, redigestResumeFile, runDigest, runNextWork, storeResumeFile,
-  verifyFact, withApplicant, deleteResumeFile, type AppConfig, type DigestDeps, type Session, type WorkDeps,
+  verifyFact, withApplicant, deleteResumeFile, importParsedResume, profileDuplicates, removeProfileDuplicates, type AppConfig, type DigestDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
@@ -118,14 +118,14 @@ describe("resume digest", () => {
     await verifyFact(pool, yong, "experience_item", ops);
     const edited = base
       .replace("• Built weekly operations reports used by the leadership team",
-        "• Built weekly operations reports used by the senior leadership team\n• Negotiated freight contracts saving $200K a year");
+        "• Built weekly operations dashboards used by the leadership team\n• Negotiated freight contracts saving $200K a year");
     const r = await storeResumeFile(pool, cfg, yong, { name: "v2.txt", bytes: Buffer.from(edited) });
     await drain();
     const d = (await getResumeFile(pool, yong, r.fileId)).latest!;
     const fresh = d.outcomes.find((o) => o.label.startsWith("Negotiated"))!;
     expect(fresh).toMatchObject({ kind: "bullet", decision: "add" });
     expect(fresh.under).toContain("Operations Manager");
-    const reworded = d.outcomes.find((o) => o.label.includes("senior leadership"))!;
+    const reworded = d.outcomes.find((o) => o.label.includes("dashboards"))!;
     expect(reworded.decision).toBe("similar");
     expect(reworded.match!.label).toContain("used by the leadership team");
     expect(await count(yong, "experience_item")).toBe(5);
@@ -212,5 +212,35 @@ describe("resume digest", () => {
     expect(await count(yong, "resume_file")).toBe(2);
     expect(await count(yong, "resume_digest", `resume_file_id = '${newest!.id}'`)).toBe(0);
     expect(await count(yong, "experience_item")).toBe(before);
+  });
+});
+
+describe("copies already in the profile", () => {
+  it("finds rows from uploading the same resume twice the old way, and removes only the unchecked copies", async () => {
+    const { session: ann } = await newApplicant(pool, cfg, "Ann");
+    const text = readFileSync(join(FIX, "sample-resume.txt"), "utf8");
+    const parsed = await readResume(text);
+    await importParsedResume(pool, ann, { kind: "resume", fileName: "a.txt", fileKind: "text", parsed });
+    // Before duplicate checks, a second upload added everything again (skills excepted, the database refused those).
+    await importParsedResume(pool, ann, { kind: "resume", fileName: "b.txt", fileKind: "text", parsed: await readResume(text) });
+    expect(await count(ann, "experience_item")).toBe(10);
+    // One copy of a role was checked, and it gained a bullet of its own.
+    const ctx = { userAccountId: ann.userAccountId, applicantId: ann.applicantId, actor: "applicant" as const };
+    const [first, second] = await withApplicant(pool, ctx, async (c) => (await c.query(
+      "SELECT id FROM experience_item WHERE title = 'Operations Manager' ORDER BY created_at, id")).rows.map((r) => r.id));
+    await verifyFact(pool, ann, "experience_item", second);
+    await withApplicant(pool, ctx, (c) => c.query(
+      "INSERT INTO experience_bullet (applicant_id, experience_item_id, text, sort_order, source) VALUES (app_applicant_id(), $1, 'Ran the quarterly planning cycle', 9, 'import_resume')", [first]));
+
+    const dups = await profileDuplicates(pool, ann);
+    expect(dups.filter((d) => d.kind === "experience")).toHaveLength(5);
+    expect(dups.find((d) => d.id === first)).toMatchObject({ keepId: second, moveBulletIds: [expect.any(String)] });
+
+    expect(await removeProfileDuplicates(pool, ann)).toBe(dups.length);
+    expect(await count(ann, "experience_item")).toBe(5);
+    expect(await count(ann, "experience_bullet")).toBe(9);
+    expect(await count(ann, "experience_item", `id = '${second}' AND verification = 'verified'`)).toBe(1);
+    expect(await count(ann, "experience_bullet", `experience_item_id = '${second}' AND text = 'Ran the quarterly planning cycle'`)).toBe(1);
+    expect(await profileDuplicates(pool, ann)).toEqual([]);
   });
 });

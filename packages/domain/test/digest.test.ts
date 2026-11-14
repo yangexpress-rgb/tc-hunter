@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mappedText, overlap, planDigest, skillKey, splitSections, type ParsedResume, type ProfileSnapshot } from "../src";
+import { findProfileDuplicates, mappedText, overlap, planDigest, skillKey, splitSections, type ParsedResume, type ProfileSnapshot } from "../src";
 
 const empty: ProfileSnapshot = { experience: [], education: [], skills: [], credentials: [] };
 const parsed = (p: Partial<ParsedResume>): ParsedResume =>
@@ -46,10 +46,47 @@ describe("resume digest: duplicates", () => {
     }), {
       ...empty,
       education: [{ id: "e1", checked: true, institution: "State University", degree: "B.S.", field: null }],
-      experience: [{ id: "x1", checked: true, employer: "Contoso", title: "Analyst", start: "2020-01-01", end: null, bullets: [] }],
+      experience: [{ id: "x1", checked: true, employer: "Contoso", title: "Analyst", start: "2015-01-01", end: "2016-06-01", bullets: [] }],
     });
     expect(plan.education[0]!.decision).toBe("add");
     expect(plan.experience[0]).toMatchObject({ decision: "similar", match: { id: "x1" } });
     expect(overlap("Cut costs by 10% across 3 sites", "Cut costs by 12% across 3 sites")).toBeGreaterThan(0.6);
+  });
+});
+
+describe("resume digest: readers that disagree a little", () => {
+  const role = { employer: "Northwind Logistics", title: "Operations Manager", start: "2021-03-01", end: null, precision: "month" as const, type: "full_time" as const, confidence: 1 };
+  const existing: ProfileSnapshot = { ...empty, experience: [{ id: "x1", checked: false, employer: "Northwind Logistics, Inc.", title: "Operations Manager",
+    start: "2021-03-01", end: null, bullets: [{ id: "b1", checked: false, text: "Led CRM migration for a 40-person sales team, cutting quote time by 35%" }] }] };
+
+  it("a year-only date, a broken word or a missing comma doesn't make a copy", () => {
+    const plan = planDigest(parsed({ experience: [{ ...role, start: "2021-01-01", precision: "year", bullets: [
+      { text: "Led CRM mig-ration for a 40-person sales team cutting quote time by 35%", confidence: 1 },
+    ] }] }), existing);
+    expect(plan.experience[0]).toMatchObject({ decision: "same", intoExistingId: "x1" });
+    expect(plan.experience[0]!.bullets[0]!.decision).toBe("same");
+  });
+
+  it("a changed number is never treated as the same bullet", () => {
+    const plan = planDigest(parsed({ experience: [{ ...role, bullets: [
+      { text: "Led CRM migration for a 40-person sales team, cutting quote time by 45%", confidence: 1 },
+    ] }] }), existing);
+    expect(plan.experience[0]!.bullets[0]!.decision).toBe("similar");
+  });
+
+  it("finds copies already in the profile, keeps checked rows, and moves a copy's own bullets", () => {
+    const dups = findProfileDuplicates({
+      ...empty,
+      experience: [
+        { id: "a", checked: true, employer: "Contoso", title: "Analyst", start: "2020-01-01", end: null, bullets: [{ id: "a1", checked: true, text: "Built reports" }] },
+        { id: "b", checked: false, employer: "Contoso Inc", title: "Analyst", start: "2020-02-01", end: null,
+          bullets: [{ id: "b1", checked: false, text: "Built reports" }, { id: "b2", checked: false, text: "Trained staff" }] },
+        { id: "c", checked: false, employer: "Fabrikam", title: "Intern", start: "2018-06-01", end: "2018-08-01",
+          bullets: [{ id: "c1", checked: false, text: "Mapped costs" }, { id: "c2", checked: false, text: "Mapped costs" }] },
+      ],
+      skills: [{ id: "s1", checked: false, name: "Node.js", aliases: [] }, { id: "s2", checked: false, name: "NodeJS", aliases: [] }],
+    });
+    expect(dups.map((d) => [d.kind, d.id, d.keepId])).toEqual([["experience", "b", "a"], ["bullet", "c2", "c1"], ["skill", "s2", "s1"]]);
+    expect(dups[0]!.moveBulletIds).toEqual(["b2"]);
   });
 });

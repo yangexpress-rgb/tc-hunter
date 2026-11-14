@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, discardImport, FACT_TABLES, redigestResumeFile,
+  addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
   removeEvidence, rescoreMatches, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyFact, type FactTable,
 } from "@tc-hunter/db";
@@ -156,6 +156,12 @@ export async function runDigestNowAction(form: FormData) {
     log.warn("profile.digest_failed", { code: errorCode(e) ?? "TC_UNKNOWN" });
   }
   redirect(`/profile/resumes/${id}`);
+}
+
+/** "Remove the extra copies": unchecked rows that copy another row in the profile. */
+export async function removeDuplicatesAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => removeProfileDuplicates(app().pool, s), "/profile/experience");
 }
 
 export async function deleteResumeFileAction(form: FormData) {
