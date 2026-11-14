@@ -13,6 +13,8 @@ export const AUDIT_ALLOWED_KEYS = {
   "mfa.recovery_codes_made": [],
   "mfa.moved": [],
   "session.locked": ["minutes"],
+  "session.remembered": ["days"],
+  "session.ended_elsewhere": ["count"],
   "document.approved": ["document_ref", "type", "version", "content_hash"],
   "document.generated": ["document_ref", "type", "version", "proposer", "blocked"],
   "document.exported": ["document_ref", "format"],

@@ -7,6 +7,7 @@ export * from "./totp";
 export * from "./secretStore";
 export * from "./redact";
 export * from "./auditPolicy";
+export * from "./deviceLabel";
 export * from "./messages";
 export * from "./profile";
 export * from "./zip";

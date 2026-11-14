@@ -84,14 +84,39 @@ export async function signUp(
   }
 }
 
-export async function createSession(c: pg.PoolClient, cfg: AppConfig, accountId: string, mfaPassed: boolean): Promise<string> {
+/** What the browser asked for at sign-in: to be remembered, and a short label for it ("Chrome on Mac"). */
+export interface DeviceChoice { remember?: boolean; label?: string }
+
+export async function createSession(c: pg.PoolClient, cfg: AppConfig, accountId: string, mfaPassed: boolean, device: DeviceChoice = {}): Promise<string> {
   const token = randomBytes(32).toString("base64url");
-  await c.query(
-    `INSERT INTO user_session (user_account_id, token_hash, mfa_passed, expires_at)
-     VALUES ($1, $2, $3, now() + make_interval(mins => $4))`,
-    [accountId, tokenHash(token), mfaPassed, cfg.sessionIdleMinutes],
+  const r = await c.query(
+    `INSERT INTO user_session (user_account_id, token_hash, mfa_passed, expires_at, remember_requested, device_label)
+     VALUES ($1, $2, $3, now() + make_interval(mins => $4), $5, $6) RETURNING id`,
+    [accountId, tokenHash(token), mfaPassed, cfg.sessionIdleMinutes, Boolean(device.remember) && cfg.rememberDeviceDays > 0, device.label?.slice(0, 60) ?? null],
   );
+  if (mfaPassed) await applyRemember(c, cfg, accountId, r.rows[0].id);
   return token;
+}
+
+/**
+ * Once a sign-in is complete: if the person ticked "remember this device", the
+ * session lasts REMEMBER_DEVICE_DAYS from now (a fixed end, no idle timeout).
+ * Approving a submission still asks them to confirm it's them (step-up).
+ */
+async function applyRemember(c: pg.PoolClient, cfg: AppConfig, accountId: string, sessionId: string): Promise<void> {
+  if (cfg.rememberDeviceDays <= 0) return;
+  const r = await c.query(
+    `UPDATE user_session SET remembered_until = now() + make_interval(days => $2), expires_at = now() + make_interval(days => $2)
+     WHERE id = $1 AND remember_requested AND mfa_passed RETURNING id`,
+    [sessionId, cfg.rememberDeviceDays]);
+  if (r.rowCount) await auditAsAccount(c, accountId, "session.remembered", { days: cfg.rememberDeviceDays });
+}
+
+/** When a signed-in browser's cookie should end: the remembered date, or null for "when the browser closes". */
+export async function sessionCookieUntil(pool: pg.Pool, token: string | undefined): Promise<Date | null> {
+  if (!token) return null;
+  return withSignInScope(pool, async (c) =>
+    (await c.query("SELECT remembered_until FROM user_session WHERE token_hash = $1 AND mfa_passed AND expires_at > now()", [tokenHash(token)])).rows[0]?.remembered_until ?? null);
 }
 
 export type SignInResult =
@@ -126,7 +151,7 @@ async function useStep(c: pg.PoolClient, accountId: string, step: number | null)
 
 const recoveryHash = (accountId: string, code: string) => createHash("sha256").update(`${accountId}:${code}`).digest("hex");
 
-export async function signIn(pool: pg.Pool, cfg: AppConfig, emailRaw: string, password: string): Promise<SignInResult> {
+export async function signIn(pool: pg.Pool, cfg: AppConfig, emailRaw: string, password: string, device: DeviceChoice = {}): Promise<SignInResult> {
   const email = emailRaw.trim().toLowerCase();
   return withSignInScope(pool, async (c) => {
     const r = await c.query(
@@ -141,7 +166,7 @@ export async function signIn(pool: pg.Pool, cfg: AppConfig, emailRaw: string, pa
       await noteFailure(c, row.id);
       return { status: "failed" as const };
     }
-    const token = await createSession(c, cfg, row.id, !row.mfa_enabled);
+    const token = await createSession(c, cfg, row.id, !row.mfa_enabled, device);
     // With two-step on, the count is cleared only once the code is right too.
     if (row.mfa_enabled) return { status: "code_required" as const, token };
     await c.query("UPDATE user_account SET failed_sign_ins = 0 WHERE id = $1", [row.id]);
@@ -189,6 +214,7 @@ export async function verifySignInCode(pool: pg.Pool, cfg: AppConfig, token: str
     await c.query("UPDATE user_session SET mfa_passed = true, reauth_at = now() WHERE id = $1", [row.id]);
     await c.query("UPDATE user_account SET failed_sign_ins = 0 WHERE id = $1", [row.user_account_id]);
     await auditAsAccount(c, row.user_account_id, "session.signed_in", { mfa_used: true, method: recovery ? "recovery_code" : "code" });
+    await applyRemember(c, cfg, row.user_account_id, row.id);
     return true;
   });
 }
@@ -200,7 +226,7 @@ export async function pendingSignIn(pool: pg.Pool, token: string | undefined): P
     (await c.query("SELECT 1 FROM user_session WHERE token_hash = $1 AND expires_at > now() AND NOT mfa_passed", [tokenHash(token)])).rowCount === 1);
 }
 
-export async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out" | "session.step_up" | "session.locked", payload: Record<string, unknown>) {
+export async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out" | "session.step_up" | "session.locked" | "session.remembered" | "session.ended_elsewhere", payload: Record<string, unknown>) {
   const a = await c.query("SELECT id FROM applicant WHERE user_account_id = $1", [accountId]);
   if (!a.rows[0]) return;
   await c.query("SELECT set_config('app.applicant_id', $1, true)", [a.rows[0].id]);
@@ -212,7 +238,8 @@ export async function getSession(pool: pg.Pool, cfg: AppConfig, token: string | 
   if (!token) return null;
   return withSignInScope(pool, async (c) => {
     const r = await c.query(
-      `UPDATE user_session SET last_seen_at = now(), expires_at = now() + make_interval(mins => $2)
+      `UPDATE user_session SET last_seen_at = now(),
+         expires_at = coalesce(remembered_until, now() + make_interval(mins => $2))
        WHERE token_hash = $1 AND mfa_passed AND expires_at > now()
        RETURNING id, user_account_id, reauth_at`,
       [tokenHash(token), cfg.sessionIdleMinutes],
@@ -349,4 +376,42 @@ export async function recoveryCodesLeft(pool: pg.Pool, session: Session): Promis
   const ctx = { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" as const };
   return withApplicant(pool, ctx, async (c) =>
     Number((await c.query("SELECT count(*) AS n FROM mfa_recovery_code WHERE user_account_id = $1 AND used_at IS NULL", [session.userAccountId])).rows[0].n));
+}
+
+export interface SignedInDevice {
+  id: string;
+  label: string;
+  current: boolean;
+  signedInAt: Date;
+  lastSeenAt: Date;
+  rememberedUntil: Date | null;
+}
+
+/** Every browser where this person is signed in right now, this one first. */
+export async function listSignedInDevices(pool: pg.Pool, session: Session): Promise<SignedInDevice[]> {
+  const ctx = { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" as const };
+  return withApplicant(pool, ctx, async (c) => {
+    const r = await c.query(
+      `SELECT id, device_label, created_at, last_seen_at, remembered_until FROM user_session
+       WHERE user_account_id = $1 AND mfa_passed AND expires_at > now()
+       ORDER BY (id = $2) DESC, last_seen_at DESC`,
+      [session.userAccountId, session.sessionId]);
+    return r.rows.map((x) => ({
+      id: x.id, label: x.device_label ?? "A browser", current: x.id === session.sessionId,
+      signedInAt: x.created_at, lastSeenAt: x.last_seen_at, rememberedUntil: x.remembered_until,
+    }));
+  });
+}
+
+/** Signs out one other browser, or every other browser when no id is given. Never this one (that's "Sign out"). */
+export async function signOutElsewhere(pool: pg.Pool, session: Session, id?: string): Promise<number> {
+  const ctx = { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" as const };
+  return withApplicant(pool, ctx, async (c) => {
+    const r = await c.query(
+      `DELETE FROM user_session WHERE user_account_id = $1 AND id <> $2 AND ($3::uuid IS NULL OR id = $3::uuid)`,
+      [session.userAccountId, session.sessionId, id ?? null]);
+    const count = r.rowCount ?? 0;
+    if (count) await recordAudit(c, "session.ended_elsewhere", { objectType: "user_account", objectId: session.userAccountId, payload: { count } });
+    return count;
+  });
 }

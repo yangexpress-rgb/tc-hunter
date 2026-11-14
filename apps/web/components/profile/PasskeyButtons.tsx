@@ -56,6 +56,8 @@ export function SignInWithPasskey({ text }: { text: Text }) {
     const opts = await passkeySignInOptions();
     if (!isOptions(opts)) return false;
     const res = await startAuthentication({ optionsJSON: opts as never });
-    return (await passkeySignInFinish(res)).ok;
+    // The same "remember this device" tick as the password form above it.
+    const remember = document.querySelector<HTMLInputElement>('input[name="remember"]')?.checked ?? false;
+    return (await passkeySignInFinish(res, remember)).ok;
   }} />;
 }

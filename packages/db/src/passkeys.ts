@@ -6,7 +6,7 @@ import {
   type RegistrationResponseJSON,
 } from "@simplewebauthn/server";
 import { recordAudit } from "./audit";
-import { auditAsAccount, createSession, hasFreshStepUp, type Session } from "./auth";
+import { auditAsAccount, createSession, hasFreshStepUp, type DeviceChoice, type Session } from "./auth";
 import type { AppConfig } from "./config";
 import { withApplicant, withSignInScope } from "./context";
 import { DomainError } from "./packets";
@@ -115,15 +115,15 @@ async function verifyAssertion(c: pg.PoolClient, cfg: AppConfig, response: Authe
   return row.user_account_id as string;
 }
 
-export async function finishPasskeySignIn(pool: pg.Pool, cfg: AppConfig, response: AuthenticationResponseJSON): Promise<{ token: string } | null> {
+export async function finishPasskeySignIn(pool: pg.Pool, cfg: AppConfig, response: AuthenticationResponseJSON, device: DeviceChoice = {}): Promise<{ token: string } | null> {
   return withSignInScope(pool, async (c) => {
     const challenge = challengeOf(response.response.clientDataJSON);
     if (!(await takeChallenge(c, "sign_in", challenge, null))) return null;
     const accountId = await verifyAssertion(c, cfg, response, challenge);
     if (!accountId) return null;
     await c.query("SELECT set_config('app.user_account_id', $1, true)", [accountId]);
-    const token = await createSession(c, cfg, accountId, true);
     await auditAsAccount(c, accountId, "session.signed_in", { mfa_used: true, method: "passkey" });
+    const token = await createSession(c, cfg, accountId, true, device);
     return { token };
   });
 }

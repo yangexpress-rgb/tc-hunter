@@ -1,4 +1,4 @@
-import { emailStatus, hasFreshStepUp, listDevices, listPasskeys, passkeysAvailable, recoveryCodesLeft, verifyOwnAuditChain, withApplicant } from "@tc-hunter/db";
+import { emailStatus, hasFreshStepUp, listDevices, listPasskeys, listSignedInDevices, passkeysAvailable, recoveryCodesLeft, verifyOwnAuditChain, withApplicant } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details, Status } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -8,7 +8,7 @@ import { Flash } from "@/components/profile/Fact";
 import { AddPasskey, ConfirmWithPasskey } from "@/components/profile/PasskeyButtons";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { MfaSetup, RemakeCodes } from "./MfaSetup";
-import { signOutAction } from "./actions";
+import { signOutAction, signOutDeviceAction } from "./actions";
 import { eraseAction, removePasskeyAction, stepUpAction } from "./vault-actions";
 import { checkEmailAction, disconnectEmailAction } from "./email-actions";
 import { googleClient } from "@/lib/email";
@@ -29,6 +29,7 @@ export default async function SettingsPage(props: PageProps) {
   const email = await emailStatus(pool, cfg, session);
   const emailReady = googleClient() !== null;
   const devices = await listDevices(pool, session);
+  const signedIn = await listSignedInDevices(pool, session);
   const codesLeft = session.mfaEnabled ? await recoveryCodesLeft(pool, session) : 0;
   const h = await headers();
   const origin = process.env.TC_PUBLIC_ORIGIN || `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost"}`;
@@ -81,6 +82,30 @@ export default async function SettingsPage(props: PageProps) {
         {!canPasskey ? <p className="hint">{t("settings.passkeys.unavailable")}</p>
           : fresh ? <AddPasskey text={{ cta: t("settings.passkeys.add"), failed: t("settings.passkeys.failed"), label: "Name it so you know which device it is" }} />
           : <p className="hint">{t("settings.confirm.intro")} <a href="#confirm">{t("settings.confirm.title")}</a></p>}
+      </section>
+
+      <section className="card" id="devices">
+        <h2>{t("settings.devices.title")}</h2>
+        <p>{t("settings.devices.intro")}</p>
+        <ul className="plain">
+          {signedIn.map((d) => (
+            <li key={d.id}>
+              {d.label}{d.current ? <strong> · {t("settings.devices.this")}</strong> : null}{" "}
+              <span className="muted">
+                · signed in {ago(d.signedInAt)}, last used {ago(d.lastSeenAt)} ·{" "}
+                {d.rememberedUntil
+                  ? t("settings.devices.remembered", { date: new Date(d.rememberedUntil).toLocaleDateString("en-US", { dateStyle: "medium" }) })
+                  : t("settings.devices.idle", { minutes: String(cfg.sessionIdleMinutes) })}
+              </span>
+              {!d.current ? (
+                <form action={signOutDeviceAction} className="inline"><input type="hidden" name="id" value={d.id} /><button className="small secondary">{t("settings.devices.sign_out")}</button></form>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+        {signedIn.length > 1 ? (
+          <form action={signOutDeviceAction}><button className="secondary">{t("settings.devices.sign_out_others")}</button></form>
+        ) : null}
       </section>
 
       <section className="card" id="confirm">

@@ -16,7 +16,10 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
       <div className="card">
         <h1>{t("signin.title")}</h1>
         {sp.erased ? <p className="status" role="status">Your account and everything in it have been deleted.</p> : null}
-        <SignInForm labels={{ email: "Email", password: "Password", cta: t("signin.cta") }} />
+        <SignInForm labels={{
+          email: "Email", password: "Password", cta: t("signin.cta"),
+          ...(cfg.rememberDeviceDays > 0 ? { remember: t("signin.remember", { days: String(cfg.rememberDeviceDays) }), rememberHint: t("signin.remember_hint") } : {}),
+        }} />
         {passkeysAvailable(cfg) ? <SignInWithPasskey text={{ cta: t("signin.passkey_cta"), failed: t("signin.passkey_failed") }} /> : null}
         <p className="muted">New here? <a href="/sign-up">{t("signup.title")}</a></p>
       </div>

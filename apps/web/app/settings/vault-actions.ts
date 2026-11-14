@@ -3,11 +3,11 @@ import { redirect } from "next/navigation";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/browser";
 import {
   beginPasskeyRegistration, beginPasskeySignIn, beginPasskeyStepUp, eraseMyData, finishPasskeyRegistration, finishPasskeySignIn,
-  finishPasskeyStepUp, loadSecretStore, removePasskey, stepUp,
+  finishPasskeyStepUp, loadSecretStore, removePasskey, sessionCookieUntil, stepUp,
 } from "@tc-hunter/db";
 import { errorCode } from "@tc-hunter/domain";
 import { allowTry } from "@/lib/rateLimit";
-import { app, clearSessionCookie, log, requireSession, setSessionCookie } from "@/lib/server";
+import { app, clearSessionCookie, deviceChoice, log, requireSession, setSessionCookie } from "@/lib/server";
 
 /** Fresh "is it you?" check with the password, or the two-step code when it is on. */
 export async function stepUpAction(form: FormData): Promise<void> {
@@ -60,11 +60,12 @@ export async function passkeySignInOptions() {
   return guarded(() => beginPasskeySignIn(app().pool, app().cfg));
 }
 
-export async function passkeySignInFinish(response: AuthenticationResponseJSON): Promise<PasskeyResult> {
+export async function passkeySignInFinish(response: AuthenticationResponseJSON, remember = false): Promise<PasskeyResult> {
   if (!(await allowTry("sign_in_passkey"))) return { ok: false, code: "TC_TOO_MANY_TRIES" };
-  const r = await guarded(() => finishPasskeySignIn(app().pool, app().cfg, response));
+  const device = await deviceChoice(remember === true);
+  const r = await guarded(() => finishPasskeySignIn(app().pool, app().cfg, response, device));
   if (r && "token" in r) {
-    await setSessionCookie(r.token);
+    await setSessionCookie(r.token, await sessionCookieUntil(app().pool, r.token));
     return { ok: true };
   }
   return { ok: false, code: (r as PasskeyResult | null)?.code };

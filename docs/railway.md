@@ -94,6 +94,13 @@ Migrations run before each deploy.
 
 Passkeys (Settings › Passkeys) work at the Railway address too, as an extra way in.
 
+**Remember this device.** On the sign-in page, tick *Remember this device for 30 days* on
+your own phone or computer and you won't be asked to sign in there again for 30 days. Leave
+it unticked on a shared computer. *Settings › Where you're signed in* lists every browser
+signed in to your account; sign out any you don't recognise, or *Sign out everywhere else*.
+Approving an application still asks you to confirm it's you. `REMEMBER_DEVICE_DAYS` changes
+the 30 days (0 turns the option off).
+
 ### 5. Turn on nightly backups (Backblaze B2 example)
 
 1. In Backblaze, create a **private** bucket (e.g. `tc-hunter-backups`) and an
@@ -166,7 +173,9 @@ the database's public address from Railway and a one-off copy of the vault onto 
 
 ## What stays protected
 
-- Two-step sign-in is required for every account; each code works once; a sign-in gets 5
+- Two-step sign-in is required for every account, including before a device is remembered;
+  a remembered device stays signed in for at most 30 days and can be signed out from any
+  other device; each code works once; a sign-in gets 5
   tries at the code; 10 wrong tries pause the account for 15 minutes; one address can make
   at most 30 sign-in attempts per 15 minutes.
 - Pages are HTTPS only (Railway's certificate, plus a strict-transport header), can't be
