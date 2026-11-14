@@ -3,7 +3,8 @@ import type pg from "pg";
 import { totpAt } from "@tc-hunter/domain";
 import {
   beginMfaSetup, CODE_TRIES, confirmMfaSetup, getSession, hasFreshStepUp, loadConfig, LOCK_AFTER, mustSetUpMfa, pendingSignIn,
-  recoveryCodesLeft, remakeRecoveryCodes, signIn, signOut, signUp, stepUp, verifySignInCode,
+  listSignedInDevices, recoveryCodesLeft, remakeRecoveryCodes, sessionCookieUntil, signIn, signOut, signOutElsewhere, signUp, stepUp,
+  verifySignInCode,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
@@ -229,5 +230,81 @@ describe("sign-in on a public host", () => {
     expect(await verifySignInCode(pool, cfg, t, totpAt(newSecret, Date.now() + 30_000))).toBe(false);
     await ownerQuery("UPDATE user_account SET mfa_last_step = mfa_last_step - 1 WHERE email = $1", [email]);
     expect(await verifySignInCode(pool, cfg, t, totpAt(newSecret, Date.now() + 30_000))).toBe(true);
+  });
+});
+
+describe("remember this device", () => {
+  const PW2 = "correct horse battery staple 42";
+  async function twoStep(name: string) {
+    const a = await newApplicant(pool, cfg, name);
+    const secret = await beginMfaSetup(pool, cfg, a.session);
+    await confirmMfaSetup(pool, cfg, a.session, totpAt(secret, Date.now() - 30_000));
+    return { ...a, secret, email: `${name.toLowerCase()}@example.test` };
+  }
+  // Each authenticator step works once, so allow the next sign-in to reuse "now + 30s".
+  const nextStep = (email: string) => ownerQuery("UPDATE user_account SET mfa_last_step = NULL WHERE email = $1", [email]);
+
+  it("ticked: the sign-in lasts the remembered days and skips the idle timeout", async () => {
+    const { email, secret } = await twoStep("Rem");
+    const r = await signIn(pool, cfg, email, PW2, { remember: true, label: "Safari on Mac" });
+    expect(r.status).toBe("code_required");
+    const token = (r as { token: string }).token;
+    // Not remembered until the code is right.
+    expect(await sessionCookieUntil(pool, token)).toBeNull();
+    expect(await verifySignInCode(pool, cfg, token, totpAt(secret, Date.now() + 30_000))).toBe(true);
+    const until = await sessionCookieUntil(pool, token);
+    expect(until).not.toBeNull();
+    const days = (new Date(until!).getTime() - Date.now()) / 86_400_000;
+    expect(days).toBeGreaterThan(29.9);
+    expect(days).toBeLessThan(30.1);
+    // Two hours idle: still signed in, and the end date doesn't move.
+    await ownerQuery("UPDATE user_session SET last_seen_at = now() - interval '2 hours' WHERE remembered_until IS NOT NULL");
+    expect(await getSession(pool, cfg, token)).not.toBeNull();
+    expect(new Date((await sessionCookieUntil(pool, token))!).getTime()).toBe(new Date(until!).getTime());
+    // Past the end: signed out.
+    await ownerQuery("UPDATE user_session SET remembered_until = now() - interval '1 minute', expires_at = now() - interval '1 minute' WHERE remembered_until IS NOT NULL");
+    expect(await getSession(pool, cfg, token)).toBeNull();
+    const audit = await ownerQuery("SELECT count(*)::int AS n FROM audit_event WHERE action = 'session.remembered'");
+    expect(audit.rows[0].n).toBeGreaterThan(0);
+  });
+
+  it("not ticked, or turned off: the usual idle timeout", async () => {
+    const { email, secret } = await twoStep("Norem");
+    let token = (await signIn(pool, cfg, email, PW2) as { token: string }).token;
+    expect(await verifySignInCode(pool, cfg, token, totpAt(secret, Date.now() + 30_000))).toBe(true);
+    expect(await sessionCookieUntil(pool, token)).toBeNull();
+    await nextStep(email);
+    const off = { ...cfg, rememberDeviceDays: 0 };
+    token = (await signIn(pool, off, email, PW2, { remember: true }) as { token: string }).token;
+    expect(await verifySignInCode(pool, off, token, totpAt(secret, Date.now() + 30_000))).toBe(true);
+    expect(await sessionCookieUntil(pool, token)).toBeNull();
+  });
+
+  it("lists where you're signed in, and signs out other browsers but not this one", async () => {
+    const { email, secret, token: first } = await twoStep("Devices");
+    const phone = (await signIn(pool, cfg, email, PW2, { remember: true, label: "Safari on iPhone" }) as { token: string }).token;
+    expect(await verifySignInCode(pool, cfg, phone, totpAt(secret, Date.now() + 30_000))).toBe(true);
+    // A sign-in still waiting for its code isn't listed.
+    await nextStep(email);
+    await signIn(pool, cfg, email, PW2, { label: "Firefox on Windows" });
+
+    const me = (await getSession(pool, cfg, first))!;
+    const list = await listSignedInDevices(pool, me);
+    expect(list.map((d) => d.label)).toEqual(["A browser", "Safari on iPhone"]);
+    expect(list[0]!.current).toBe(true);
+    expect(list[1]!.rememberedUntil).not.toBeNull();
+
+    // Someone else's session id can't be signed out from here.
+    const other = await twoStep("Stranger");
+    const otherSession = (await getSession(pool, cfg, other.token))!;
+    expect(await signOutElsewhere(pool, me, otherSession.sessionId)).toBe(0);
+    expect(await getSession(pool, cfg, other.token)).not.toBeNull();
+
+    expect(await signOutElsewhere(pool, me, list[1]!.id)).toBe(1);
+    expect(await getSession(pool, cfg, phone)).toBeNull();
+    expect(await getSession(pool, cfg, first)).not.toBeNull();
+    // "Everywhere else" also ends the half-finished sign-in, and keeps this one.
+    expect(await signOutElsewhere(pool, me)).toBe(1);
+    expect(await getSession(pool, cfg, first)).not.toBeNull();
   });
 });

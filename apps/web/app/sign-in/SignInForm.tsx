@@ -3,12 +3,18 @@ import { useActionState } from "react";
 import { PlainError } from "@/components/Layers";
 import { signInAction, type FormState } from "./actions";
 
-export function SignInForm({ labels }: { labels: { email: string; password: string; cta: string } }) {
+export function SignInForm({ labels }: { labels: { email: string; password: string; cta: string; remember?: string; rememberHint?: string } }) {
   const [state, action, pending] = useActionState<FormState, FormData>(signInAction, {});
   return (
     <form className="stack" action={action}>
       <label>{labels.email}<input name="email" type="email" defaultValue={state.email} autoComplete="username" required /></label>
       <label>{labels.password}<input name="password" type="password" autoComplete="current-password" required /></label>
+      {labels.remember ? (
+        <div>
+          <label className="check"><input type="checkbox" name="remember" /> {labels.remember}</label>
+          {labels.rememberHint ? <p className="hint">{labels.rememberHint}</p> : null}
+        </div>
+      ) : null}
       <PlainError message={state.error} />
       <button type="submit" disabled={pending}>{labels.cta}</button>
     </form>

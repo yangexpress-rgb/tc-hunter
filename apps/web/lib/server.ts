@@ -1,9 +1,9 @@
 import "server-only";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type pg from "pg";
 import { createPool, getSession, loadConfig, mustSetUpMfa, type AppConfig, type Session } from "@tc-hunter/db";
-import { createLogger } from "@tc-hunter/domain";
+import { createLogger, deviceLabel } from "@tc-hunter/domain";
 
 export const SESSION_COOKIE = "tc_session";
 export const log = createLogger();
@@ -22,13 +22,23 @@ export async function sessionToken(): Promise<string | undefined> {
   return (await cookies()).get(SESSION_COOKIE)?.value;
 }
 
-export async function setSessionCookie(token: string): Promise<void> {
+/**
+ * The session cookie. Without `until` it ends when the browser closes; with it
+ * (a remembered device) it lasts until that date, matching the server's own end.
+ */
+export async function setSessionCookie(token: string, until?: Date | null): Promise<void> {
   (await cookies()).set(SESSION_COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production" && process.env.TC_INSECURE_COOKIES !== "true",
     path: "/",
+    ...(until ? { expires: new Date(until) } : {}),
   });
+}
+
+/** What this browser asked for at sign-in: the "remember" tick and a coarse label like "Firefox on Windows". */
+export async function deviceChoice(remember: boolean): Promise<{ remember: boolean; label: string }> {
+  return { remember, label: deviceLabel((await headers()).get("user-agent")) };
 }
 
 export async function clearSessionCookie(): Promise<void> {

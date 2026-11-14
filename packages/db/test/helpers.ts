@@ -38,6 +38,7 @@ export function testConfig(over: Partial<AppConfig> = {}): AppConfig {
     databaseUrl: APP_URL,
     masterKey: randomBytes(32),
     sessionIdleMinutes: 60,
+    rememberDeviceDays: 30,
     stepUpMinutes: 5,
     allowSignup: true,
     requireMfa: true,

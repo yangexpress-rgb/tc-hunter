@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import QRCode from "qrcode";
-import { beginMfaSetup, confirmMfaSetup, remakeRecoveryCodes, signOut } from "@tc-hunter/db";
+import { beginMfaSetup, confirmMfaSetup, remakeRecoveryCodes, signOut, signOutElsewhere } from "@tc-hunter/db";
 import { errorCode, otpauthUri, t } from "@tc-hunter/domain";
 import { app, clearSessionCookie, requireSession, requireSessionForSetup, sessionToken } from "@/lib/server";
 
@@ -41,4 +41,14 @@ export async function signOutAction(): Promise<void> {
   await signOut(pool, await sessionToken());
   await clearSessionCookie();
   redirect("/sign-in");
+}
+
+/** Signs out one other browser (by id), or every other one. This browser stays signed in. */
+export async function signOutDeviceAction(form: FormData): Promise<void> {
+  const session = await requireSession();
+  const id = String(form.get("id") ?? "");
+  const one = /^[0-9a-f-]{36}$/i.test(id) ? id : undefined;
+  if (id && !one) redirect("/settings#devices");
+  await signOutElsewhere(app().pool, session, one);
+  redirect("/settings?saved=1#devices");
 }

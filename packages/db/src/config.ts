@@ -4,6 +4,8 @@ export interface AppConfig {
   databaseUrl: string;
   masterKey: Buffer;
   sessionIdleMinutes: number;
+  /** Days a "remember this device" sign-in lasts. 0 turns the option off. */
+  rememberDeviceDays: number;
   stepUpMinutes: number;
   allowSignup: boolean;
   /**
@@ -23,6 +25,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databaseUrl: env.DATABASE_URL,
     masterKey: parseMasterKey(env.TC_MASTER_KEY),
     sessionIdleMinutes: Number(env.SESSION_IDLE_MINUTES ?? 60),
+    rememberDeviceDays: Math.max(0, Math.min(90, Number(env.REMEMBER_DEVICE_DAYS ?? 30) || 0)),
     stepUpMinutes: Number(env.STEP_UP_MINUTES ?? 5),
     // Household server: sign-up is open only until both accounts exist, then the operator closes it.
     allowSignup: env.ALLOW_SIGNUP !== "false" && (!onPublicHost(env) || Boolean(env.SIGNUP_CODE)),
