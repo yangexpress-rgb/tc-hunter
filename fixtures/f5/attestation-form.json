@@ -6,7 +6,7 @@
     { "label": "Email", "type": "email", "source": "master_profile" },
     { "label": "Resume", "type": "file", "source": "tailored_doc" },
     { "label": "Notice period", "type": "text", "source": "answer_bank" },
-    { "label": "Are you legally authorised to work in this country?", "type": "select", "applicant_step": "work_auth" },
+    { "label": "Are you legally authorised to work in this country?", "type": "select", "source": "answer_bank", "_decision": "13.7: filled from the approved saved answer (Yong, 2026-11-14)" },
     { "label": "I certify that the information in this application is true and complete.", "type": "checkbox", "applicant_step": "attestation" }
   ],
   "confirmation_id_shown": "GH-DEMO-48213"

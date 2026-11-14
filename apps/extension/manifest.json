@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "TC Hunter",
+  "version": "0.4.0",
+  "description": "Types the answers you approved in TC Hunter into an application form. You always press Submit yourself.",
+  "action": { "default_popup": "popup.html", "default_title": "TC Hunter" },
+  "options_page": "options.html",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "minimum_chrome_version": "116"
+}

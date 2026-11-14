@@ -1,4 +1,4 @@
-import { emailStatus, hasFreshStepUp, listPasskeys, passkeysAvailable, verifyOwnAuditChain, withApplicant } from "@tc-hunter/db";
+import { emailStatus, hasFreshStepUp, listDevices, listPasskeys, passkeysAvailable, verifyOwnAuditChain, withApplicant } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details, Status } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -12,6 +12,9 @@ import { signOutAction } from "./actions";
 import { eraseAction, removePasskeyAction, stepUpAction } from "./vault-actions";
 import { checkEmailAction, disconnectEmailAction } from "./email-actions";
 import { googleClient } from "@/lib/email";
+import { headers } from "next/headers";
+import { PairBrowser } from "./PairBrowser";
+import { removeBrowserAction } from "./browser-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +28,9 @@ export default async function SettingsPage(props: PageProps) {
   const broken = await withApplicant(pool, ctx, verifyOwnAuditChain);
   const email = await emailStatus(pool, cfg, session);
   const emailReady = googleClient() !== null;
+  const devices = await listDevices(pool, session);
+  const h = await headers();
+  const origin = process.env.TC_PUBLIC_ORIGIN || `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost"}`;
   const ago = (d: Date | null) => (d ? new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d)) : "not yet");
   return (
     <>
@@ -111,6 +117,32 @@ export default async function SettingsPage(props: PageProps) {
             <li>The permission Google gives is kept in your own locked vault, never in TC Hunter&apos;s records. Nobody else in the household can see your mail or anything taken from it.</li>
             <li>Disconnecting tells Google to forget the permission and deletes everything taken from your mail.</li>
           </ul>
+        </Details>
+      </section>
+
+      <section className="card" id="browser">
+        <h2>Your browser</h2>
+        {params.browser === "removed" ? <Status>Removed. That browser can&apos;t fill forms any more.</Status> : null}
+        <p>The TC Hunter extension types your approved answers into an employer&apos;s application form. You check every answer here first, and you always press Submit yourself.</p>
+        {devices.length ? (
+          <ul className="plain">
+            {devices.map((d: { id: string; label: string; created_at: Date; last_used_at: Date | null }) => (
+              <li key={d.id}>{d.label} <span className="muted">· paired {ago(d.created_at)}{d.last_used_at ? `, last used ${ago(d.last_used_at)}` : ""}</span>
+                <form action={removeBrowserAction} className="inline"><input type="hidden" name="id" value={d.id} /><button className="small secondary">Remove</button></form>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {fresh ? <PairBrowser origin={origin} /> : <p className="hint">{t("settings.confirm.intro")} <a href="#confirm">{t("settings.confirm.title")}</a></p>}
+        <Details summary="What the extension can and can't do">
+          <ul>
+            <li>It only works on a page when you click its button. It can&apos;t see your other tabs or browsing.</li>
+            <li>It reads the questions on the form so TC Hunter can suggest answers. Nothing is typed until you approve them here.</li>
+            <li>It never ticks a statement you confirm, answers personal questions, consents or signatures, or solves a &quot;you&apos;re a person&quot; check. Those are always yours. Right-to-work questions are filled only from the answer you saved and approved in your profile.</li>
+            <li>It never presses Submit. You do, on the employer&apos;s site.</li>
+            <li>Removing a browser here stops it at once.</li>
+          </ul>
+          <p className="muted">Install it from the <code>apps/extension</code> folder: the setup guide shows how.</p>
         </Details>
       </section>
 

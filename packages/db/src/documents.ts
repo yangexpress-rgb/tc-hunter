@@ -369,7 +369,7 @@ export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Se
          generation_meta = coalesce(generation_meta, '{}'::jsonb) || jsonb_build_object('rendered_at', $5::text), updated_at = now() WHERE id = $1`,
       [docId, hashOf(source), sha(r.pdf), sha(r.docx), when.toISOString()]);
     await recordAudit(c, "document.approved", { objectType: "document", objectId: docId, payload: { document_ref: d.public_ref, type: d.type, version: d.version, content_hash: hashOf(source) } });
-    if (d.type === "resume") {
+    if (d.type === "tailored_resume") {
       const jobRef = (await c.query("SELECT public_ref FROM job_posting WHERE id = $1", [d.job_posting_id])).rows[0]?.public_ref;
       if (jobRef) await ensureApplication(c, jobRef, "ready_to_apply");
     }

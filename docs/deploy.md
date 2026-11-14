@@ -42,6 +42,12 @@ This is the household setup (design §7.1). It runs the same way on a small VPS.
 
     What it does: the `worker` looks at recent mail mentioning employers you track, about once an hour, through the `egress-worker` gate. The web app reaches only `oauth2.googleapis.com` (for the sign-in) through `egress-proxy`. The Google token is kept in that person's vault, never in the database. From mail, only the kind of reply, the date and the sender's domain are kept. Mail is never sent to Claude. Nothing changes until the person taps *Yes, move it*. *Disconnect* revokes the token with Google and deletes everything taken from mail.
 
+13. **The browser extension (Phase 4b, optional).** It types the answers you approved into an employer's application form. You always press Submit yourself.
+    1. Copy the `apps/extension` folder to each person's computer.
+    2. In Chrome or Edge, open `chrome://extensions`, turn on *Developer mode*, choose *Load unpacked* and pick that folder.
+    3. In TC Hunter: Settings › Your browser › *Pair this browser* (confirm it's you first). Paste the address and key it shows into the extension's settings (right-click the TC Hunter button › Options) and allow access to the TC Hunter address when asked.
+    4. Each person pairs their own browser; a key only ever sees that person's applications. Removing it in Settings stops it at once.
+
 ## Backups
 
 - Every night (03:15 UTC by default) the `backup` service dumps the database and the vault, encrypts them with your age public key, copies the file to your off-site remote, and prunes old copies (7 days on the server, 60 off-site).

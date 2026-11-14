@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { budgetNow, getApplication, listEmailSignals, trackerSummary } from "@tc-hunter/db";
+import { budgetNow, getApplication, getPacket, listDevices, listEmailSignals, trackerSummary } from "@tc-hunter/db";
 import { APPLICATION_STAGES, CLOSED, OUTCOME_LABEL, STAGE_LABEL, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -7,6 +7,7 @@ import { Flash } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
 import { BudgetLine, dateInput, day, localInput, when } from "@/components/applications/AppBits";
 import { EmailSuggestions } from "@/components/applications/EmailSuggestions";
+import { PacketCard } from "@/components/applications/Packet";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { interviewAction, nextStepAction, notesAction, outcomeAction, stageAction } from "../actions";
@@ -37,7 +38,8 @@ export default async function ApplicationPage(props: Props) {
   const { ref } = await props.params;
   if (!/^A-\d{1,12}$/.test(ref)) notFound();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, a, sum, signals] = await Promise.all([flashOf(props), getApplication(pool, cfg, session, ref), trackerSummary(pool, session), listEmailSignals(pool, session, ref)]);
+  const [{ saved, error, params }, a, sum, signals, packet, devices] = await Promise.all([flashOf(props), getApplication(pool, cfg, session, ref),
+    trackerSummary(pool, session), listEmailSignals(pool, session, ref), getPacket(pool, cfg, session, ref), listDevices(pool, session)]);
   if (!a) notFound();
   const tz = sum.timeZone;
   const back = `/applications/${a.public_ref}`;
@@ -46,6 +48,8 @@ export default async function ApplicationPage(props: Props) {
   const resume = (a.docs as Array<{ public_ref: string; type: string; version: number; status: string }>).find((d) => d.type === "tailored_resume");
   const letter = (a.docs as Array<{ public_ref: string; type: string; version: number; status: string }>).find((d) => d.type === "cover_letter");
   const budget = stage === "ready_to_apply" || stage === "tailoring" || stage === "interested" ? await budgetNow(pool, session) : null;
+  const packetActive = !!packet && ["approved_to_apply", "filling", "waiting_for_applicant", "ready_to_submit"].includes(packet.state);
+  const confirmation = typeof params.confirmation === "string" && /^[A-Za-z0-9#:/._ -]{1,100}$/.test(params.confirmation) ? params.confirmation : "";
 
   return (
     <>
@@ -69,13 +73,19 @@ export default async function ApplicationPage(props: Props) {
         </section>
       ) : null}
 
-      {stage === "ready_to_apply" || stage === "tailoring" || stage === "interested" ? (
+      {params.approved === "1" ? <p className="status" role="status">Approved. Nothing has been typed or sent yet.</p> : null}
+      {params.submitted === "1" ? <p className="status" role="status">Recorded as applied. Your receipt is ready below.</p> : null}
+      {packet ? (
+        <PacketCard p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} />
+      ) : null}
+
+      {(stage === "ready_to_apply" || stage === "tailoring" || stage === "interested") && !packetActive ? (
         <section className="card" aria-label="I applied">
           <h2>Applied already?</h2>
           <p className="muted">TC Hunter never sends anything for you. Apply on the employer's site, then tell us here.
             {a.apply_url ? <> <a href={a.apply_url} rel="noopener noreferrer" target="_blank">Open the employer's page</a></> : null}</p>
           {resume?.status === "approved" ? <p className="muted">Your files: <a href={`/documents/${resume.public_ref}/pdf`}>resume (PDF)</a>{letter?.status === "approved" ? <>, <a href={`/documents/${letter.public_ref}/pdf`}>cover letter (PDF)</a></> : null}</p> : null}
-          {budget ? <BudgetLine budget={budget} /> : null}
+          {budget && !packet ? <BudgetLine budget={budget} /> : null}
           <form action={stageAction} className="inline-form">
             <Hidden appRef={a.public_ref} back={back} />
             <input type="hidden" name="stage" value="applied" />
@@ -83,6 +93,12 @@ export default async function ApplicationPage(props: Props) {
             <label>Confirmation number (optional)<input name="confirmation" maxLength={200} /></label>
             <button>I applied</button>
           </form>
+          {resume?.status === "approved" && !packet ? (
+            <Details summary="Let TC Hunter type your answers into their form">
+              <p className="muted">Open the employer's application form, then choose the TC Hunter button in your browser. You'll check every answer here before anything is typed, and you press Submit yourself.</p>
+              {devices.length ? <p className="muted">Paired: {devices.map((d: { label: string }) => d.label).join(", ")}.</p> : <p><a href="/settings#browser">Pair your browser first</a></p>}
+            </Details>
+          ) : null}
         </section>
       ) : null}
 

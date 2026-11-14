@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, dismissEmailSignal, resetCalibration, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, markSubmitted, dismissEmailSignal, resetCalibration, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -85,5 +85,28 @@ export async function emailSignalAction(form: FormData) {
   const s = await requireSession();
   const id = String(form.get("signal") ?? "");
   const { pool } = app();
-  await act(form, () => (form.get("do") === "dismiss" ? dismissEmailSignal(pool, s, id) : acceptEmailSignal(pool, s, id)), "/applications", form.get("do") === "dismiss" ? "dismissed" : "moved");
+  await act(form, () => (form.get("do") === "dismiss" ? dismissEmailSignal(pool, s, id) : acceptEmailSignal(pool, s, id, app().cfg)), "/applications", form.get("do") === "dismiss" ? "dismissed" : "moved");
+}
+
+export async function packetAnswerAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const { pool, cfg } = app();
+  await act(form, () => answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), String(form.get("answer") ?? "")), `/applications/${ref}#packet`);
+}
+
+/** "Approve these answers": bound to the exact packet the applicant was shown (its hash). */
+export async function packetApproveAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  await act(form, () => approvePacket(app().pool, s, String(form.get("packet") ?? ""), String(form.get("hash") ?? ""), String(form.get("rk") ?? "")),
+    `/applications/${ref}#packet`, "approved");
+}
+
+/** "I submitted it": the applicant pressed Submit on the employer's site themselves. */
+export async function submittedAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const { pool, cfg } = app();
+  await act(form, () => markSubmitted(pool, cfg, s, ref, str(form, "confirmation")), `/applications/${ref}#packet`, "submitted");
 }

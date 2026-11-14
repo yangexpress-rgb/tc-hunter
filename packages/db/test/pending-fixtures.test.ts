@@ -24,8 +24,6 @@ describe("F5 application flow (Phase 4b assisted, Phase 5 full)", () => {
       if (f.applicant_step) expect(f.source).toBeUndefined();
     }
   });
-  it.todo("packet review shows every field with its source");
-  it.todo("pauses at the attestation and never checks it");
-  it.todo("captures the confirmation id verbatim");
-  it.todo("re-running F5 leaves one application, one submitted packet and one submission audit event");
+  // The assisted behaviour tests are real since Phase 4b: packages/db/test/f5-assist.test.ts and apps/extension/test.
+  // Full F5 (automation presses Submit) waits for Phase 5.
 });

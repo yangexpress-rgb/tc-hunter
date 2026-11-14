@@ -15,3 +15,4 @@ export * from "./matches";
 export * from "./documents";
 export * from "./tracker";
 export * from "./email";
+export * from "./assist";

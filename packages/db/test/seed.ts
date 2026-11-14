@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type pg from "pg";
 import { encryptField, unwrapDataKey, MemorySecretStore, SecretValue, type SecretStore } from "@tc-hunter/domain";
 import { withApplicant, recordAudit, type AppConfig, type Session } from "../src";
@@ -112,6 +113,8 @@ export async function seedEverything(
       ON CONFLICT (applicant_id) DO UPDATE SET updated_at = now() RETURNING id`, [me, vaultRef]);
     await one("email_signal", `INSERT INTO email_signal (applicant_id, application_id, message_id, kind, suggested_stage, sender_domain, received_at)
       VALUES ($1, $2, $3, 'interview', 'interview', 'contoso.example', now()) RETURNING id`, [me, ids.application, `seed${Date.now()}${Math.floor(Math.random() * 1e6)}`]);
+    await one("extension_device", "INSERT INTO extension_device (applicant_id, label, token_hash) VALUES ($1, 'Seed browser', $2) RETURNING id",
+      [me, randomBytes(32).toString("hex")]);
     return ids;
   });
 }
