@@ -331,3 +331,13 @@ details.more[open] { display: flex; flex-direction: column-reverse; }
 .prompt-label { display: block; width: 100%; }
 .prompt-edit { width: 100%; min-height: 480px; max-height: none; }
 form.stack.wide { max-width: none; }
+
+/* Jobs: one table per goal */
+.view-switch { display: inline-flex; gap: 4px; }
+.goal-table h2 .count { font-size: 14px; font-weight: 400; margin-left: 6px; }
+table.jobs-matrix th a { color: inherit; text-decoration: none; }
+table.jobs-matrix th a:hover { text-decoration: underline; }
+table.jobs-matrix td { vertical-align: middle; }
+table.jobs-matrix td.wrap { white-space: normal; min-width: 160px; }
+table.jobs-matrix tr.is-filtered td { color: var(--muted); }
+table.jobs-matrix tr.is-unseen td:nth-child(2) a { font-weight: 600; }
