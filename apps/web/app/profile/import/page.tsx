@@ -7,7 +7,7 @@ import { DigestChip, fileSize } from "@/components/profile/Digest";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { importAction, saveLinkedInAction } from "../actions";
+import { importAction, redigestAction, saveLinkedInAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +52,7 @@ export default async function ImportPage(props: PageProps) {
       <section className="card" id="linkedin">
         <h2>Your LinkedIn profile</h2>
         <p>Paste the link to your LinkedIn profile. We keep it on your profile for applications, and try to read the profile as a second source alongside your resume. Anything already in your profile is matched, not added twice.</p>
-        {li ? <p className="status" role="status">{LINKEDIN_RESULT[li] ?? LINKEDIN_RESULT.unreachable}</p> : null}
+        {li ? <p className="error" role="alert">{LINKEDIN_RESULT[li] ?? LINKEDIN_RESULT.unreachable}</p> : null}
         <form action={saveLinkedInAction} className="stack">
           <label>Profile link<input name="linkedin" placeholder="linkedin.com/in/your-name" defaultValue={profile.about.links?.linkedin ?? ""} /></label>
           <button>Save and read my LinkedIn</button>
@@ -62,12 +62,21 @@ export default async function ImportPage(props: PageProps) {
       {files.length ? (
         <section>
           <h2>Your original files</h2>
+          <p className="muted">Re-scan reads a file again from the start. Rows you have confirmed stay; unconfirmed rows from its last reading are replaced.</p>
           <ul className="plain-list">
             {files.map((f) => (
-              <li key={f.id} className="card">
-                <a href={`/profile/resumes/${f.id}`}><strong>{f.fileName}</strong></a>
-                <span className="muted"> · {fileSize(f.byteSize)} · uploaded {new Date(f.createdAt).toLocaleDateString("en-US")}</span>
-                {" "}<DigestChip digest={f.latest} />
+              <li key={f.id} className="card file-row">
+                <div>
+                  <a href={`/profile/resumes/${f.id}`}><strong>{f.fileName}</strong></a>
+                  <span className="muted"> · {fileSize(f.byteSize)} · uploaded {new Date(f.createdAt).toLocaleDateString("en-US")}</span>
+                  {" "}<DigestChip digest={f.latest} />
+                </div>
+                {f.latest && ["ready", "failed", "replaced"].includes(f.latest.status) || f.latest?.stuck ? (
+                  <form action={redigestAction}>
+                    <input type="hidden" name="file_id" value={f.id} />
+                    <button className="small">Re-scan</button>
+                  </form>
+                ) : null}
               </li>
             ))}
           </ul>

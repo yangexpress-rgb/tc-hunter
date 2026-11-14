@@ -59,6 +59,9 @@ export default async function ResumeFilePage(props: Props) {
           {canView ? <a className="button small" href={`/profile/resumes/${file.id}/file`} target="_blank" rel="noopener">Open</a> : null}
           <a className="button small secondary" href={`/profile/resumes/${file.id}/file?download=1`}>Download</a>
           {file.fileKind !== "zip" ? <a className="button small secondary" href={`/profile/resumes/${file.id}?text=1#text`}>See the text we read</a> : null}
+          {d && !running ? (
+            <form action={redigestAction}><input type="hidden" name="file_id" value={file.id} /><button className="small">Re-scan this file</button></form>
+          ) : null}
         </div>
       </section>
 
@@ -131,14 +134,9 @@ export default async function ResumeFilePage(props: Props) {
                 </select>
               </label>
             ))}
-            <button className="secondary">Read my file again with these choices</button>
+            <button className="secondary">Re-scan with these choices</button>
           </form>
         </section>
-      ) : d && !running && file.fileKind !== "zip" ? (
-        <form action={redigestAction}>
-          <input type="hidden" name="file_id" value={file.id} />
-          <button className="secondary">Read my file again</button>
-        </form>
       ) : null}
 
       {showText ? (

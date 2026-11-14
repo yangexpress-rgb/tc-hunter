@@ -50,7 +50,7 @@ export function DigestProgress({ digest }: { digest: DigestView }) {
           </li>
         );
       })}
-      {failed ? <li className="failed">{digest.stuck ? "Stopped part-way. Read it again below." : seen.get("failed")?.detail ?? digest.error}</li> : null}
+      {failed ? <li className="failed">{digest.stuck ? "Stopped part-way. Use Re-scan to read it again." : seen.get("failed")?.detail ?? digest.error}</li> : null}
     </ol>
   );
 }
