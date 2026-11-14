@@ -42,6 +42,41 @@ export default async function SourcesPage(props: PageProps) {
   const searchRows = new Map(sources.filter((s) => s.origin === "search").map((s) => [s.url, s]));
   const sites = searchSites(process.env).status;
   const HOME: Record<string, string> = { adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com" };
+  // One row per source for the status table: job sites (on or not), LinkedIn alerts, and every followed page.
+  type StatusRow = { key: string; name: string; kind: string; status: string; last: Date | null; jobs: number; reason: string; link?: { href: string; label: string } };
+  const table: StatusRow[] = [
+    ...sites.filter((x) => !x.on).map((x) => ({ key: `off-${x.id}`, name: x.name, kind: "Job search site", status: "Off", last: null, jobs: 0,
+      reason: `Needs ${x.needs}.`, link: { href: x.signup!, label: "Get one free" } })),
+    ...sources.map((s) => {
+      const never = !s.last_checked_at;
+      const failed = !never && s.health !== "ok";
+      return { key: s.id, name: s.name, kind: s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : KIND[s.kind] ?? "Jobs page",
+        status: never ? "Not searched yet" : failed ? "Failed" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
+        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : "" };
+    }),
+    ...(!searchRows.has("https://www.linkedin.com/jobs/") ? [{ key: "linkedin", name: "LinkedIn job alerts", kind: "LinkedIn alert emails", status: "Not set up", last: null, jobs: 0,
+      reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
+  ];
+  const KINDS = [...new Set(table.map((r) => r.kind))].sort();
+  const STATUSES = ["Succeeded", "Failed", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
+  const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
+  const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
+  const fQ = (params.q ?? "").slice(0, 60);
+  const COLS = [["name", "Source"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
+  const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "status") as (typeof COLS)[number][0];
+  const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
+  const RANK: Record<string, number> = { Failed: 0, Off: 1, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
+  const val = (r: StatusRow): string | number => sortBy === "status" ? RANK[r.status] ?? 9 : sortBy === "last" ? r.last ? new Date(r.last).getTime() : -1
+    : sortBy === "jobs" ? r.jobs : String(r[sortBy]).toLowerCase();
+  const shown = table.filter((r) => (!fKind || r.kind === fKind) && (!fStatus || r.status === fStatus) && (!fQ || r.name.toLowerCase().includes(fQ.toLowerCase())))
+    .sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : a.name.localeCompare(b.name)) * (dir === "asc" ? 1 : -1); });
+  const failedCount = table.filter((r) => r.status === "Failed").length;
+  const href = (over: Record<string, string>) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries({ kind: fKind, status: fStatus, q: fQ, ...over })) if (v) p.set(k, v);
+    return `/jobs/sources?${p}#status`;
+  };
+
   const Row = ({ s }: { s: (typeof sources)[number] }) => (
     <li className="card source-row">
       <div>
@@ -74,31 +109,38 @@ export default async function SourcesPage(props: PageProps) {
 
       <section className="card" id="status">
         <h2>Every source, and how its last search went</h2>
+        <form method="get" action="/jobs/sources#status" className="fields">
+          <label>Kind<select name="kind" defaultValue={fKind}><option value="">All</option>{KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
+          <label>Status<select name="status" defaultValue={fStatus}><option value="">All</option>{STATUSES.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
+          <label>Name<input name="q" defaultValue={fQ} placeholder="e.g. Adzuna" /></label>
+          {sortBy !== "status" ? <input type="hidden" name="sort" value={sortBy} /> : null}
+          {params.dir ? <input type="hidden" name="dir" value={dir} /> : null}
+          <button className="small">Filter</button>
+          {fKind || fStatus || fQ ? <a href="/jobs/sources#status">Clear</a> : null}
+        </form>
+        <p className="muted small">{shown.length} of {table.length} sources{failedCount ? <> · <span className="error">{failedCount} failed last time</span></> : null}</p>
         <div className="table-wrap">
-          <table className="report">
-            <thead><tr><th scope="col">Source</th><th scope="col">Kind</th><th scope="col">Last searched</th><th scope="col">Result</th><th scope="col" className="num">Open jobs</th></tr></thead>
-            <tbody>
-              {sites.filter((x) => !x.on).map((x) => (
-                <tr key={x.id}><td>{x.name}</td><td>Job search site</td><td>Never</td>
-                  <td className="error">Not searched: needs {x.needs}. <a href={x.signup} target="_blank" rel="noreferrer">Get one free</a></td><td className="num">0</td></tr>
-              ))}
-              {sources.map((s) => {
-                const never = !s.last_checked_at;
-                const failed = !never && s.health !== "ok";
-                return (
-                  <tr key={s.id}>
-                    <td>{s.name}</td>
-                    <td>{s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : KIND[s.kind] ?? "Jobs page"}</td>
-                    <td>{never ? "Not yet" : ago(s.last_checked_at)}</td>
-                    <td className={failed ? "error" : never ? "muted" : ""}>{never ? "Waiting for the next search" : failed ? `Failed: ${why(s.health_reason)}` : "Succeeded"}</td>
-                    <td className="num">{s.open_jobs}</td>
-                  </tr>
-                );
+          <table className="report jobs-matrix">
+            <thead><tr>
+              {COLS.map(([k, label]) => {
+                const on = sortBy === k;
+                const next = on ? (dir === "asc" ? "desc" : "asc") : k === "jobs" || k === "last" ? "desc" : "asc";
+                return <th key={k} scope="col" className={k === "jobs" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+                  <a href={href({ sort: k, dir: next })}>{label}{on ? (dir === "asc" ? " ▲" : " ▼") : ""}</a></th>;
               })}
-              {!searchRows.has("https://www.linkedin.com/jobs/") ? (
-                <tr><td>LinkedIn job alerts</td><td>LinkedIn alert emails</td><td>Never</td>
-                  <td className="muted">Not set up yet. <a href="/profile/goals#linkedin">How to turn it on</a></td><td className="num">0</td></tr>
-              ) : null}
+            </tr></thead>
+            <tbody>
+              {shown.map((r) => (
+                <tr key={r.key}>
+                  <td>{r.name}</td>
+                  <td>{r.kind}</td>
+                  <td className={r.status === "Failed" || r.status === "Off" ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
+                  <td>{r.last ? ago(r.last) : "Never"}</td>
+                  <td className="num">{r.jobs}</td>
+                  <td className={r.status === "Failed" || r.status === "Off" ? "error wrap" : "muted wrap"}>{r.reason}{r.link ? <> <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a></> : null}</td>
+                </tr>
+              ))}
+              {shown.length === 0 ? <tr><td colSpan={6} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>
