@@ -7,7 +7,8 @@ A household job-hunting workspace for two people, each with their own private wo
 TC Hunter is an independent personal project and is not affiliated with, endorsed by, or connected to Tim Cook or Apple.
 
 - **Design of record:** [docs/design.md](docs/design.md)
-- **Home server setup:** [docs/deploy.md](docs/deploy.md)
+- **Hosting (Railway):** [docs/railway.md](docs/railway.md)
+- **Home server setup (fallback):** [docs/deploy.md](docs/deploy.md)
 - **Status:** Phase 0 (foundations) built, awaiting review.
 
 ## Develop

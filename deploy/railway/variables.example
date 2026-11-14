@@ -1,0 +1,38 @@
+# TC Hunter on Railway: paste into the service's Variables › Raw Editor, then fill in.
+# Never commit real values. See docs/railway.md.
+
+# Database: Railway fills this from the Postgres service. The app itself connects as the
+# restricted tc_app role (derived from this URL plus DB_APP_PASSWORD), never as the owner.
+DATABASE_OWNER_URL=${{Postgres.DATABASE_URL}}
+# openssl rand -hex 32
+DB_APP_PASSWORD=
+
+# openssl rand -base64 32  (each; keep both copies offline in your password manager)
+TC_MASTER_KEY=
+TC_VAULT_KEY=
+
+# Accounts: a code Yong and Leo type when creating their accounts. Without it, sign-up stays closed.
+SIGNUP_CODE=
+# After both accounts exist, set ALLOW_SIGNUP=false.
+ALLOW_SIGNUP=true
+
+# Optional: Claude reads resumes and job requirements.
+ANTHROPIC_API_KEY=
+
+# Optional: connected Gmail (read-only). Redirect URI in Google Cloud:
+#   https://<your-app>.up.railway.app/settings/email/callback
+TC_GOOGLE_CLIENT_ID=
+TC_GOOGLE_CLIENT_SECRET=
+
+# Nightly encrypted off-site backup (03:15 UTC). The age PUBLIC key only; the private key stays offline.
+BACKUP_AGE_RECIPIENT=age1...
+BACKUP_REMOTE=b2:your-bucket-name/tc-hunter
+# The rclone remote, described in variables (example: Backblaze B2, remote name "b2").
+RCLONE_CONFIG_B2_TYPE=b2
+RCLONE_CONFIG_B2_ACCOUNT=
+RCLONE_CONFIG_B2_KEY=
+# Set to true for one deploy to run a backup a minute after start, to test it.
+BACKUP_ON_START=false
+
+# TC_PUBLIC_ORIGIN is set automatically from your Railway domain. Set it only if you add your own domain.
+# TC_PUBLIC_ORIGIN=https://jobs.example.com

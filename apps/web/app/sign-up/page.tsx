@@ -15,7 +15,7 @@ export default function SignUpPage() {
         {cfg.allowSignup ? (
           <>
             <p className="muted">{t("settings.privacy")}</p>
-            <SignUpForm cta={t("signup.cta")} />
+            <SignUpForm cta={t("signup.cta")} needsCode={Boolean(cfg.signupCode)} />
           </>
         ) : (
           <p>{t("signup.closed")}</p>

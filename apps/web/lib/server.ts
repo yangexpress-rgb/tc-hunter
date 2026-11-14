@@ -2,7 +2,7 @@ import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type pg from "pg";
-import { createPool, getSession, loadConfig, type AppConfig, type Session } from "@tc-hunter/db";
+import { createPool, getSession, loadConfig, mustSetUpMfa, type AppConfig, type Session } from "@tc-hunter/db";
 import { createLogger } from "@tc-hunter/domain";
 
 export const SESSION_COOKIE = "tc_session";
@@ -35,8 +35,18 @@ export async function clearSessionCookie(): Promise<void> {
   (await cookies()).delete(SESSION_COOKIE);
 }
 
-/** Every signed-in page starts here. No session: back to sign-in. */
+/**
+ * Every signed-in page and action starts here. No session: back to sign-in.
+ * Two-step sign-in not set up yet (and required): to its setup page, nothing else.
+ */
 export async function requireSession(): Promise<Session> {
+  const session = await requireSessionForSetup();
+  if (mustSetUpMfa(session, app().cfg)) redirect("/setup-two-step");
+  return session;
+}
+
+/** Only for the two-step setup page and its actions: a signed-in person who may not have two-step on yet. */
+export async function requireSessionForSetup(): Promise<Session> {
   const { pool, cfg } = app();
   const session = await getSession(pool, cfg, await sessionToken());
   if (!session) redirect("/sign-in");

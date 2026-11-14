@@ -6,6 +6,7 @@ import {
   finishPasskeyStepUp, loadSecretStore, removePasskey, stepUp,
 } from "@tc-hunter/db";
 import { errorCode } from "@tc-hunter/domain";
+import { allowTry } from "@/lib/rateLimit";
 import { app, clearSessionCookie, log, requireSession, setSessionCookie } from "@/lib/server";
 
 /** Fresh "is it you?" check with the password, or the two-step code when it is on. */
@@ -60,6 +61,7 @@ export async function passkeySignInOptions() {
 }
 
 export async function passkeySignInFinish(response: AuthenticationResponseJSON): Promise<PasskeyResult> {
+  if (!(await allowTry("sign_in_passkey"))) return { ok: false, code: "TC_TOO_MANY_TRIES" };
   const r = await guarded(() => finishPasskeySignIn(app().pool, app().cfg, response));
   if (r && "token" in r) {
     await setSessionCookie(r.token);

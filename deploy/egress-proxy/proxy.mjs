@@ -36,25 +36,40 @@ export function isPrivateAddress(ip) {
 
 const log = (event, extra) => console.log(JSON.stringify({ at: new Date().toISOString(), event, ...extra }));
 
-const server = http.createServer((_req, res) => { res.writeHead(405).end(); });
-server.on("connect", async (req, client, head) => {
-  const refuse = (why) => { log("egress.refused", { target: req.url, why }); client.end("HTTP/1.1 403 Forbidden\r\n\r\n"); };
-  if (!allowed(req.url)) return refuse("not allowed");
-  const [host] = req.url.split(":");
-  let addr;
-  try {
-    const all = await dns.lookup(host, { all: true });
-    if (!all.length || all.some((a) => isPrivateAddress(a.address))) return refuse("private address");
-    addr = all[0].address;
-  } catch { return refuse("no such host"); }
-  const upstream = net.connect(443, addr, () => {
-    client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-    if (head?.length) upstream.write(head);
-    upstream.pipe(client); client.pipe(upstream);
+/**
+ * One gate. Compose runs one container per gate; on Railway both gates run inside
+ * the app's own container (deploy/railway/start.mjs), each on its own local port.
+ */
+export function createGate(opts = { anyPublic, allow }) {
+  const server = http.createServer((_req, res) => { res.writeHead(405).end(); });
+  server.on("connect", async (req, client, head) => {
+    const refuse = (why) => { log("egress.refused", { target: req.url, why }); client.end("HTTP/1.1 403 Forbidden\r\n\r\n"); };
+    if (!allowed(req.url, opts)) return refuse("not allowed");
+    const [host] = req.url.split(":");
+    let addr;
+    try {
+      const all = await dns.lookup(host, { all: true });
+      if (!all.length || all.some((a) => isPrivateAddress(a.address))) return refuse("private address");
+      addr = all[0].address;
+    } catch { return refuse("no such host"); }
+    const upstream = net.connect(443, addr, () => {
+      client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head?.length) upstream.write(head);
+      upstream.pipe(client); client.pipe(upstream);
+    });
+    const close = () => { upstream.destroy(); client.destroy(); };
+    upstream.on("error", close); client.on("error", close);
   });
-  const close = () => { upstream.destroy(); client.destroy(); };
-  upstream.on("error", close); client.on("error", close);
-});
+  return server;
+}
+
+/** Parses an ALLOW_HOSTS-style list into gate options. */
+export function gateOptions(list) {
+  const hosts = String(list).split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  return { anyPublic: hosts.includes("*"), allow: new Set(hosts.filter((h) => h !== "*")) };
+}
+
+const server = createGate();
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split("/").pop())) {
   server.listen(port, () => log("egress.ready", { port, allow: anyPublic ? ["any public host"] : [...allow] }));
 }

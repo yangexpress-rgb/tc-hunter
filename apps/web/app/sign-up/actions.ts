@@ -2,18 +2,23 @@
 import { redirect } from "next/navigation";
 import { signUp } from "@tc-hunter/db";
 import { t, type L1Key } from "@tc-hunter/domain";
+import { allowTry } from "@/lib/rateLimit";
 import { app, setSessionCookie } from "@/lib/server";
 
 export type FormState = { error?: string; name?: string; email?: string };
 
 export async function signUpAction(_: FormState, form: FormData): Promise<FormState> {
   const { pool, cfg } = app();
+  const kept = { name: String(form.get("name") ?? ""), email: String(form.get("email") ?? "") };
+  if (!(await allowTry("sign_up"))) return { error: t("signin.locked"), ...kept };
   const r = await signUp(pool, cfg, {
-    email: String(form.get("email") ?? ""),
+    email: kept.email,
     password: String(form.get("password") ?? ""),
-    preferredName: String(form.get("name") ?? "").slice(0, 80),
+    preferredName: kept.name.slice(0, 80),
+    signupCode: String(form.get("signup_code") ?? ""),
   });
-  if (!r.ok) return { error: t(r.code as L1Key), name: String(form.get("name") ?? ""), email: String(form.get("email") ?? "") };
+  if (!r.ok) return { error: t(r.code as L1Key), ...kept };
   await setSessionCookie(r.token);
-  redirect("/");
+  // New accounts set up two-step sign-in before anything else.
+  redirect(cfg.requireMfa ? "/setup-two-step" : "/");
 }

@@ -1,5 +1,8 @@
 # Running TC Hunter on a home server
 
+> **TC Hunter now runs on Railway** (Yong, 2026-11-14): see [railway.md](railway.md). This
+> home-server setup still works and is kept as a fallback.
+
 This is the household setup (design §7.1). It runs the same way on a small VPS.
 
 ## What you need
@@ -24,7 +27,7 @@ This is the household setup (design §7.1). It runs the same way on a small VPS.
 3. **Private access:** in the Tailscale admin console create a tagged auth key (e.g. `tag:tc-hunter`) and put it in `TS_AUTHKEY`. Keep Funnel off. Add an access rule so only Yong's and Leo's devices can reach `tag:tc-hunter`. Nothing is opened on your router.
 4. **Start:** `docker compose -f deploy/compose.yaml up -d --build`
 5. **Sign up:** open `https://tc-hunter.<your-tailnet>.ts.net` on a device in the tailnet. Yong creates an account, Leo creates his own. Then set `ALLOW_SIGNUP=false` in `deploy/.env` and run step 4 again.
-6. **Turn on two-step sign-in** for each account (Settings).
+6. **Two-step sign-in:** each account is asked to set it up straight after sign-up (it's required unless `REQUIRE_MFA=false`). Save the recovery codes it shows.
 7. **Passkeys (optional):** set `TC_PUBLIC_ORIGIN` to the exact address from step 5 (e.g. `https://tc-hunter.<your-tailnet>.ts.net`) and run step 4 again. Each person can then add a passkey under Settings and sign in with it. Passkeys are tied to that address: if it changes, add them again.
 8. **Resume reading (optional, decision 13.6):** put an Anthropic API key in `ANTHROPIC_API_KEY` and run step 4 again. Uploaded resumes are then read by Claude after names, email, phone and street address are removed; without a key (or with `TC_RESUME_READER=rules`) the built-in reader is used. Either way, every row arrives as a draft for the applicant to check.
 9. **Finding jobs (Phase 2):** nothing to set up. The `worker` service looks for jobs on each person's schedule (daily by default) and when they press *Look for jobs now*. Its only way out is the `egress-worker` gate: HTTPS to public addresses only, never to anything on your home network. It reads public job-board feeds and careers pages politely (identified, one request every 6 seconds per site, robots.txt respected) and never opens LinkedIn or Indeed. With an Anthropic key set (step 8), the requirements in each job are read by Claude from the job text alone; `TC_POSTING_READER=rules` keeps it to the built-in reader.

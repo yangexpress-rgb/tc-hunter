@@ -40,6 +40,7 @@ export function testConfig(over: Partial<AppConfig> = {}): AppConfig {
     sessionIdleMinutes: 60,
     stepUpMinutes: 5,
     allowSignup: true,
+    requireMfa: true,
     ...over,
   };
 }

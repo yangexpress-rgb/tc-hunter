@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 
 /** RFC 6238 TOTP (authenticator app), SHA-1, 6 digits, 30 s steps. */
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
@@ -41,12 +41,37 @@ export function totpAt(secretB32: string, timeMs: number, step = 30): string {
 
 /** Accepts the current step and one step either side, for clock drift. */
 export function verifyTotp(secretB32: string, code: string, nowMs = Date.now()): boolean {
-  if (!/^\d{6}$/.test(code)) return false;
+  return totpStep(secretB32, code, nowMs) !== null;
+}
+
+/**
+ * Like verifyTotp, but returns the 30-second step the code belongs to (or null).
+ * Callers store the last accepted step so the same code can't be used twice.
+ */
+export function totpStep(secretB32: string, code: string, nowMs = Date.now()): number | null {
+  if (!/^\d{6}$/.test(code)) return null;
   for (const drift of [-1, 0, 1]) {
-    const expected = Buffer.from(totpAt(secretB32, nowMs + drift * 30_000));
-    if (timingSafeEqual(expected, Buffer.from(code))) return true;
+    const t = nowMs + drift * 30_000;
+    const expected = Buffer.from(totpAt(secretB32, t));
+    if (timingSafeEqual(expected, Buffer.from(code))) return Math.floor(t / 1000 / 30);
   }
-  return false;
+  return null;
+}
+
+const RECOVERY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+
+/** One-time recovery codes for when the authenticator app is lost, e.g. "k7m2p-x9q4r". */
+export function newRecoveryCodes(count = 10): string[] {
+  return Array.from({ length: count }, () => {
+    const chars = Array.from({ length: 10 }, () => RECOVERY_ALPHABET[randomInt(RECOVERY_ALPHABET.length)]).join("");
+    return `${chars.slice(0, 5)}-${chars.slice(5)}`;
+  });
+}
+
+/** Normalises what a person typed into the stored form of a recovery code, or null if it isn't one. */
+export function normaliseRecoveryCode(input: string): string | null {
+  const c = input.trim().toLowerCase().replace(/[\s-]/g, "");
+  return /^[a-z2-9]{10}$/.test(c) ? `${c.slice(0, 5)}-${c.slice(5)}` : null;
 }
 
 export function otpauthUri(secretB32: string, accountEmail: string): string {
