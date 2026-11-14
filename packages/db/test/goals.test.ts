@@ -75,6 +75,10 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     await requestScan(pool, yong);
     while (await runNextWork(pool, deps)) { /* drain */ }
     expect(await titles(yong)).toEqual(["Operations Analyst", "Warehouse Associate"]);
+    // Each match records the goal it fits best, so Jobs can show a table per goal.
+    const byTitle = Object.fromEntries((await listMatches(pool, yong)).rows.map((r) => [r.title, r.goal_id]));
+    const ids = Object.fromEntries((await listGoals(pool, yong)).map((g) => [g.roles[0], g.id]));
+    expect(byTitle).toEqual({ "Operations Analyst": ids["Operations Analyst"], "Warehouse Associate": ids["Warehouse Associate"] });
     const ops = (await listMatches(pool, yong)).rows.find((r) => r.title === "Operations Analyst")!;
     const d = await getMatchByRef(pool, yong, ops.public_ref);
     const pref = d!.components.find((c: { key: string }) => c.key === "preferences");

@@ -42,8 +42,9 @@ export interface MatchPrefs {
   occupation?: string | null;
   companiesInclude?: string[];
   employmentTypes?: string[];
-  /** The goal's short name, for the reasons. */
+  /** The goal's short name, for the reasons, and its id, so a match can say which goal it fits best. */
   goalName?: string;
+  goalId?: string;
 }
 export interface MatchPosting {
   employer: string;
@@ -72,6 +73,8 @@ export interface MatchResult {
   ladderLabel: string | null;
   adjustments: Array<{ id: string; label: string; delta: number }>;
   rulesVersion: string;
+  /** The goal this job fits best, when scored against goals. */
+  goalId?: string | null;
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;

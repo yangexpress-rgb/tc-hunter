@@ -30,7 +30,7 @@ export async function listMatches(pool: pg.Pool, session: Session, f: MatchFilte
     if (f.ladder) { args.push(f.ladder); where.push(`m.ladder_tag = $${args.length}`); }
     if (f.source) { args.push(f.source); where.push(`EXISTS (SELECT 1 FROM job_posting_source ps WHERE ps.job_posting_id = p.id AND ps.job_source_id = $${args.length})`); }
     const r = await c.query(
-      `SELECT m.id, m.score, m.reason_line, m.status, m.filtered, m.filter_reasons, m.ladder_tag, m.ladder_label, m.gap_skills, m.seen_at, m.found_by,
+      `SELECT m.id, m.score, m.reason_line, m.status, m.filtered, m.filter_reasons, m.ladder_tag, m.ladder_label, m.gap_skills, m.seen_at, m.found_by, m.goal_id,
               p.public_ref, p.title, p.employer_canonical, p.location_raw, p.workplace_type, p.salary_min, p.salary_max, p.salary_currency, p.salary_period,
               p.posted_at, p.status AS posting_status
          FROM match m JOIN job_posting p ON p.id = m.job_posting_id

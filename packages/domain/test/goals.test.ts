@@ -59,11 +59,12 @@ describe("goals", () => {
 
   it("keeps the goal a job fits best, and says which", () => {
     const pay = prefsForGoal(goal({ roles: ["Analyst"], comp: { amount: 900000, currency: "USD", period: "year" } }), settings, null);
-    const fits = prefsForGoal(goal({ roles: ["Data analyst"] }), settings, null);
+    const fits = prefsForGoal(goal({ id: "fits", roles: ["Data analyst"] }), settings, null);
     const r = scoreBestGoal(fx.profile, [pay, fits], base, { now });
     expect(r.filtered).toBe(false);
     expect(r.components.find((c) => c.key === "preferences")!.detail[0]).toBe("Closest to your goal: Data analyst.");
+    expect(r.goalId).toBe("fits");
     const one = scoreBestGoal(fx.profile, [fits], base, { now });
-    expect(one).toEqual(scoreMatch(fx.profile, fits, base, { now }));
+    expect(one).toEqual({ ...scoreMatch(fx.profile, fits, base, { now }), goalId: "fits" });
   });
 });

@@ -226,15 +226,15 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
     const res = scoreBestGoal(profile, prefs, postingFor(p), { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
     const r = await c.query(
       `INSERT INTO match (applicant_id, job_posting_id, score, components, matched_skills, gap_skills, filtered, filter_reasons, reason_line, ladder_tag, ladder_label,
-         adjustments, rules_version, parser_version, computed_at, found_by)
-       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14)
+         adjustments, rules_version, parser_version, computed_at, found_by, goal_id)
+       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14, $15)
        ON CONFLICT (applicant_id, job_posting_id) DO UPDATE SET score = EXCLUDED.score, components = EXCLUDED.components, matched_skills = EXCLUDED.matched_skills,
          gap_skills = EXCLUDED.gap_skills, filtered = EXCLUDED.filtered, filter_reasons = EXCLUDED.filter_reasons, reason_line = EXCLUDED.reason_line,
          ladder_tag = EXCLUDED.ladder_tag, ladder_label = EXCLUDED.ladder_label, adjustments = EXCLUDED.adjustments, rules_version = EXCLUDED.rules_version,
-         parser_version = EXCLUDED.parser_version, computed_at = now()
+         parser_version = EXCLUDED.parser_version, computed_at = now(), goal_id = EXCLUDED.goal_id
        RETURNING (xmax = 0) AS inserted`,
       [p.id, res.score, JSON.stringify(res.components), JSON.stringify(res.matchedSkills), res.gapSkills, res.filtered, res.filterReasons, res.reasonLine,
-        res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy]);
+        res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy, res.goalId ?? null]);
     if (r.rows[0].inserted) created++;
   }
   return { considered: postings.length, related, newMatches: created };

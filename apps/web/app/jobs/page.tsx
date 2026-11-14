@@ -1,13 +1,14 @@
-import { jobsSummary, latestScan, listAdjustments, listAlerts, listMatches, listSources, pendingWork } from "@tc-hunter/db";
+import { jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
 import { FeedbackButtons, ScoreBadge, ago, pay, place, posted } from "@/components/jobs/JobBits";
+import { GOAL_SORTS, GoalTables, type GoalSort } from "@/components/jobs/GoalTables";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { adjustmentAction, alertSeenAction, scanNowAction } from "./actions";
+import { adjustmentAction, alertSeenAction, refreshAction, scanNowAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -24,17 +25,21 @@ export default async function JobsPage(props: PageProps) {
   const sort = (["score", "date", "salary"].includes(params.sort ?? "") ? params.sort : "score") as "score" | "date" | "salary";
   const ladder = LADDER.some(([k]) => k && k === params.ladder) ? params.ladder : undefined;
   const showFiltered = params.filtered === "1";
-  const [sources, scan, work, alerts, adjustments, summary] = await Promise.all([
+  const view = params.view === "list" ? "list" : "goals";
+  const gsort: GoalSort = (GOAL_SORTS as readonly string[]).includes(params.gsort ?? "") ? params.gsort as GoalSort : "score";
+  const gdir = params.gdir === "asc" ? "asc" : params.gdir === "desc" ? "desc" : (["company", "role", "location", "type", "status"].includes(gsort) ? "asc" : "desc");
+  const [sources, scan, work, alerts, adjustments, summary, goals] = await Promise.all([
     listSources(pool, session), latestScan(pool, session), pendingWork(pool, session),
-    listAlerts(pool, session), listAdjustments(pool, session), jobsSummary(pool, session),
+    listAlerts(pool, session), listAdjustments(pool, session), jobsSummary(pool, session), listGoals(pool, session),
   ]);
   const source = sources.some((s) => s.id === params.source) ? params.source : undefined;
   const { rows, counts } = await listMatches(pool, session, { status, sort, ladder, source, showFiltered });
   const busy = work.some((w) => w.kind === "scan" && (w.status === "queued" || w.status === "running"));
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
-    const all = { tab: status, sort, ladder, source, filtered: showFiltered ? "1" : undefined, ...over };
-    for (const [k, v] of Object.entries(all)) if (v && !(k === "tab" && v === "new") && !(k === "sort" && v === "score")) p.set(k, v);
+    const all = { tab: status, sort, ladder, source, filtered: showFiltered ? "1" : undefined, view: view === "list" ? "list" : undefined,
+      gsort: gsort === "score" ? undefined : gsort, gdir: params.gdir, ...over };
+    for (const [k, v] of Object.entries(all)) if (v && !(k === "tab" && v === "new") && !(k === "sort" && v === "score") && !(k === "view" && v === "goals")) p.set(k, v);
     const s = p.toString();
     return s ? `/jobs?${s}` : "/jobs";
   };
@@ -55,8 +60,10 @@ export default async function JobsPage(props: PageProps) {
             : t("jobs.never_scanned")}
         </p>
         <div className="inline-actions">
+          <form action={refreshAction}><input type="hidden" name="back" value={here} />
+            <button disabled={busy} title="Score every job again against your goals, and look for new ones">Refresh</button></form>
           {sources.length ? (
-            <form action={scanNowAction}><input type="hidden" name="back" value={here} /><button disabled={busy}>{t("jobs.scan_cta")}</button></form>
+            <form action={scanNowAction}><input type="hidden" name="back" value={here} /><button className="secondary" disabled={busy}>{t("jobs.scan_cta")}</button></form>
           ) : <a className="button" href="/jobs/sources">{t("home.next_action.sources")}</a>}
           <a href="/jobs/sources">{t("jobs.sources.title")}</a>
           <a href="/jobs/paste">{t("jobs.paste.title")}</a>
@@ -78,6 +85,13 @@ export default async function JobsPage(props: PageProps) {
         </section>
       ) : null}
 
+      {params.refreshed ? <p className="status" role="status">Refreshed: every job is scored again against your goals{sources.length ? ", and we're looking for new ones" : ""}.</p> : null}
+
+      <nav className="tabs view-switch" aria-label="How to show jobs">
+        <a href={q({ view: "goals" })} aria-current={view === "goals" ? "page" : undefined}>By goal</a>
+        <a href={q({ view: "list" })} aria-current={view === "list" ? "page" : undefined}>List</a>
+      </nav>
+
       <nav className="tabs" aria-label="Which jobs">
         {TABS.map(([k, l]) => (
           <a key={k} href={q({ tab: k })} aria-current={status === k ? "page" : undefined}>
@@ -89,7 +103,10 @@ export default async function JobsPage(props: PageProps) {
       <Details summary="Sort and filter">
         <form method="get" action="/jobs" className="fields">
           {status !== "new" ? <input type="hidden" name="tab" value={status} /> : null}
-          <label>Sort by<select name="sort" defaultValue={sort}>{SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+          {view === "list" ? null : <input type="hidden" name="view" value="goals" />}
+          {view === "goals" && gsort !== "score" ? <input type="hidden" name="gsort" value={gsort} /> : null}
+          {view === "goals" ? null : <input type="hidden" name="view" value="list" />}
+          {view === "list" ? <label>Sort by<select name="sort" defaultValue={sort}>{SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label> : null}
           <label>Career step<select name="ladder" defaultValue={ladder ?? ""}>{LADDER.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
           {sources.length > 1 ? (
             <label>Found at<select name="source" defaultValue={source ?? ""}><option value="">Anywhere</option>{sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
@@ -99,7 +116,12 @@ export default async function JobsPage(props: PageProps) {
         </form>
       </Details>
 
-      {rows.length === 0 ? (
+      {view === "goals" && (rows.length || goals.some((g) => g.active)) ? (
+        <>
+          {goals.length === 0 ? <p className="muted"><a href="/profile/goals">Add goals</a> to see your jobs grouped by what you want.</p> : null}
+          <GoalTables goals={goals} rows={rows} by={gsort} dir={gdir} sortHref={(by, dir) => q({ gsort: by === "score" ? undefined : by, gdir: dir })} />
+        </>
+      ) : rows.length === 0 ? (
         <p className="muted empty">{status === "new" ? (sources.length ? t("jobs.empty") : t("jobs.no_sources")) : status === "saved" ? "You haven't saved any jobs yet." : "You haven't passed on any jobs."}</p>
       ) : (
         <ul className="job-list plain">

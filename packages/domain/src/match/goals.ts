@@ -80,6 +80,7 @@ export function prefsForGoal(goal: Goal, settings: SearchSettings, ladder: Goal 
     companiesInclude: goal.companies,
     employmentTypes: goal.employmentTypes,
     goalName: goalName(goal),
+    goalId: goal.id,
   };
 }
 
@@ -96,10 +97,12 @@ export function scoreBestGoal(profile: MatchProfile, prefs: MatchPrefs[], postin
   if (!prefs.length) throw new Error("scoreBestGoal needs at least one set of preferences");
   let best: MatchResult | null = null;
   let bestName: string | undefined;
+  let bestId: string | null = null;
   for (const p of prefs) {
     const r = scoreMatch(profile, p, posting, ctx);
-    if (!best || (best.filtered && !r.filtered) || (best.filtered === r.filtered && r.score > best.score)) { best = r; bestName = p.goalName; }
+    if (!best || (best.filtered && !r.filtered) || (best.filtered === r.filtered && r.score > best.score)) { best = r; bestName = p.goalName; bestId = p.goalId ?? null; }
   }
+  if (bestId) best = { ...best!, goalId: bestId };
   if (prefs.length > 1 && bestName) {
     best = { ...best!, components: best!.components.map((c) => c.key === "preferences" ? { ...c, detail: [`Closest to your goal: ${bestName}.`, ...c.detail] } : c) };
   }
