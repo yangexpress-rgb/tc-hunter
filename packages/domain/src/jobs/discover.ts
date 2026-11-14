@@ -1,6 +1,6 @@
 import { jobLinksFromHtml, jobPostingsFromHtml } from "./jsonld";
 import { SourceRefusedError, type Fetcher } from "./fetcher";
-import { detectSource, isNoFetchHost } from "./sources";
+import { detectSource, isNoFetchHost, unreadableCareersSystem } from "./sources";
 import type { AtsKind, SourceSpec } from "./types";
 
 /**
@@ -21,6 +21,11 @@ export interface GoalBrief {
   locations: string[];
   workplaceTypes: string[];
   employmentTypes: string[];
+  /** Levels wanted, e.g. Director, VP. */
+  levels?: string[];
+  /** Specialties and languages the person typed in. */
+  specialties?: string[];
+  languages?: string[];
 }
 
 export interface CompanyIdea {
@@ -107,7 +112,7 @@ export async function findBoard(idea: Pick<CompanyIdea, "name" | "boards" | "car
       if (e.reason === "rate_limited" || e.reason === "refused") break;  // the board asked us to stop: don't try the rest
     }
   }
-  if (idea.careersUrl) {
+  if (idea.careersUrl && !unreadableCareersSystem(idea.careersUrl)) {
     try {
       const spec = detectSource(idea.careersUrl, idea.name);
       if (spec && spec.kind === "careers_page" && !isNoFetchHost(spec.url)) {
@@ -117,4 +122,21 @@ export async function findBoard(idea: Pick<CompanyIdea, "name" | "boards" | "car
     } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
   }
   return null;
+}
+
+/**
+ * Why no board was found for an employer, in a short code kept with the lookup:
+ * "system:Workday" when its careers site runs on a hiring system we can't read,
+ * "page" when its careers page shows no jobs we can read, "none" when nothing was found.
+ */
+export function noBoardReason(idea: Pick<CompanyIdea, "careersUrl">): string {
+  const sys = idea.careersUrl ? unreadableCareersSystem(idea.careersUrl) : null;
+  return sys ? `system:${sys}` : idea.careersUrl ? "page" : "none";
+}
+
+/** The reason above, in plain words for Where we look. */
+export function noBoardSentence(note: string | null): string {
+  if (note?.startsWith("system:")) return `Its careers site runs on ${note.slice(7)}, which we can't read yet. Its jobs can still come in through the job sites.`;
+  if (note === "page") return "Its careers page shows no job listings we can read. Its jobs can still come in through the job sites.";
+  return "We couldn't find a careers site for it that we can read. You can add its jobs page below. Its jobs can still come in through the job sites.";
 }

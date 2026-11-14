@@ -25,6 +25,26 @@ export function isNoFetchHost(url: string): boolean {
   try { return NO_FETCH_HOSTS.test(new URL(url).hostname); } catch { return false; }
 }
 
+/**
+ * Hiring systems whose careers sites we can't read yet: their job lists are drawn by
+ * scripts and they publish no public job feed. Returns the system's name, or null.
+ */
+const UNREADABLE_CAREERS: Array<[string, RegExp]> = [
+  ["Workday", /(^|\.)(myworkdayjobs\.com|myworkdaysite\.com|workday\.com)$/i],
+  ["Taleo", /(^|\.)taleo\.net$/i],
+  ["iCIMS", /(^|\.)icims\.com$/i],
+  ["SuccessFactors", /(^|\.)(successfactors\.(com|eu)|sapsf\.(com|eu))$/i],
+  ["Oracle", /(^|\.)oraclecloud\.com$/i],
+  ["Phenom", /(^|\.)phenompeople\.com$/i],
+  ["Eightfold", /(^|\.)eightfold\.ai$/i],
+  ["Jobvite", /(^|\.)jobvite\.com$/i],
+];
+export function unreadableCareersSystem(url: string): string | null {
+  let host: string;
+  try { host = new URL(url).hostname; } catch { return null; }
+  return UNREADABLE_CAREERS.find(([, re]) => re.test(host))?.[0] ?? null;
+}
+
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 /** A company's job board or careers page, from the address the applicant pasted. */

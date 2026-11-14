@@ -1,3 +1,4 @@
+import type { GoalLevel } from "../jobs/normalize";
 import type { SalaryPeriod, Workplace } from "../jobs/types";
 import { scoreMatch, type MatchPosting, type MatchPrefs, type MatchProfile, type MatchResult } from "./score";
 
@@ -24,6 +25,12 @@ export interface Goal {
   active: boolean;
   timeFrame: TimeFrame;
   employmentTypes: GoalType[];
+  /** The levels wanted, e.g. Director and VP. Empty means any level. */
+  levels: GoalLevel[];
+  /** Typed in freely, e.g. "supply chain analytics". Searched for and counted in the score. */
+  specialties: string[];
+  /** Languages to use at work, e.g. Mandarin. A job that asks for one scores higher. */
+  languages: string[];
   roles: string[];
   occupation: string | null;
   industries: string[];
@@ -79,6 +86,9 @@ export function prefsForGoal(goal: Goal, settings: SearchSettings, ladder: Goal 
     occupation: goal.occupation,
     companiesInclude: goal.companies,
     employmentTypes: goal.employmentTypes,
+    levels: goal.levels,
+    specialties: goal.specialties,
+    languages: goal.languages,
     goalName: goalName(goal),
     goalId: goal.id,
   };

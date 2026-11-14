@@ -181,7 +181,7 @@ export function searchSites(env: Record<string, string | undefined>): { sites: S
 }
 
 /** The searches for a set of goals: each role (or line of work) in each place, at most `max` in all. */
-export function searchQueries(goals: Array<{ roles: string[]; occupation: string | null; locations: string[]; workplaceTypes: string[] }>, max = 8): SearchQuery[] {
+export function searchQueries(goals: Array<{ roles: string[]; occupation: string | null; locations: string[]; workplaceTypes: string[]; specialties?: string[]; languages?: string[] }>, max = 10): SearchQuery[] {
   const out: SearchQuery[] = [];
   const seen = new Set<string>();
   for (const g of goals) {
@@ -193,6 +193,19 @@ export function searchQueries(goals: Array<{ roles: string[]; occupation: string
       if (seen.has(k)) continue;
       seen.add(k);
       out.push({ what, where, remote });
+    }
+  }
+  // Then each goal's first role with its specialties and languages, e.g. "Operations Analyst Mandarin" (Yong, 2026-11-14).
+  for (const g of goals) {
+    const what = g.roles[0] ?? g.occupation;
+    if (!what) continue;
+    const remote = g.workplaceTypes.includes("remote") || g.locations.some((l) => /remote/i.test(l));
+    for (const extra of [...(g.specialties ?? []).slice(0, 2), ...(g.languages ?? []).slice(0, 2)]) {
+      const q = `${what} ${extra}`;
+      const k = `${q.toLowerCase()}|${(g.locations[0] ?? "").toLowerCase()}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ what: q, where: g.locations[0] ?? null, remote });
     }
   }
   return out.slice(0, max);

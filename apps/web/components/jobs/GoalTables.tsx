@@ -1,4 +1,4 @@
-import { employmentKind, goalName, goalTypeLabel, timeFrameLabel, type Goal } from "@tc-hunter/domain";
+import { employmentKind, goalLevelLabel, goalName, goalTypeLabel, timeFrameLabel, type Goal } from "@tc-hunter/domain";
 import { ScoreBadge, pay, place } from "@/components/jobs/JobBits";
 
 /**
@@ -95,7 +95,7 @@ export function GoalTables({ goals, rows, by, dir, sortHref }: {
     <>
       {shown.map((g) => (
         <GoalTable key={g.id} title={goalName(g)} rows={rows.filter((r) => r.goal_id === g.id)} by={by} dir={dir} sortHref={sortHref}
-          sub={[timeFrameLabel(g.timeFrame), g.employmentTypes.map(goalTypeLabel).join(", "), g.locations.join(", "), g.active ? null : "Not used to find jobs"].filter(Boolean).join(" · ")} />
+          sub={[timeFrameLabel(g.timeFrame), g.levels.map(goalLevelLabel).join(", "), g.employmentTypes.map(goalTypeLabel).join(", "), g.locations.join(", "), g.active ? null : "Not used to find jobs"].filter(Boolean).join(" · ")} />
       ))}
       {loose.length ? <GoalTable title={shown.length ? "Not tied to a goal" : "Matched jobs"} sub="Jobs you added yourself, or scored before you had goals." rows={loose} by={by} dir={dir} sortHref={sortHref} /> : null}
     </>

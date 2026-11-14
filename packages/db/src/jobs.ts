@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { runEmailCheck, type EmailDeps } from "./email";
 import {
-  dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
+  companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, titleIsRelated, levelOf, searchQueries, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
@@ -13,7 +13,7 @@ import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { goalFromRow } from "./profile";
-import { discoveryDue, runDiscovery, type DiscoverDeps } from "./discover";
+import { discoveryDue, namedSourceIds, runDiscovery, type DiscoverDeps } from "./discover";
 
 /**
  * Module B and C on the server (design 5.2, 5.3). The catalogue (sources,
@@ -311,7 +311,7 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
   const now = deps.now?.() ?? new Date();
   const wall = Date.now(); // freshness and back-off use the real clock, like the database's last_success_at
   const fresh = (deps.freshMinutes ?? 30) * 60_000;
-  const { runId, sources, targets, queries } = await withApplicant(pool, ctx, async (c) => {
+  const { runId, sources, firstCount, targets, queries } = await withApplicant(pool, ctx, async (c) => {
     const run = await c.query("INSERT INTO scan_run (applicant_id) VALUES (app_applicant_id()) RETURNING id");
     const src = (await c.query(
       `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted AND s.kind <> 'job_search' ORDER BY s.name`)).rows;
@@ -319,14 +319,59 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
     const exp = (await c.query("SELECT title FROM experience_item WHERE verification = 'verified'")).rows.map((r) => r.title as string);
     const wanted = goalTargets(prefs);
     const goals = (await c.query("SELECT * FROM hunt_goal WHERE active ORDER BY created_at")).rows.map(goalFromRow);
-    return { runId: run.rows[0].id as string, sources: src, targets: wanted.length ? wanted : exp, queries: searchQueries(goals) };
+    // Companies named in a goal are read first, ahead of the job sites (Yong, 2026-11-14).
+    const ids = await namedSourceIds(c);
+    const keys = new Set(goals.flatMap((g) => g.companies).map(companyKey).filter(Boolean));
+    const named = (x: Record<string, any>) => ids.has(x.id) || (x.kind !== "pasted_link" && keys.has(companyKey(x.name)));
+    return { runId: run.rows[0].id as string, sources: [...src.filter(named), ...src.filter((x) => !named(x))], firstCount: src.filter(named).length,
+      targets: wanted.length ? wanted : exp, queries: searchQueries(goals) };
   });
 
   let checked = 0, fresh0 = 0, updated = 0, closed = 0;
   const events: string[] = [];
   const notes: Array<{ source: string; note: string }> = [];
 
-  // 1. Job-search sites first: each goal's roles in each of its places (Yong, 2026-11-14).
+  const readBoard = async (s: Record<string, any>) => {
+    if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
+      notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
+      return;
+    }
+    // A board another scan read in the last half hour is not fetched again.
+    if (s.last_success_at && wall - new Date(s.last_success_at).getTime() < fresh) return;
+    const spec: SourceSpec = { type: s.type, kind: s.kind, key: s.source_key, name: s.name, url: s.url };
+    try {
+      const got = await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets));
+      checked += got.checked;
+      // Catalogue writes are shared rows; they run in the applicant's transaction scope but touch no personal data.
+      await withApplicant(pool, ctx, async (c) => {
+        for (const raw of got.postings) {
+          if (!raw.title || !raw.employer || !raw.descriptionText) continue;
+          const o = await ingestPosting(c, s.id, raw, deps.reader);
+          if (o.isNew) fresh0++; else if (o.changed) updated++;
+          events.push(...o.eventIds);
+        }
+        if (got.complete) {
+          const gone = await closeMissing(c, s.id, got.postings.map((p) => p.externalId));
+          closed += gone.closed; events.push(...gone.eventIds);
+        }
+        await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now() WHERE id = $1", [s.id]);
+      });
+      for (const n of got.notes) notes.push({ source: s.name, note: n });
+    } catch (e) {
+      const reason = e instanceof SourceRefusedError ? e.reason : "unreachable";
+      const detail = e instanceof SourceRefusedError ? e.detail : (e as Error).message;
+      const health = reason === "robots" || reason === "refused" ? "blocked" : "degraded";
+      await withApplicant(pool, ctx, (c) => c.query(
+        "UPDATE job_source SET health = $2, health_reason = $3, failures = failures + 1, last_checked_at = now() WHERE id = $1",
+        [s.id, health, `${reason}: ${detail}`.slice(0, 300)]));
+      notes.push({ source: s.name, note: PLAIN_REFUSAL[reason] ?? PLAIN_REFUSAL.unreachable! });
+    }
+  };
+
+  // 1. The careers sites of companies named in a goal come first.
+  for (const s of sources.slice(0, firstCount)) await readBoard(s);
+
+  // 2. Then the job-search sites: each goal's roles in each of its places (Yong, 2026-11-14).
   let searched = 0;
   for (const site of queries.length ? deps.search ?? [] : []) {
     const follow = await withApplicant(pool, ctx, async (c) => {
@@ -367,43 +412,8 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
     }
   }
 
-  // 2. Then the employers' own jobs pages.
-  for (const s of sources) {
-    if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
-      notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
-      continue;
-    }
-    // A board another scan read in the last half hour is not fetched again.
-    if (s.last_success_at && wall - new Date(s.last_success_at).getTime() < fresh) continue;
-    const spec: SourceSpec = { type: s.type, kind: s.kind, key: s.source_key, name: s.name, url: s.url };
-    try {
-      const got = await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets));
-      checked += got.checked;
-      // Catalogue writes are shared rows; they run in the applicant's transaction scope but touch no personal data.
-      await withApplicant(pool, ctx, async (c) => {
-        for (const raw of got.postings) {
-          if (!raw.title || !raw.employer || !raw.descriptionText) continue;
-          const o = await ingestPosting(c, s.id, raw, deps.reader);
-          if (o.isNew) fresh0++; else if (o.changed) updated++;
-          events.push(...o.eventIds);
-        }
-        if (got.complete) {
-          const gone = await closeMissing(c, s.id, got.postings.map((p) => p.externalId));
-          closed += gone.closed; events.push(...gone.eventIds);
-        }
-        await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now() WHERE id = $1", [s.id]);
-      });
-      for (const n of got.notes) notes.push({ source: s.name, note: n });
-    } catch (e) {
-      const reason = e instanceof SourceRefusedError ? e.reason : "unreachable";
-      const detail = e instanceof SourceRefusedError ? e.detail : (e as Error).message;
-      const health = reason === "robots" || reason === "refused" ? "blocked" : "degraded";
-      await withApplicant(pool, ctx, (c) => c.query(
-        "UPDATE job_source SET health = $2, health_reason = $3, failures = failures + 1, last_checked_at = now() WHERE id = $1",
-        [s.id, health, `${reason}: ${detail}`.slice(0, 300)]));
-      notes.push({ source: s.name, note: PLAIN_REFUSAL[reason] ?? PLAIN_REFUSAL.unreachable! });
-    }
-  }
+  // 3. Then the other employers' own jobs pages.
+  for (const s of sources.slice(firstCount)) await readBoard(s);
 
   return withApplicant(pool, ctx, async (c) => {
     // Postings read for this applicant may have been closed or changed by another scan: include recent events too.

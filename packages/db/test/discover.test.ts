@@ -2,9 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { RulesRequirementsReader, SourceRefusedError, type CompanyIdea, type CompanyProposer, type Fetcher, type FetchResult, type GoalBrief } from "@tc-hunter/domain";
+import { RulesRequirementsReader, SourceRefusedError, type CompanyIdea, type RawPosting, type SearchSite, type CompanyProposer, type Fetcher, type FetchResult, type GoalBrief } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, deleteGoal, followSource, latestDiscovery, listMatches, listSources, requestScan, runNextWork, saveGoal, unfollowSource,
+  addEvidence, addFact, deleteGoal, followSource, latestDiscovery, listMatches, listSources, namedCompanies, requestScan, runNextWork, saveGoal, unfollowSource,
   type AppConfig, type GoalInput, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -40,7 +40,7 @@ let proposer: Suggest;
 let deps: WorkDeps;
 const drain = async () => { while (await runNextWork(pool, deps)) { /* drain */ } };
 const goal = (g: Partial<GoalInput>): GoalInput => ({
-  active: true, timeFrame: "now", employmentTypes: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
+  active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
 });
 
 beforeAll(async () => {
@@ -103,5 +103,23 @@ describe("the app finds where to look, from the goals", () => {
     await requestScan(pool, leo);
     await drain();
     expect((await listSources(pool, leo)).map((s) => [s.name, s.origin])).toEqual([["Contoso", "you"]]);
+  });
+
+  it("reads the careers sites of companies named in a goal before the job sites, and says why one can't be read", async () => {
+    const mia = (await newApplicant(pool, cfg, "Mia")).session;
+    const order: string[] = [];
+    const site: SearchSite = { id: "adzuna", name: "Adzuna", async search(): Promise<RawPosting[]> { order.push("job sites"); return []; } };
+    const logged: Fetcher = { get: async (url, o) => { order.push(url); return web.get(url, o); } };
+    const named: CompanyProposer = { version: "test-proposer", async propose() {
+      return [{ name: "Globex", reason: "named", careersUrl: "https://globex.wd5.myworkdayjobs.com/External" }]; } };
+    await saveGoal(pool, mia, goal({ roles: ["Operations Analyst"], companies: ["Fabrikam", "Globex"] }));
+    await requestScan(pool, mia);
+    while (await runNextWork(pool, { ...deps, fetcher: logged, search: [site], discover: { proposer: named } })) { /* drain */ }
+    const board = order.findIndex((u) => u.includes("greenhouse.io/v1/boards/fabrikam"));
+    expect(board).toBeGreaterThanOrEqual(0);
+    expect(board).toBeLessThan(order.indexOf("job sites"));
+    expect(order.some((u) => u.includes("myworkdayjobs"))).toBe(false);  // never fetched: we can't read it
+    const status = Object.fromEntries((await namedCompanies(pool, mia)).map((n) => [n.name, [Boolean(n.sourceId), n.note]]));
+    expect(status).toEqual({ Fabrikam: [true, null], Globex: [false, "system:Workday"] });
   });
 });
