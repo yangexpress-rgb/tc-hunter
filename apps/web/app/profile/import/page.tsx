@@ -18,7 +18,7 @@ const LINKEDIN_RESULT: Record<string, string> = {
   refused: "Link saved. LinkedIn turned the request away, so we couldn't read your profile. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
   not_found: "Link saved, but LinkedIn says there's no profile at that address. Check the link.",
   empty: "Link saved. LinkedIn sent back almost nothing to read. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
-  unreachable: "Link saved, but we couldn't reach LinkedIn just now. Try again in a few minutes.",
+  unreachable: "Link saved. We couldn't read your profile from LinkedIn: this app isn't set up to open LinkedIn pages, and LinkedIn shows apps a sign-in page anyway. To bring it in, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
 };
 
 /**
