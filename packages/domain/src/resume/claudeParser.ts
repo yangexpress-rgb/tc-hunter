@@ -124,7 +124,7 @@ export class ClaudeResumeParser implements ResumeParser {
   readonly sortsSections = true;
   /** Filled in by the last parse(). */
   trace: ReadTrace = { parts: {}, unplacedBefore: 0, unplacedAfter: 0, sentChars: 0, raw: { roles: 0, schools: 0, certs: 0, awards: 0, skills: 0 } };
-  constructor(private client: Anthropic = new Anthropic(), private names: string[] = [], private personal: string | null = null) {}
+  constructor(private client: Anthropic = new Anthropic(), private names: string[] = [], private prompt: string | null = null) {}
 
   private async ask<T extends z.ZodTypeAny>(part: string, schema: T, system: string, content: string): Promise<z.infer<T> | null> {
     try {
@@ -160,8 +160,8 @@ export class ClaudeResumeParser implements ResumeParser {
     const content = `<resume>\n${redacted}\n</resume>${hintText}`;
 
     const [roles, rest] = await Promise.all([
-      this.ask("roles", RolesOutput, readerSystem("roles", this.personal), content),
-      this.ask("rest", RestOutput, readerSystem("rest", this.personal), content),
+      this.ask("roles", RolesOutput, readerSystem("roles", this.prompt), content),
+      this.ask("rest", RestOutput, readerSystem("rest", this.prompt), content),
     ]);
     if (!roles && !rest) return { ...local, notes: [...local.notes, "Read with the built-in reader."] };
 
@@ -184,7 +184,7 @@ export class ClaudeResumeParser implements ResumeParser {
     const missed = unplacedLines(redacted, parsed);
     this.trace.unplacedBefore = missed.length;
     if (missed.length) {
-      const sweep = await this.ask("sweep", SweepOutput, readerSystem("sweep", this.personal),
+      const sweep = await this.ask("sweep", SweepOutput, readerSystem("sweep", this.prompt),
         `<resume>\n${redacted}\n</resume>\n\n<not_placed>\n${missed.join("\n")}\n</not_placed>${hintText}`);
       if (sweep) {
         parsed = mergeReadings(parsed, {

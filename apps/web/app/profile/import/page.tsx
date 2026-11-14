@@ -1,5 +1,5 @@
-import { getProfile, getReaderInstructions, listResumeFiles, resumeReaderName } from "@tc-hunter/db";
-import { MAX_READER_INSTRUCTIONS, READER_PARTS, READER_PROMPT, t } from "@tc-hunter/domain";
+import { getProfile, getReaderPrompt, listResumeFiles, resumeReaderName } from "@tc-hunter/db";
+import { MAX_READER_PROMPT, READER_APP_RULES, READER_PARTS, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -7,7 +7,7 @@ import { DigestChip, fileSize } from "@/components/profile/Digest";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { importAction, redigestAction, saveLinkedInAction, saveReaderNotesAction } from "../actions";
+import { importAction, redigestAction, resetReaderPromptAction, restoreReaderPromptAction, saveLinkedInAction, saveReaderPromptAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +21,9 @@ const LINKEDIN_RESULT: Record<string, string> = {
   unreachable: "Link saved. We couldn't read your profile from LinkedIn: this app isn't set up to open LinkedIn pages, and LinkedIn shows apps a sign-in page anyway. To bring it in, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
 };
 
+const VERSION_KIND = { edit: "your edit", reset: "reset to default", restore: "brought back an earlier version" } as const;
+
+
 /**
  * Bring in a resume (brief 5.1). The file is stored as it is; the digest then
  * reads it into drafts in the background, and each file has its own page.
@@ -28,7 +31,8 @@ const LINKEDIN_RESULT: Record<string, string> = {
 export default async function ImportPage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, files, profile, notes] = await Promise.all([flashOf(props), listResumeFiles(pool, session), getProfile(pool, cfg, session), getReaderInstructions(pool, session)]);
+  const [{ saved, error, params }, files, profile, prompt] = await Promise.all([flashOf(props), listResumeFiles(pool, session), getProfile(pool, cfg, session), getReaderPrompt(pool, session)]);
+  const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: prompt.timeZone }) : "");
   const li = typeof params.li === "string" ? params.li : "";
   const older = profile.imports.filter((b) => !b.resume_file_id);
   const busy = files.some((f) => f.latest && !["ready", "failed", "replaced"].includes(f.latest.status) && !f.latest.stuck);
@@ -93,22 +97,53 @@ export default async function ImportPage(props: PageProps) {
       ) : null}
       <section className="card" id="how-claude-reads">
         <h2>How Claude reads your file</h2>
-        <p>Claude follows the instructions below every time it reads a resume. Add your own notes to help it, for example “My certifications are listed under Training” or “Treat my MBA consulting project as a project, not a job”. Your notes can say where things go. They can't switch off the rule that everything is copied word for word.</p>
-        <form action={saveReaderNotesAction} className="stack">
+        <p>These are the instructions Claude follows every time it reads a resume. Edit them as you like and press Save. Each scan uses the latest saved version, so press Re-scan on a file to read it again with your changes.</p>
+        <p className="muted">{prompt.isDefault ? "You're using the app's default instructions." : `You're using your own version, saved ${when(prompt.savedAt)}.`}</p>
+        <form action={saveReaderPromptAction} className="stack wide">
           <input type="hidden" name="back" value="/profile/import#how-claude-reads" />
-          <label>Your notes for Claude<textarea name="notes" rows={4} maxLength={MAX_READER_INSTRUCTIONS} defaultValue={notes} placeholder="Optional" /></label>
-          <button className="secondary">Save notes</button>
+          <label className="prompt-label">Claude's instructions<textarea name="prompt" className="prompt-text prompt-edit" rows={24} maxLength={MAX_READER_PROMPT} defaultValue={prompt.body} required /></label>
+          <div className="row">
+            <button>Save instructions</button>
+          </div>
         </form>
-        <p className="muted">Your notes are used the next time you press Re-scan.</p>
-        <Details summary="See Claude's instructions in full">
-          <pre className="prompt-text">{READER_PROMPT}</pre>
-          <p className="muted">Claude reads your file in parts, each with one more line of focus:</p>
+        {prompt.isDefault ? null : (
+          <form action={resetReaderPromptAction}>
+            <input type="hidden" name="back" value="/profile/import#how-claude-reads" />
+            <button className="secondary">Reset to default</button>
+          </form>
+        )}
+        <Details summary="What the app always adds">
+          <p>Claude reads your file in three parts. Each part gets your instructions above plus one line of focus:</p>
           <ul>
             <li><strong>Roles:</strong> {READER_PARTS.roles}</li>
             <li><strong>Everything else:</strong> {READER_PARTS.rest}</li>
             <li><strong>Second look:</strong> {READER_PARTS.sweep}</li>
           </ul>
+          <p>Then these lines, which you can't edit:</p>
+          <pre className="prompt-text">{READER_APP_RULES}</pre>
+          <p className="muted">Two things stay fixed in the app whatever the instructions say. The shape of Claude's answer is set by the app, so an edit can't break the import. And every row is checked word for word against your file before it's kept, so nothing made up can reach your profile.</p>
         </Details>
+        {prompt.history.length > 0 ? (
+          <Details summary={`Earlier versions (${prompt.history.length})`}>
+            <ul className="stack">
+              {prompt.history.map((v, i) => (
+                <li key={v.id}>
+                  <strong>{when(v.createdAt)}</strong> · {VERSION_KIND[v.kind]}{i === 0 ? " · in use" : ""}
+                  <Details summary="Show text">
+                    <pre className="prompt-text">{v.body}</pre>
+                  </Details>
+                  {i === 0 ? null : (
+                    <form action={restoreReaderPromptAction}>
+                      <input type="hidden" name="back" value="/profile/import#how-claude-reads" />
+                      <input type="hidden" name="version" value={v.id} />
+                      <button className="secondary">Use this version</button>
+                    </form>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </Details>
+        ) : null}
       </section>
       <Advanced>
         <AdvancedRow label="Resume reader" value={resumeReaderName() === "claude" ? "Claude (contact details and names stripped before sending), built-in rules as fallback" : "built-in rules"} />

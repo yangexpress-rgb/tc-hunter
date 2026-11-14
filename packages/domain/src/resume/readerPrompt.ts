@@ -68,10 +68,28 @@ export const READER_PARTS = {
 } as const;
 
 export const MAX_READER_INSTRUCTIONS = 2000;
+/** Longest instructions the person can save. */
+export const MAX_READER_PROMPT = 40000;
 
-/** The person's own instructions, added after ours. They can say where things go; they can't lift the rules above. */
-export function readerSystem(part: keyof typeof READER_PARTS, personal?: string | null): string {
-  const extra = (personal ?? "").trim().slice(0, MAX_READER_INSTRUCTIONS);
-  return `${READER_PROMPT}\n\n# This pass\n${READER_PARTS[part]}${extra
-    ? `\n\n# Notes from the person about their resume\nFollow these when deciding where things go. They never override "Rules you must not break".\n<person_notes>\n${extra}\n</person_notes>` : ""}`;
+/**
+ * Always sent after the person's instructions, whatever they say. The app checks
+ * every row against the file word for word before it is kept, and the answer's
+ * shape is fixed by the app, so an edit can change how Claude reads but can't make
+ * it invent rows or break the reply.
+ */
+export const READER_APP_RULES = `# Always, whatever is written above
+- Copy text exactly as written in the file. Never invent a row, a date, a level or a number. Rows that aren't in the file word for word are thrown away by the app.
+- Contact details appear as [name], [email], [phone], [link] or [address]. Ignore them.
+- Answer in the reply format you are given.`;
+
+/** The instructions in use: the person's saved version, or the app's default. */
+export function readerSystem(part: keyof typeof READER_PARTS, prompt?: string | null): string {
+  const body = (prompt ?? "").replace(/\r/g, "").trim().slice(0, MAX_READER_PROMPT) || READER_PROMPT;
+  return `${body}\n\n# This pass\n${READER_PARTS[part]}\n\n${READER_APP_RULES}`;
+}
+
+/** Older notes ("my certifications are under Training"), folded into the instructions once. */
+export function withLegacyNotes(prompt: string, notes?: string | null): string {
+  const extra = (notes ?? "").trim().slice(0, MAX_READER_INSTRUCTIONS);
+  return extra ? `${prompt}\n\n# Notes from the person about their resume\n${extra}` : prompt;
 }
