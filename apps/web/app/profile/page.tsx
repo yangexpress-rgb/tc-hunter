@@ -1,24 +1,27 @@
-import { coachNudges, getProfile } from "@tc-hunter/db";
+import { coachNudges, getPreferences, getProfile, profileDuplicates } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
+import { AwardsSection, CertificationsSection, EducationSection, ExperienceSections, SkillsSection } from "@/components/profile/sections";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { saveAboutAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-/** My Profile (brief 6.2): about you, with the Evidence Coach's to-do list on top. */
+/**
+ * My Profile (brief 6.2): about you, with the Evidence Coach's to-do list on top,
+ * then experience, education, certifications, skills and awards as sections on one page.
+ */
 export default async function ProfilePage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error }, profile, nudges] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session)]);
+  const [{ saved, error, params }, profile, nudges, prefs, copies] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
+    getPreferences(pool, session), profileDuplicates(pool, session)]);
+  const targets: string[] = [...(prefs?.target_titles ?? []), ...(prefs?.long_term_target_role ? [prefs.long_term_target_role] : [])];
   const a = profile.about;
-  const counts = {
-    experience: profile.experience.length, education: profile.education.length, skills: profile.skills.length, credentials: profile.credentials.length,
-  };
   return (
     <>
       <TopBar signedIn />
@@ -33,11 +36,7 @@ export default async function ProfilePage(props: PageProps) {
         </section>
       ) : null}
 
-      <p className="muted">
-        {counts.experience} experience rows · {counts.education} education · {counts.skills} skills · {counts.credentials} certifications
-      </p>
-
-      <section className="card">
+      <section className="card" id="about">
         <h2>About you</h2>
         <form action={saveAboutAction} className="fields">
           <input type="hidden" name="back" value="/profile" />
@@ -60,6 +59,12 @@ export default async function ProfilePage(props: PageProps) {
           <div><button type="submit">Save</button></div>
         </form>
       </section>
+
+      <ExperienceSections profile={profile} targets={targets} sort={params.sort} copies={copies} />
+      <EducationSection profile={profile} />
+      <CertificationsSection profile={profile} />
+      <SkillsSection profile={profile} />
+      <AwardsSection profile={profile} />
 
       <Details summary="How your information is kept">
         <p>{t("settings.privacy")}</p>

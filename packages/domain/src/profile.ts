@@ -39,7 +39,7 @@ export function evidenceCoach(c: CoachCounts): Nudge[] {
   if (c.skillsWithoutEvidence > 0) out.push({
     key: "skills_no_evidence",
     text: `${plural(c.skillsWithoutEvidence, "skill has", "skills have")} no proof yet — add one so ${c.skillsWithoutEvidence === 1 ? "it counts" : "they count"} in matching.`,
-    href: "/profile/skills#no-proof",
+    href: "/profile#no-proof",
   });
   if (c.staleAnswers > 0) out.push({ key: "stale_answers", text: `${plural(c.staleAnswers, "answer hasn't", "answers haven't")} been reviewed in 90 days.`, href: "/profile/answers#stale" });
   if (c.draftAnswers > 0) out.push({ key: "draft_answers", text: `${plural(c.draftAnswers, "saved answer is", "saved answers are")} waiting for your OK.`, href: "/profile/answers" });

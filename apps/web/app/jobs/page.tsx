@@ -143,7 +143,7 @@ export default async function JobsPage(props: PageProps) {
         <Details summary={t("jobs.gaps.title")}>
           <p className="muted">{t("jobs.gaps.hint")}</p>
           <ul>{summary.gaps.map((g: { skill: string; n: number }) => <li key={g.skill}>{g.skill} <span className="muted">(asked for by {g.n} {g.n === 1 ? "job" : "jobs"})</span></li>)}</ul>
-          <p><a href="/profile/skills">Add proof to your skills</a></p>
+          <p><a href="/profile#skills">Add proof to your skills</a></p>
         </Details>
       ) : null}
 

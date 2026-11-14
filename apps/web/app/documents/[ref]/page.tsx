@@ -246,7 +246,7 @@ function ChangesPane({ d, here }: { d: DocumentView; here: string }) {
           <h2>Skills this job asks for that your profile doesn't show ({d.gaps.length})</h2>
           <p className="muted">They are never added for you. If you have one, add it to your profile with proof, then prepare this resume again.</p>
           <ul>{d.gaps.map((g) => <li key={g.skill}><strong>{g.skill}</strong> <span className="muted">asked for as "{g.requirement}"</span></li>)}</ul>
-          <p><a href="/profile/skills">Add a skill with proof</a></p>
+          <p><a href="/profile#skills">Add a skill with proof</a></p>
         </div>
       ) : null}
 

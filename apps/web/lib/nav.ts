@@ -12,10 +12,6 @@ export const NAV: NavSection[] = [
   ] },
   { key: "me", label: "Me", icon: "◉", tabs: [
     { href: "/profile", label: "About you" },
-    { href: "/profile/experience", label: "Experience" },
-    { href: "/profile/education", label: "Education" },
-    { href: "/profile/skills", label: "Skills" },
-    { href: "/profile/credentials", label: "Certifications & awards" },
     { href: "/profile/stories", label: "Stories" },
     { href: "/profile/answers", label: "Saved answers" },
     { href: "/profile/preferences", label: "What you want" },
