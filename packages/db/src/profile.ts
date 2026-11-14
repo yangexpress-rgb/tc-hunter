@@ -213,11 +213,20 @@ export async function updateFact(pool: pg.Pool, session: Session, table: FactTab
   });
 }
 
-/** "This is right": the applicant checks one row (row by row, brief 5.1). */
+/** "Confirm": the applicant checks one row (row by row, brief 5.1). */
 export async function verifyFact(pool: pg.Pool, session: Session, table: FactTable, id: string): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
     const r = await c.query(`UPDATE ${table} SET verification = 'verified' WHERE id = $1`, [id]);
     if (r.rowCount === 0) throw new DomainError("TC_NOT_FOUND");
+  });
+}
+
+/** Confirm a role and every line under it that is still unconfirmed, in one go. */
+export async function verifyRole(pool: pg.Pool, session: Session, id: string): Promise<void> {
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const r = await c.query(`UPDATE experience_item SET verification = 'verified' WHERE id = $1`, [id]);
+    if (r.rowCount === 0) throw new DomainError("TC_NOT_FOUND");
+    await c.query(`UPDATE experience_bullet SET verification = 'verified' WHERE experience_item_id = $1 AND verification <> 'verified'`, [id]);
   });
 }
 

@@ -18,16 +18,16 @@ export default async function CredentialsPage(props: PageProps) {
     <>
       <TopBar signedIn />
       <h1>{t("profile.credentials.title")}</h1>
-      <p className="muted">Licences and certifications, then honors and awards, as on a LinkedIn profile.</p>
       <ProfileNav current="/profile/credentials" />
       <Flash saved={saved} error={error} />
       <FactList table="credential" rows={profile.credentials} back="/profile/credentials" addLabel="Add a certification or licence"
+        sectionTitle="Licenses & certifications" editLabel="Edit certification"
         title={(r) => r.name}
-        describe={(r) => [KIND[r.kind], r.issuer, r.issued_on ? `issued ${showMonth(r.issued_on)}` : null, r.expires_on ? `expires ${showMonth(r.expires_on)}` : null].filter(Boolean).join(" · ")} />
-      <h2 id="awards">Honors and awards</h2>
+        describe={(r) => [r.issuer, [KIND[r.kind], r.issued_on ? `Issued ${showMonth(r.issued_on)}` : null, r.expires_on ? `Expires ${showMonth(r.expires_on)}` : null].filter(Boolean).join(" · ")]} />
       <FactList table="honor_award" rows={profile.awards} back="/profile/credentials#awards" addLabel="Add an honor or award"
+        sectionTitle="Honors & awards" id="awards" editLabel="Edit honor or award"
         title={(r) => r.title}
-        describe={(r) => [r.issuer, r.awarded_on ? showMonth(r.awarded_on) : null, r.description].filter(Boolean).join(" · ")} />
+        describe={(r) => [[r.issuer, r.awarded_on ? showMonth(r.awarded_on) : null].filter(Boolean).join(" · "), r.description]} />
     </>
   );
 }

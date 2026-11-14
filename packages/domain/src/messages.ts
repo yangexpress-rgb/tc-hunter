@@ -47,8 +47,8 @@ export const L1 = {
   // Profile (Module A)
   "profile.title": "My profile",
   "profile.checked": "Checked",
-  "profile.draft": "Needs your check",
-  "profile.check_cta": "This is right",
+  "profile.draft": "From your resume, not confirmed yet",
+  "profile.check_cta": "Confirm",
   "profile.import.title": "Bring in your resume",
   "profile.import.intro": "Upload your resume (PDF, Word or text) or your LinkedIn data download. Everything comes in as a draft for you to check, row by row. Nothing counts until you say it's right.",
   "profile.import.done": "We read {n} rows from your file. Please check each one.",

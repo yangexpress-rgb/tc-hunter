@@ -18,10 +18,6 @@ export function ProfileNav({ current }: { current: string }) {
   );
 }
 
-export function Chip({ checked }: { checked: boolean }) {
-  return <span className={`chip ${checked ? "ok" : "draft"}`}>{checked ? t("profile.checked") : t("profile.draft")}</span>;
-}
-
 export function Flash({ saved, error }: { saved?: boolean; error?: string }) {
   if (error) return <p className="error" role="alert">{error}</p>;
   if (saved) return <p className="status" role="status">{t("profile.saved")}</p>;

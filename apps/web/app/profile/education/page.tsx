@@ -19,8 +19,9 @@ export default async function EducationPage(props: PageProps) {
       <ProfileNav current="/profile/education" />
       <Flash saved={saved} error={error} />
       <FactList table="education_item" rows={profile.education} back="/profile/education" addLabel="Add education"
+        sectionTitle="Education" editLabel="Edit education"
         title={(r) => r.institution}
-        describe={(r) => [r.degree, r.field].filter(Boolean).join(", ") + (r.end_date ? ` · ${showMonth(r.end_date)}` : "") + (r.honours ? ` · ${r.honours}` : "")} />
+        describe={(r) => [[r.degree, r.field].filter(Boolean).join(", "), [r.start_date ? showMonth(r.start_date) : null, r.end_date ? showMonth(r.end_date) : null].filter(Boolean).join(" – "), r.honours]} />
     </>
   );
 }
