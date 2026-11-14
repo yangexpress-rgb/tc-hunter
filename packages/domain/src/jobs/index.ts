@@ -6,3 +6,4 @@ export * from "./requirements";
 export * from "./jsonld";
 export * from "./fetcher";
 export * from "./sources";
+export * from "./discover";

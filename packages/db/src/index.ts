@@ -11,6 +11,7 @@ export * from "./profile";
 export * from "./privacy";
 export * from "./passkeys";
 export * from "./jobs";
+export * from "./discover";
 export * from "./matches";
 export * from "./documents";
 export * from "./tracker";

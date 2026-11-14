@@ -8,7 +8,7 @@ import { GOAL_SORTS, GoalTables, type GoalSort } from "@/components/jobs/GoalTab
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { adjustmentAction, alertSeenAction, refreshAction, scanNowAction } from "./actions";
+import { adjustmentAction, alertSeenAction, refreshAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -55,16 +55,14 @@ export default async function JobsPage(props: PageProps) {
       <section className="card scan-line">
         <p className="status" role="status">
           {busy ? t("jobs.scanning")
-            : sources.length === 0 ? t("jobs.no_sources")
+            : sources.length === 0 && !goals.some((g) => g.active) ? t("jobs.no_sources")
             : scan ? `Last looked ${ago(scan.finished_at)}: ${scan.sources_checked} ${scan.sources_checked === 1 ? "place" : "places"} checked, ${scan.new_count} new ${scan.new_count === 1 ? "job" : "jobs"} for you${scan.expired_count ? `, ${scan.expired_count} closed` : ""}.`
             : t("jobs.never_scanned")}
         </p>
         <div className="inline-actions">
           <form action={refreshAction}><input type="hidden" name="back" value={here} />
             <button disabled={busy} title="Score every job again against your goals, and look for new ones">Refresh</button></form>
-          {sources.length ? (
-            <form action={scanNowAction}><input type="hidden" name="back" value={here} /><button className="secondary" disabled={busy}>{t("jobs.scan_cta")}</button></form>
-          ) : <a className="button" href="/jobs/sources">{t("home.next_action.sources")}</a>}
+          {sources.length === 0 && !goals.some((g) => g.active) ? <a className="button" href="/profile/goals">Add a goal</a> : null}
           <a href="/jobs/sources">{t("jobs.sources.title")}</a>
           <a href="/jobs/paste">{t("jobs.paste.title")}</a>
         </div>
@@ -122,7 +120,7 @@ export default async function JobsPage(props: PageProps) {
           <GoalTables goals={goals} rows={rows} by={gsort} dir={gdir} sortHref={(by, dir) => q({ gsort: by === "score" ? undefined : by, gdir: dir })} />
         </>
       ) : rows.length === 0 ? (
-        <p className="muted empty">{status === "new" ? (sources.length ? t("jobs.empty") : t("jobs.no_sources")) : status === "saved" ? "You haven't saved any jobs yet." : "You haven't passed on any jobs."}</p>
+        <p className="muted empty">{status === "new" ? (sources.length || goals.some((g) => g.active) ? t("jobs.empty") : t("jobs.no_sources")) : status === "saved" ? "You haven't saved any jobs yet." : "You haven't passed on any jobs."}</p>
       ) : (
         <ul className="job-list plain">
           {rows.map((r) => (

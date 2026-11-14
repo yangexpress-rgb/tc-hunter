@@ -50,6 +50,7 @@ export const AUDIT_ALLOWED_KEYS = {
   "data.deleted": [],
   "source.followed": ["kind"],
   "source.unfollowed": ["kind"],
+  "sources.discovered": ["checked", "found", "followed", "unfollowed"],
   "scan.finished": ["sources", "checked", "new_jobs", "updated", "closed"],
   "match.feedback": ["job_ref", "action", "reason"],
   "adjustment.changed": ["kind", "active"],

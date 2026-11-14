@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { followSource, giveFeedback, listSources, markAlertSeen, requestLink, requestScan, rescoreMatches, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
+import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, rescoreMatches, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
 import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -30,13 +30,13 @@ export async function scanNowAction(form: FormData) {
   await act(form, () => requestScan(app().pool, s), "/jobs", "scanning");
 }
 
-/** Refresh: re-score every job against today's goals now, then look for new jobs where you follow sources. */
+/** Refresh: re-score every job against today's goals now, then go looking: find employers for the goals, read their boards, score. */
 export async function refreshAction(form: FormData) {
   const s = await requireSession();
   await act(form, async () => {
     const { pool } = app();
     await rescoreMatches(pool, s);
-    if ((await listSources(pool, s)).length) await requestScan(pool, s);
+    await requestScan(pool, s, { discover: true });
   }, "/jobs", "refreshed");
 }
 

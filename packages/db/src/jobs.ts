@@ -13,6 +13,7 @@ import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { goalFromRow } from "./profile";
+import { discoveryDue, runDiscovery, type DiscoverDeps } from "./discover";
 
 /**
  * Module B and C on the server (design 5.2, 5.3). The catalogue (sources,
@@ -210,7 +211,7 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
     : (await c.query(
         `SELECT DISTINCT p.* FROM job_posting p
            JOIN job_posting_source ps ON ps.job_posting_id = p.id
-           JOIN applicant_job_source f ON f.job_source_id = ps.job_source_id
+           JOIN applicant_job_source f ON f.job_source_id = ps.job_source_id AND NOT f.muted
           WHERE p.status = 'active'
          UNION
          SELECT p.* FROM job_posting p JOIN match m ON m.job_posting_id = p.id`)).rows;
@@ -284,7 +285,7 @@ export async function watchAlerts(c: pg.PoolClient, eventIds: string[]): Promise
 // The worker's two jobs: a scan, and reading one pasted link
 // ---------------------------------------------------------------------------
 
-export interface WorkDeps { fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps; email?: EmailDeps; digest?: DigestDeps }
+export interface WorkDeps { fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps; email?: EmailDeps; digest?: DigestDeps; discover?: DiscoverDeps }
 
 const PLAIN_REFUSAL: Record<string, string> = {
   robots: "This site asks automated readers not to look at its job pages, so we won't.",
@@ -296,14 +297,20 @@ const PLAIN_REFUSAL: Record<string, string> = {
 };
 
 /** One scan for one applicant (design 5.2): every followed source, then matching, then posting watch. */
-export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps): Promise<Record<string, number>> {
+export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: { discover?: boolean } = {}): Promise<Record<string, number>> {
+  // First, find places to look from the goals, when goals changed or a week has passed (or the person pressed Refresh).
+  let found: Record<string, number> = {};
+  if (deps.discover && (opts.discover || await withApplicant(pool, ctx, (c) => discoveryDue(c)))) {
+    const d = await runDiscovery(pool, ctx, deps.fetcher, deps.discover);
+    found = { companies_checked: d.companiesChecked, boards_found: d.boardsFound, newly_followed: d.newlyFollowed };
+  }
   const now = deps.now?.() ?? new Date();
   const wall = Date.now(); // freshness and back-off use the real clock, like the database's last_success_at
   const fresh = (deps.freshMinutes ?? 30) * 60_000;
   const { runId, sources, targets } = await withApplicant(pool, ctx, async (c) => {
     const run = await c.query("INSERT INTO scan_run (applicant_id) VALUES (app_applicant_id()) RETURNING id");
     const src = (await c.query(
-      `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id ORDER BY s.name`)).rows;
+      `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows;
     const prefs = await prefsFor(c);
     const exp = (await c.query("SELECT title FROM experience_item WHERE verification = 'verified'")).rows.map((r) => r.title as string);
     const wanted = goalTargets(prefs);
@@ -360,7 +367,7 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
          jobs_checked = $6, related_count = $7, source_notes = $8 WHERE id = $1`,
       [runId, sources.length, m.newMatches, updated, closed, checked, m.related, JSON.stringify(notes)]);
     await recordAudit(c, "scan.finished", { objectType: "scan_run", objectId: runId, payload: { sources: sources.length, checked, new_jobs: m.newMatches, updated, closed } });
-    return { sources: sources.length, checked, newPostings: fresh0, newMatches: m.newMatches, updated, closed, alerts };
+    return { ...found, sources: sources.length, checked, newPostings: fresh0, newMatches: m.newMatches, updated, closed, alerts };
   });
 }
 
@@ -396,7 +403,7 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolea
   if (!item) return false;
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
-    const result = item.kind === "scan" ? await runScan(pool, ctx, deps)
+    const result = item.kind === "scan" ? await runScan(pool, ctx, deps, { discover: (item.payload as { discover?: boolean }).discover === true })
       : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))
       : item.kind === "resume_digest" ? { status: await (deps.digest ? runDigest(pool, ctx, String((item.payload as { digest_id?: string }).digest_id), deps.digest) : Promise.reject(new Error("resume reading not set up"))) }
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
@@ -417,7 +424,8 @@ export async function followSource(pool: pg.Pool, session: Session, address: str
   if (!spec) throw new DomainError("TC_SOURCE_NOT_SUPPORTED");
   return withApplicant(pool, asApplicant(session), async (c) => {
     const id = await upsertSource(c, spec);
-    await c.query("INSERT INTO applicant_job_source (applicant_id, job_source_id) VALUES (app_applicant_id(), $1) ON CONFLICT DO NOTHING", [id]);
+    await c.query(`INSERT INTO applicant_job_source (applicant_id, job_source_id) VALUES (app_applicant_id(), $1)
+      ON CONFLICT (applicant_id, job_source_id) DO UPDATE SET origin = 'you', muted = false`, [id]);
     await recordAudit(c, "source.followed", { objectType: "job_source", objectId: id, payload: { kind: spec.kind } });
     return id;
   });
@@ -425,7 +433,11 @@ export async function followSource(pool: pg.Pool, session: Session, address: str
 
 export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: string): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
-    const r = await c.query("DELETE FROM applicant_job_source WHERE job_source_id = $1 RETURNING job_source_id", [sourceId]);
+    // A place the app found is kept as "don't watch", so it isn't found and followed again.
+    const r = await c.query(
+      `WITH m AS (UPDATE applicant_job_source SET muted = true WHERE job_source_id = $1 AND origin = 'found' AND NOT muted RETURNING job_source_id),
+            d AS (DELETE FROM applicant_job_source WHERE job_source_id = $1 AND origin = 'you' RETURNING job_source_id)
+       SELECT job_source_id FROM m UNION ALL SELECT job_source_id FROM d`, [sourceId]);
     if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");
     const k = await c.query("SELECT kind FROM job_source WHERE id = $1", [sourceId]);
     await recordAudit(c, "source.unfollowed", { objectType: "job_source", objectId: sourceId, payload: { kind: k.rows[0]?.kind ?? "" } });
@@ -434,14 +446,16 @@ export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: 
 
 export async function listSources(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.last_success_at, s.last_checked_at,
+    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.last_success_at, s.last_checked_at, f.origin, f.reason, f.goal_id,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
-     FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id ORDER BY s.name`)).rows);
+     FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }
 
-export async function requestScan(pool: pg.Pool, session: Session): Promise<void> {
+/** Queues a scan. With `discover`, it first looks again for employers that fit the goals. */
+export async function requestScan(pool: pg.Pool, session: Session, opts: { discover?: boolean } = {}): Promise<void> {
   await withApplicant(pool, asApplicant(session), (c) => c.query(
-    "INSERT INTO work_item (applicant_id, kind) VALUES (app_applicant_id(), 'scan') ON CONFLICT DO NOTHING"));
+    "INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', $1) ON CONFLICT DO NOTHING",
+    [JSON.stringify(opts.discover ? { discover: true } : {})]));
 }
 
 export async function requestLink(pool: pg.Pool, session: Session, p: { url: string; title?: string; employer?: string; location?: string; text?: string }): Promise<string> {
