@@ -3,7 +3,7 @@ import {
   dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreMatch, sha256Hex, canonicalJson,
   SourceRefusedError, titleIsRelated, levelOf,
-  type Adjustment, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
+  type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { runTailor, type TailorDeps } from "./documents";
@@ -174,6 +174,12 @@ const postingFor = (r: Record<string, any>): MatchPosting => ({
   postedAt: r.posted_at, status: r.status,
 });
 
+/** The applicant's accepted score calibration (P10), if any. */
+export async function activeWeights(c: pg.PoolClient): Promise<{ weights: Weights; rulesVersion: string } | null> {
+  const r = (await c.query("SELECT weights, rules_version FROM score_calibration WHERE active")).rows[0];
+  return r ? { weights: r.weights, rulesVersion: r.rules_version } : null;
+}
+
 export interface MatchRunResult { considered: number; related: number; newMatches: number }
 
 /**
@@ -185,6 +191,7 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
   const profile = await profileFor(c);
   const prefs = await prefsFor(c);
   const adjustments: Adjustment[] = (await c.query("SELECT id, kind, target, delta, label FROM preference_adjustment WHERE active")).rows;
+  const cal = await activeWeights(c);
   const postings = postingIds
     ? (await c.query("SELECT * FROM job_posting WHERE id = ANY($1::uuid[])", [postingIds])).rows
     : (await c.query(
@@ -202,7 +209,7 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
     const prior = existing.get(p.id);
     if (!prior && !postingIds && !titleIsRelated(p.title, targets)) continue;
     related++;
-    const res = scoreMatch(profile, prefs, postingFor(p), { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments });
+    const res = scoreMatch(profile, prefs, postingFor(p), { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
     const r = await c.query(
       `INSERT INTO match (applicant_id, job_posting_id, score, components, matched_skills, gap_skills, filtered, filter_reasons, reason_line, ladder_tag, ladder_label,
          adjustments, rules_version, parser_version, computed_at, found_by)
@@ -213,7 +220,7 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
          parser_version = EXCLUDED.parser_version, computed_at = now()
        RETURNING (xmax = 0) AS inserted`,
       [p.id, res.score, JSON.stringify(res.components), JSON.stringify(res.matchedSkills), res.gapSkills, res.filtered, res.filterReasons, res.reasonLine,
-        res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), RULES_VERSION, p.parser_version, prior?.found_by ?? foundBy]);
+        res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy]);
     if (r.rows[0].inserted) created++;
   }
   return { considered: postings.length, related, newMatches: created };

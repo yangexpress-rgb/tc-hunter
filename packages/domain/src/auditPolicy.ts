@@ -14,6 +14,8 @@ export const AUDIT_ALLOWED_KEYS = {
   "document.generated": ["document_ref", "type", "version", "proposer", "blocked"],
   "document.exported": ["document_ref", "format"],
   "skill.alias_confirmed": [],
+  "application.stage_changed": ["application_ref", "from", "to"],
+  "calibration.changed": ["active", "rules_version"],
   "packet.approved": ["application_ref", "packet_version", "packet_hash"],
   "packet.submit_approved": ["application_ref", "packet_version", "submit_hash"],
   "packet.submitted": [

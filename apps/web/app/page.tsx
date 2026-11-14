@@ -1,8 +1,9 @@
-import { coachCounts, jobsSummary, listAlerts, listDocuments } from "@tc-hunter/db";
+import { coachCounts, getWeeklyReview, jobsSummary, listAlerts, listDocuments, trackerSummary } from "@tc-hunter/db";
 import { evidenceCoach, t } from "@tc-hunter/domain";
 import { Details, NextAction } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { TopBar } from "@/components/TopBar";
+import { BudgetLine, when } from "@/components/applications/AppBits";
 import { app, requireSession } from "@/lib/server";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +14,9 @@ const TILES = ["home.tile.new_matches", "home.tile.in_progress", "home.tile.foll
 export default async function Home() {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [counts, jobs, alerts, docs] = await Promise.all([coachCounts(pool, session), jobsSummary(pool, session), listAlerts(pool, session), listDocuments(pool, session)]);
+  const [counts, jobs, alerts, docs, track, weekly] = await Promise.all([coachCounts(pool, session), jobsSummary(pool, session), listAlerts(pool, session), listDocuments(pool, session),
+    trackerSummary(pool, session), getWeeklyReview(pool, session)]);
+  const due = track.followUpsDue[0] as { public_ref: string; next_step: string; title: string; employer_canonical: string } | undefined;
   const draftDoc = docs.find((d) => d.status === "draft");
   const nudges = evidenceCoach(counts);
   const next = counts.experienceRows === 0
@@ -22,6 +25,7 @@ export default async function Home() {
     : !counts.hasPreferences ? { title: t("home.next_action.preferences"), href: "/profile/preferences" }
     : jobs.following === 0 ? { title: t("home.next_action.sources"), note: t("home.next_action.sources_note"), href: "/jobs/sources" }
     : alerts.length ? { title: t("home.next_action.alerts"), note: alerts[0]!.message, href: "/jobs" }
+    : due ? { title: `${due.next_step}: ${due.title}`, note: `At ${due.employer_canonical}.`, href: `/applications/${due.public_ref}` }
     : draftDoc ? { title: `Look over your ${draftDoc.type === "cover_letter" ? "cover letter" : "resume"} for ${draftDoc.title}`, note: "Approve it when it reads right.", href: `/documents/${draftDoc.public_ref}` }
     : jobs.newToday > 0 ? { title: t("home.next_action.matches", { n: String(jobs.newToday) }), href: "/jobs" }
     : nudges.length ? { title: t("home.next_action.improve"), note: nudges[0]!.text, href: nudges[0]!.href }
@@ -35,6 +39,10 @@ export default async function Home() {
         {TILES.map((k) => {
           const value = k === "home.tile.new_matches" && jobs.newToday ? <a href="/jobs">{jobs.newToday}</a>
             : k === "home.tile.gaps" && jobs.gaps.length ? <span className="small-value">{jobs.gaps.slice(0, 3).map((g: { skill: string }) => g.skill).join(", ")}</span>
+            : k === "home.tile.in_progress" && track.inProgress ? <a href="/applications">{track.inProgress}</a>
+            : k === "home.tile.follow_ups" && track.followUpsDue.length ? <a href={track.followUpsDue.length === 1 ? `/applications/${due!.public_ref}` : "/applications"}>{track.followUpsDue.length}</a>
+            : k === "home.tile.interviews" && track.interviews.length
+              ? <a className="small-value" href={`/applications/${track.interviews[0].public_ref}`}>{when(track.interviews[0].interview_at, track.timeZone)}{track.interviews.length > 1 ? ` (+${track.interviews.length - 1})` : ""}</a>
             : t("home.tile.empty");
           return (
             <div className="tile" key={k}>
@@ -44,6 +52,13 @@ export default async function Home() {
           );
         })}
       </div>
+      <BudgetLine budget={track.budget} />
+      {weekly.review.row.saved + weekly.review.row.applied + weekly.review.row.approved_docs + weekly.review.row.responses > 0 ? (
+        <Details summary="Last week at a glance">
+          <p>You saved {weekly.review.row.saved}, approved {weekly.review.row.approved_docs} documents and applied to {weekly.review.row.applied}. {weekly.review.row.responses ? `${weekly.review.row.responses} employers got back to you.` : ""}</p>
+          <p><a href={`/reports/weekly?week=${weekly.review.week}`}>See the full look back</a></p>
+        </Details>
+      ) : null}
       {alerts.length ? (
         <Details summary={t("home.alerts.title")}>
           <ul>{alerts.map((a) => <li key={a.id}><a href={`/jobs/${a.reposted_as ?? a.public_ref}`}>{a.message}</a></li>)}</ul>
@@ -59,7 +74,7 @@ export default async function Home() {
         <p>Nothing is ever sent to an employer until you approve that specific application.</p>
       </Details>
       <Advanced>
-        <AdvancedRow label="Build" value="Phase 3 (tailor and documents)" />
+        <AdvancedRow label="Build" value="Phase 4a (tracker and reports)" />
         <AdvancedRow label="Session idle timeout" value={`${cfg.sessionIdleMinutes} min`} />
         <AdvancedRow label="Two-step sign-in" value={session.mfaEnabled ? "on" : "off"} />
       </Advanced>
