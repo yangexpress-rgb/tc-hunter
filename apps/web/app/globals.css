@@ -182,3 +182,9 @@ table.report td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.report thead th { color: var(--muted); font-weight: 600; font-size: 13px; }
 .email-suggestions .suggestion + .suggestion { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .email-suggestions p { margin: 0 0 8px; }
+
+/* Two-step sign-in setup */
+.qr { width: 200px; max-width: 100%; background: #fff; padding: 8px; border-radius: 8px; margin: 8px 0; }
+.qr svg { display: block; width: 100%; height: auto; }
+.recovery ul.codes { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 16px; margin: 8px 0 12px; }
+.recovery code { font-size: 15px; letter-spacing: 0.04em; }

@@ -17,7 +17,7 @@ describe("schema", () => {
     const names = r.rows.map((x) => x.table_name).sort();
     expect(DOMAIN_TABLES).toHaveLength(30);
     expect(names).toEqual([...DOMAIN_TABLES, "user_session", "request_key", "packet_transition", "stage_forward", "schema_migration",
-      "import_batch", "passkey_credential", "auth_challenge", "job_posting_event", "applicant_job_source", "posting_alert", "work_item", "score_calibration", "email_connection", "email_signal", "extension_device"].sort());
+      "import_batch", "passkey_credential", "auth_challenge", "job_posting_event", "applicant_job_source", "posting_alert", "work_item", "score_calibration", "email_connection", "email_signal", "extension_device", "mfa_recovery_code"].sort());
   });
 
   it("no column can hold an employer-site password or session (vault-only rule)", async () => {
@@ -26,7 +26,7 @@ describe("schema", () => {
     const found = r.rows.map((x) => `${x.table_name}.${x.column_name}`).sort();
     // Only the app's own sign-in: an argon2id hash, an encrypted authenticator seed,
     // a yes/no flag, and passkeys (public keys only, in passkey_credential). Nothing for employer sites.
-    expect(found).toEqual(["user_account.mfa_secret_enc", "user_account.password_hash", "user_session.mfa_passed"]);
+    expect(found).toEqual(["user_account.mfa_pending_secret_enc", "user_account.mfa_secret_enc", "user_account.password_hash", "user_session.mfa_passed"]);
     const pk = await ownerQuery("SELECT column_name FROM information_schema.columns WHERE table_name = 'passkey_credential' ORDER BY 1");
     expect(pk.rows.map((x) => x.column_name)).toEqual(
       ["counter", "created_at", "credential_id", "id", "label", "last_used_at", "public_key", "transports", "user_account_id"]);

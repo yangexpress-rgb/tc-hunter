@@ -1,23 +1,39 @@
 "use server";
 import { redirect } from "next/navigation";
-import { beginMfaSetup, confirmMfaSetup, signOut } from "@tc-hunter/db";
-import { otpauthUri, t } from "@tc-hunter/domain";
-import { app, clearSessionCookie, requireSession, sessionToken } from "@/lib/server";
+import QRCode from "qrcode";
+import { beginMfaSetup, confirmMfaSetup, remakeRecoveryCodes, signOut } from "@tc-hunter/db";
+import { errorCode, otpauthUri, t } from "@tc-hunter/domain";
+import { app, clearSessionCookie, requireSession, requireSessionForSetup, sessionToken } from "@/lib/server";
 
-export type MfaState = { key?: string; link?: string; error?: string; done?: boolean };
+export type MfaState = { key?: string; link?: string; qr?: string; error?: string; done?: boolean; codes?: string[] };
 
+// These two run before two-step sign-in is on, so they use the setup-only session check.
 export async function startMfaAction(): Promise<MfaState> {
-  const session = await requireSession();
+  const session = await requireSessionForSetup();
   const { pool, cfg } = app();
   const key = await beginMfaSetup(pool, cfg, session);
-  return { key, link: otpauthUri(key, session.email) };
+  const link = otpauthUri(key, session.email);
+  const qr = await QRCode.toString(link, { type: "svg", margin: 1, errorCorrectionLevel: "M" });
+  return { key, link, qr };
 }
 
 export async function confirmMfaAction(prev: MfaState, form: FormData): Promise<MfaState> {
+  const session = await requireSessionForSetup();
+  const { pool, cfg } = app();
+  const codes = await confirmMfaSetup(pool, cfg, session, String(form.get("code") ?? "").trim());
+  return codes ? { done: true, codes } : { ...prev, error: t("signin.code_failed") };
+}
+
+export type CodesState = { codes?: string[]; error?: string };
+
+export async function remakeCodesAction(): Promise<CodesState> {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const ok = await confirmMfaSetup(pool, cfg, session, String(form.get("code") ?? "").trim());
-  return ok ? { done: true } : { ...prev, error: t("signin.code_failed") };
+  try {
+    return { codes: await remakeRecoveryCodes(pool, cfg, session) };
+  } catch (e) {
+    return { error: errorCode(e) ?? "TC_UNKNOWN" };
+  }
 }
 
 export async function signOutAction(): Promise<void> {

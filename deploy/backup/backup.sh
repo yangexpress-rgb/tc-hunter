@@ -10,7 +10,8 @@ umask 077
 VAULT_DIR="${VAULT_DIR:-/vault}"
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 RCLONE_CONFIG="${RCLONE_CONFIG:-/config/rclone/rclone.conf}"
-export RCLONE_CONFIG
+# Railway has no config file: the remote is described by RCLONE_CONFIG_<NAME>_* variables instead.
+if [ -f "$RCLONE_CONFIG" ]; then export RCLONE_CONFIG; else unset RCLONE_CONFIG; fi
 : "${DATABASE_OWNER_URL:?}" "${BACKUP_AGE_RECIPIENT:?}" "${BACKUP_REMOTE:?}"
 
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -25,9 +26,14 @@ mkdir -p "$BACKUP_DIR"
 out="$BACKUP_DIR/tc-hunter-$ts.tar.age"
 age --encrypt --recipient "$BACKUP_AGE_RECIPIENT" --output "$out" "$work/bundle.tar"
 
+size="$(wc -c < "$out")"
 rclone copy "$out" "$BACKUP_REMOTE"
 rclone delete --min-age "${BACKUP_KEEP_REMOTE_DAYS:-60}d" "$BACKUP_REMOTE"
-find "$BACKUP_DIR" -name 'tc-hunter-*.tar.age' -mtime "+${BACKUP_KEEP_LOCAL_DAYS:-7}" -delete
+if [ "${BACKUP_KEEP_LOCAL_DAYS:-7}" = "0" ]; then
+  rm -f "$out"   # Railway: keep nothing beside the app; the off-site copy is the backup
+else
+  find "$BACKUP_DIR" -name 'tc-hunter-*.tar.age' -mtime "+${BACKUP_KEEP_LOCAL_DAYS:-7}" -delete
+fi
 
-echo "$ts $(basename "$out") $(wc -c < "$out")" > "$BACKUP_DIR/last-success"
+echo "$ts $(basename "$out") $size" > "$BACKUP_DIR/last-success"
 echo "Backup $ts done and copied off-site."

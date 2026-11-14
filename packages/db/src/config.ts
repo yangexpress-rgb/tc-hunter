@@ -6,6 +6,13 @@ export interface AppConfig {
   sessionIdleMinutes: number;
   stepUpMinutes: number;
   allowSignup: boolean;
+  /**
+   * When set, creating an account needs this code (shared only with the household).
+   * On a public host (Railway) sign-up stays closed unless a code is set.
+   */
+  signupCode?: string;
+  /** Every account must turn on two-step sign-in before using the app. On by default. */
+  requireMfa: boolean;
   /** The address people open the app at, e.g. https://tc-hunter.your-tailnet.ts.net. Passkeys are tied to it. */
   publicOrigin?: string;
 }
@@ -18,9 +25,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionIdleMinutes: Number(env.SESSION_IDLE_MINUTES ?? 60),
     stepUpMinutes: Number(env.STEP_UP_MINUTES ?? 5),
     // Household server: sign-up is open only until both accounts exist, then the operator closes it.
-    allowSignup: env.ALLOW_SIGNUP !== "false",
+    allowSignup: env.ALLOW_SIGNUP !== "false" && (!onPublicHost(env) || Boolean(env.SIGNUP_CODE)),
+    signupCode: env.SIGNUP_CODE || undefined,
+    requireMfa: env.REQUIRE_MFA !== "false",
     publicOrigin: env.TC_PUBLIC_ORIGIN || undefined,
   };
+}
+
+/** Running on a public host (Railway sets RAILWAY_ENVIRONMENT_NAME; TC_PUBLIC_HOST=true for any other). */
+export function onPublicHost(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.RAILWAY_ENVIRONMENT_NAME || env.RAILWAY_ENVIRONMENT) || env.TC_PUBLIC_HOST === "true";
 }
 
 /**

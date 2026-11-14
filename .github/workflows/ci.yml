@@ -46,6 +46,16 @@ jobs:
           DATABASE_URL: postgres://unused@localhost/unused
           TC_MASTER_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 
+  railway-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the Railway image (deploy/railway/Dockerfile)
+        run: docker build -f deploy/railway/Dockerfile -t tc-hunter-railway .
+      - name: Image has the backup tools and starts as expected
+        run: |
+          docker run --rm --entrypoint sh tc-hunter-railway -c 'pg_dump --version && age --version && rclone version | head -1 && test -f web/apps/web/server.js && test -f /usr/local/bin/backup.sh'
+
   secrets:
     runs-on: ubuntu-latest
     steps:

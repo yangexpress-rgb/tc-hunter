@@ -1,4 +1,4 @@
-import { emailStatus, hasFreshStepUp, listDevices, listPasskeys, passkeysAvailable, verifyOwnAuditChain, withApplicant } from "@tc-hunter/db";
+import { emailStatus, hasFreshStepUp, listDevices, listPasskeys, passkeysAvailable, recoveryCodesLeft, verifyOwnAuditChain, withApplicant } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details, Status } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -7,7 +7,7 @@ import { app, requireSession } from "@/lib/server";
 import { Flash } from "@/components/profile/Fact";
 import { AddPasskey, ConfirmWithPasskey } from "@/components/profile/PasskeyButtons";
 import { flashOf, type PageProps } from "@/lib/profile";
-import { MfaSetup } from "./MfaSetup";
+import { MfaSetup, RemakeCodes } from "./MfaSetup";
 import { signOutAction } from "./actions";
 import { eraseAction, removePasskeyAction, stepUpAction } from "./vault-actions";
 import { checkEmailAction, disconnectEmailAction } from "./email-actions";
@@ -29,6 +29,7 @@ export default async function SettingsPage(props: PageProps) {
   const email = await emailStatus(pool, cfg, session);
   const emailReady = googleClient() !== null;
   const devices = await listDevices(pool, session);
+  const codesLeft = session.mfaEnabled ? await recoveryCodesLeft(pool, session) : 0;
   const h = await headers();
   const origin = process.env.TC_PUBLIC_ORIGIN || `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost"}`;
   const ago = (d: Date | null) => (d ? new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d)) : "not yet");
@@ -41,13 +42,25 @@ export default async function SettingsPage(props: PageProps) {
       <section className="card">
         <h2>{t("settings.mfa.title")}</h2>
         {session.mfaEnabled ? (
-          <Status>{t("settings.mfa.on")}</Status>
+          <>
+            <Status>{t("settings.mfa.on")}</Status>
+            <p className="muted">{t("settings.mfa.codes_left", { n: String(codesLeft) })}</p>
+            {fresh ? (
+              <div className="inline-actions">
+                <RemakeCodes text={{ cta: t("settings.mfa.codes_remake"), intro: t("settings.mfa.codes_intro") }} />
+                <MfaSetup text={{
+                  setup: t("settings.mfa.setup"), enable: t("settings.mfa.move_cta"), confirm: t("settings.mfa.confirm_cta"),
+                  on: t("settings.mfa.moved"), codesIntro: t("settings.mfa.codes_intro"), codesSaved: t("settings.mfa.codes_saved"),
+                }} />
+              </div>
+            ) : <p className="hint">{t("settings.confirm.intro")} <a href="#confirm">{t("settings.confirm.title")}</a></p>}
+          </>
         ) : (
           <>
             <p>{t("settings.mfa.off")}</p>
             <MfaSetup text={{
-              setup: t("settings.mfa.setup"), enable: t("settings.mfa.enable_cta"),
-              confirm: t("settings.mfa.confirm_cta"), on: t("settings.mfa.on"),
+              setup: t("settings.mfa.setup"), enable: t("settings.mfa.enable_cta"), confirm: t("settings.mfa.confirm_cta"),
+              on: t("settings.mfa.on"), codesIntro: t("settings.mfa.codes_intro"), codesSaved: t("settings.mfa.codes_saved"),
             }} />
           </>
         )}
@@ -175,6 +188,7 @@ export default async function SettingsPage(props: PageProps) {
 
       <Advanced>
         <AdvancedRow label="Activity record" value={broken === null ? "intact (hash chain verified)" : `broken at entry ${broken}`} />
+        <AdvancedRow label="Two-step sign-in" value={`${cfg.requireMfa ? "required" : "optional"}; TOTP (RFC 6238), each code once; account pauses after 10 wrong tries`} />
         <AdvancedRow label="Session idle timeout" value={`${cfg.sessionIdleMinutes} min`} />
         <AdvancedRow label="Fresh check window" value={`${cfg.stepUpMinutes} min before submission approval`} />
         <AdvancedRow label="Applicant id" value={session.applicantId} />
