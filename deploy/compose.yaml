@@ -91,6 +91,7 @@ services:
       TC_MASTER_KEY: ${TC_MASTER_KEY:?set TC_MASTER_KEY in deploy/.env}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       TC_POSTING_READER: ${TC_POSTING_READER:-}
+      TC_TAILOR_WRITER: ${TC_TAILOR_WRITER:-}
       HTTPS_PROXY: http://egress-worker:3128
       NO_PROXY: db,localhost
       NODE_USE_ENV_PROXY: "1"

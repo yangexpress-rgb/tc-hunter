@@ -72,13 +72,14 @@ export async function seedEverything(
     await c.query("UPDATE document SET status = 'approved' WHERE id = $1", [ids.master_document]);
     await one("document", `INSERT INTO document (applicant_id, type, created_by, parent_document_id, job_posting_id, match_id, source_json, content_hash, diff_viewed_at)
       VALUES ($1, 'tailored_resume', 'app', $2, $3, $4, '{}', 'h-tailored', now()) RETURNING id`, [me, ids.master_document, jobId, ids.match]);
-    await c.query("UPDATE document SET status = 'approved' WHERE id = $1", [ids.document]);
     await one("document_claim", `INSERT INTO document_claim (applicant_id, document_id, section, ordinal, rendered_text, claim_type, source_fact_ids, transform)
       VALUES ($1, $2, 'experience', 1, 'Led CRM migration', 'bullet', ARRAY[$3::uuid], 'verbatim') RETURNING id`, [me, ids.document, ids.experience_bullet]);
     await one("blocked_addition", `INSERT INTO blocked_addition (applicant_id, document_id, proposed_text, reason, terms)
       VALUES ($1, $2, 'Expert in Kubernetes', 'gap_skill', '{Kubernetes}') RETURNING id`, [me, ids.document]);
     await one("document_gap", `INSERT INTO document_gap (applicant_id, document_id, requirement_text, skill_term)
       VALUES ($1, $2, 'Kubernetes experience', 'Kubernetes') RETURNING id`, [me, ids.document]);
+    // Claims, blocked additions and gaps are written while the version is a draft; approval then locks them.
+    await c.query("UPDATE document SET status = 'approved' WHERE id = $1", [ids.document]);
 
     await one("application", "INSERT INTO application (applicant_id, job_posting_id, match_id) VALUES ($1, $2, $3) RETURNING id",
       [me, jobId, ids.match]);

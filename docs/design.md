@@ -4,7 +4,7 @@
 
 **App name:** TC Hunter. "TC" is for Tim Cook: not a founder, a person who was *hired* into a good job, rose to CEO, and became a billionaire as an employee. Tagline: *"Get hired. Rise like Tim Cook."* **Brand rule:** TC Hunter is an aspirational reference only. Never market the app as endorsed by, affiliated with, or using the likeness of Tim Cook or Apple. The name and the tagline are the brand; the story is internal positioning. (Enforced by a test: no Tim Cook or Apple reference may appear in user-facing text except the tagline.)
 
-**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0 and 1 merged. Phase 2 built, awaiting Yong's review.
+**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0–2 merged. Phase 3 built. Per Yong (2026-11-14), Phases 3, 4a and 4b run back to back without a review stop; Phase 5 still needs Yong's separate written go-ahead.
 
 ### Decision log
 
@@ -17,6 +17,7 @@
 | 2026-11-13 | Phase 0 approved and merged. |
 | 2026-11-13 | §13.6: resume import is read by Claude (Anthropic API) with contact details removed before sending; the built-in rule reader is the fallback (folded into §2.5, §5.1). |
 | 2026-11-13 | Phase 1 approved and merged. |
+| 2026-11-14 | Phase 2 approved and merged. Yong: keep moving through the phases without asking each time (3 → 4a → 4b, one PR each); Phase 5 still needs a separate written go-ahead. |
 | 2026-11-13 | §13.2: public job-board feeds only (Greenhouse, Lever, Ashby, SmartRecruiters, plus careers pages); LinkedIn and Indeed by pasted link; no licensed aggregator (folded into §5.2). |
 
 ---
@@ -233,6 +234,18 @@ Flow (MUST, in order): select a saved match → generate a **draft** from the Ma
 
 Cover letters, "Why this company", referral-request and follow-up drafts use the same generator pattern and the same checker; motivation comes only from approved Answer Bank items and verified stories (P4). Nothing is sent automatically.
 
+**As built (Phase 3).**
+- *Starting:* on a job, **Prepare a resume for this job** queues a `tailor` work item; the worker drafts a tailored resume and a cover letter (one draft per job and kind; a fresh draft replaces an unapproved one). If the job scores below the applicant's "only prepare a resume for jobs scoring at least" setting, the button says so but still works.
+- *Proposers suggest, rules decide:* the rule proposer keeps the applicant's own words and orders by relevance; with an Anthropic key (`TC_TAILOR_WRITER` not `rules`) Claude may reword. Claude receives bullet text (numbers replaced by `{metric}`), role titles, skill names and levels, and the job's requirements and gaps: never contact details or dates. Everything it returns goes through the checker; a blocked rewording falls back to the applicant's own words for that fact and is listed under *Not added*.
+- *Source of a version (`source_json`):* experience items in date order (title, employer, dates copied from rows), each with lines `{factIds, text, original, transform, included}`; skills (selection from verified, non-gap profile skills, required ones first); education; certifications. Cover letters: paragraphs `{factIds, text, role: opening | evidence | motivation | closing}`; opening and closing cite the job and may name only its title and employer.
+- *Fit to length:* every role keeps its most relevant line, then the most relevant other lines until the target pages (preference, default 2) are full; left-out lines stay one click from coming back.
+- *Panes:* **This version** (edit: leave out / put back, move, reword, use my words, show / hide skills), **What changed** (Not added with plain reasons, Gaps, each line marked Same / Moved up / Reworded with the original beside it / Left out), **Your profile** (the master: every checked row). Opening What changed sets `diff_viewed_at`; any edit clears it, so the latest wording is always what was looked at. Approve stays disabled until then.
+- *Applicant edits* go through the same checker: a made-up number, name, date, level or gap skill is refused with a plain sentence saying to change the profile row instead.
+- *Alias confirmation (layer 4):* a proposed new name for a skill shows as *"Yes, 'Salesforce CRM' is another name for my Salesforce"*; confirming adds it to the skill's aliases in the profile.
+- *Approve:* both files are rendered, their text extracted (PDF via unpdf, Word via mammoth) and checked for any gap skill, alias or blocked term (layer 5). Then the version is approved, its hashes recorded, and the previous approved version of that job and kind is superseded. **Make changes** on an approved version starts the next version as a draft.
+- *Exports:* ATS-simple, one column, standard fonts, real text, no tables or images; PDF (US Letter) and Word. Contact details are printed at export from the encrypted profile and are not part of the approved content. Files are rebuilt from the immutable version on each download (same render date) and checked again; nothing is stored, so no object storage is needed yet.
+- *Database guards added:* claims, blocked additions and gaps of a non-draft version can't be inserted, changed or deleted (`TC_DOCUMENT_IMMUTABLE`).
+
 ### 5.5 Module E — Application Automation
 
 Phase numbering follows §11: **4b = Assisted Fill**, **5 = Guided Automation**.
@@ -351,8 +364,8 @@ The same story must work for an early-career applicant whose profile is mostly p
 |---|---|---|---|
 | **0. Foundations** | Repo, sign-in, household accounts (Yong + Leo), full schema, per-applicant vault pattern, audit log, layered UI shell, state machines + database guards, early-career experience types (P2), household server stack with encrypted off-site backups and private access (P6), F4/F5 fixtures authored | Schema + fixtures reviewed; F6b, F8 pass | **Merged — F6, F6b, F8 passing** |
 | **1. Applicant Vault** | Module A incl. import → draft → verify, Answer Bank, Preferences, evidence coach (P1), story bank (P4), passkeys, export / delete-my-data | F1, F6 pass | **Merged — F1, F6 passing** |
-| **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | **Built — F2, F3 passing; awaiting review** |
-| **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | Not started |
+| **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | **Merged — F2, F3 passing** |
+| **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | **Built — F4 passing** |
 | **4a. Tracker & Reports** | Module F: pipeline, follow-ups, 5 reports, dashboard, weekly budget (P5), outcome tags (P8), weekly review (P9); then score calibration (P10) | F7 pass | Not started |
 | **4b. Assisted Fill** | Application Packet + browser extension fill (Tier 1), application receipt (P11) | F5 (assisted) pass | Not started |
 | **5. Guided Automation** | Automation, Tier 1 adapters, pause / resume, confirmation capture | **Requires Yong's separate written go-ahead after 4b review.** F5 (full) on a sandbox flow, then one real application with Yong present | Not started |
@@ -365,7 +378,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 - **F1 — Import honesty** (Phase 1). *Passing* (`packages/db/test/f1-import.test.ts`): the sample resume in `fixtures/f1/` (text, PDF and Word) imports with every row draft / unverified, parse confidence on every row, no level above what the resume states (Python "advanced" → Strong, Spanish "conversational" → Working, others unset); an adversarial reader that invents a job, a bullet, a number and a higher level is cut back to the file's own words; reader failure and refusal fall back to the rule reader; contact details never reach the reader; LinkedIn download imports the same way.
 - **F2 — Match explainability** (Phase 2). *Passing* (`packages/domain/test/jobs.test.ts`, `fixtures/f2/`). Parsed requirements are pinned in the fixture so AI parsing variance cannot break the ±2 tolerance. Expected and met: score 93 (skills 31.1, experience 22, preferences 20, keywords 10, recency 10), gap Snowflake, *"Strong fit — you cover 8 of 9 required skills."*, *"A step toward Chief Operating Officer"*.
 - **F3 — Deduplication** (Phase 2). *Passing* (`packages/db/test/f3-scan.test.ts`, `fixtures/f3/`): the same job from a Greenhouse feed and a careers page is one posting with two source links; scanning again adds nothing; the same suite covers matching, feedback adjustments, posting watch (alerts, packet back to review, reposts), blocked sources, pasted links and isolation of the new tables.
-- **F4 — Tailoring truthfulness** (Phase 3). *Authored in Phase 0:* `fixtures/f4/` (profile, posting with gap skill, adversarial model output with expected block reasons); test placeholders in `packages/db/test/pending-fixtures.test.ts`.
+- **F4 — Tailoring truthfulness** (Phase 3). *Passing* (`packages/domain/test/tailor.test.ts`, `packages/db/test/f4-tailor.test.ts`, `fixtures/f4/`): Kubernetes appears in Gaps; the four adversarial items are blocked as gap_skill, no_source_fact, number_mismatch and proficiency_raise; the gap skill and its aliases are absent from the exported PDF and Word text, and a planted leak is caught; every name, date and number in the export comes from profile rows. Through the app: approval needs What changed viewed and the applicant; approved versions and their claims never change; edits make the next version and are checked; a new skill name is added only when confirmed.
 - **F5 — Application flow** (4b assisted, 5 full). *Authored in Phase 0:* `fixtures/f5/` (demo form with attestation and work-authorisation steps, confirmation id). *Phase 0 foundation:* idempotency guards tested (one application per job, single-use submit key, unknown-outcome block, double-click safety).
 - **F6 — Isolation, both directions.** *Passing in Phase 0* for every applicant-owned table (the test reads the table list from the live schema, so a new table cannot skip it).
 - **F6b — Neither applicant can approve, submit or change the other's packet**, even by direct id. *Passing in Phase 0.*
@@ -402,6 +415,7 @@ Per-source health, identified user agent, rate limit, caching, robots and terms 
 4. New wording needs the applicant's OK: a proposed alias (e.g. "Salesforce implementation" for a CRM migration that was on Salesforce) is blocked until confirmed on the skill in the profile.
 5. The checker re-runs on text extracted from the exported PDF and DOCX; F4 fails the build on any leak.
 *Phase 0 foundations:* every document claim must cite at least one fact; approved documents are immutable; proficiency and verification are applicant-only; F4 fixture authored.
+*Phase 3, as built:* layers 1–5 are all in place (`packages/domain/src/tailor/`). Checker order: no source fact → unchecked fact → gap skill (any name, unless the cited row itself says it) → date → number → level raised → skill or tool not in the cited rows (or a lexicon name the applicant hasn't confirmed: `unconfirmed_alias`) → any other proper name not in the cited rows (`new_name`). The posting can be cited for its title and employer only, never for its skills.
 
 ### Risk 4 — Duplicate or wrong submissions (idempotency)
 1. One application per applicant per job (unique in the database; dedupe makes both source links the same job).
@@ -481,3 +495,14 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Screens | `apps/web/app/jobs/*`, home | Jobs (New / Saved / Passed, sort and filter, reasons, career step, save / pass / not a fit), job detail (score working-out, matched skills with proof, gaps, requirements, full text, what changed), Where we look, Add a job by its link; Home next step, new-matches and skill-gap tiles, job alerts; Jobs in the top bar |
 | Household stack | `deploy/` | `worker` + `egress-worker` gate; new setting `TC_POSTING_READER` |
 | Tests | `packages/*/test` | 299 passing (F2, F3, worker gate in F8, isolation of new tables), plus an end-to-end browser run: follow two sources, scan, list, detail, save, pasted LinkedIn job |
+
+## Appendix — Phase 3 as built
+
+| Area | Where | Notes |
+|---|---|---|
+| Schema | `packages/db/migrations/006_tailoring.sql` | `tailor` work items, alias link and resolution on blocked additions, child-row lock for non-draft versions |
+| Rules | `packages/domain/src/tailor/` | claim checker, resume and letter builders (selection, length fit, gaps), rule and Claude proposers, PDF and Word rendering |
+| Documents | `packages/db/src/documents.ts` | profile snapshot, background drafting, edits, alias confirmation, approve with export check, new version, download |
+| Worker | `apps/worker` | runs tailoring; Claude rewording when a key is set and `TC_TAILOR_WRITER` isn't `rules` |
+| Screens | `apps/web/app/documents/*`, job detail, home | Prepare a resume (job page), document page with This version / What changed / Your profile, Approve, Download PDF / Word, Make changes; Documents list; Home next step for a waiting draft; Documents in the top bar |
+| Tests | `packages/*/test` | 318 passing (F4 in domain and through the app), plus an end-to-end browser run: prepare, refused made-up number, What changed, approve, download PDF and Word, next version |

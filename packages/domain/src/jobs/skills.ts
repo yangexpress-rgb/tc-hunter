@@ -88,3 +88,10 @@ export function findSkills(text: string, strict = false): string[] {
 }
 
 export const LEXICON_SIZE = LEXICON.length;
+
+/** Every name the lexicon knows for this skill (itself included), e.g. Kubernetes → [Kubernetes, k8s]. */
+export function lexiconNames(name: string): string[] {
+  const c = canonicalSkill(name);
+  const entry = LEXICON.find(([n]) => n === c);
+  return entry ? [entry[0], ...entry[1]] : [name];
+}

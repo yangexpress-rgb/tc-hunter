@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * F4 and F5 are authored now (Phase 0 plan, item 8) so Phases 3 and 4b inherit
+ * F4 and F5 were authored in Phase 0 (plan, item 8) so Phases 3 and 4b inherit
  * fixed targets. The fixture files are checked here; the behaviour tests are
  * listed as todo and become real tests in the phase that builds the feature.
  */
@@ -15,10 +15,7 @@ describe("F4 tailoring truthfulness (Phase 3)", () => {
     const posting = fx("f4/posting.json");
     for (const term of [posting.gap_skill, ...posting.gap_aliases]) expect(profile).not.toContain(term.toLowerCase());
   });
-  it.todo("gap skill appears in Gaps");
-  it.todo("each adversarial model item is blocked with the expected reason");
-  it.todo("gap skill and aliases are absent from the exported PDF and DOCX text (fails the build on leak)");
-  it.todo("names, dates and numbers in the resume come only from profile rows");
+  // The behaviour tests are real since Phase 3: packages/domain/test/tailor.test.ts and packages/db/test/f4-tailor.test.ts.
 });
 
 describe("F5 application flow (Phase 4b assisted, Phase 5 full)", () => {
