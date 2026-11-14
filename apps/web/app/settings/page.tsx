@@ -40,7 +40,7 @@ export default async function SettingsPage(props: PageProps) {
       <h1>{t("settings.title")}</h1>
       {params.confirmed ? <Status>{t("settings.confirm.done")}</Status> : <Flash saved={saved} error={error} />}
 
-      <section className="card">
+      <section className="card" id="security">
         <h2>{t("settings.mfa.title")}</h2>
         {session.mfaEnabled ? (
           <>
@@ -67,7 +67,7 @@ export default async function SettingsPage(props: PageProps) {
         )}
       </section>
 
-      <section className="card">
+      <section className="card" id="passkeys">
         <h2>{t("settings.passkeys.title")}</h2>
         <p>{t("settings.passkeys.intro")}</p>
         {passkeys.length ? (
@@ -184,7 +184,7 @@ export default async function SettingsPage(props: PageProps) {
         </Details>
       </section>
 
-      <section className="card">
+      <section className="card" id="data">
         <h2>{t("settings.export.title")}</h2>
         <p>{t("settings.export.intro")}</p>
         <a className="button" href="/settings/export" download>{t("settings.export.cta")}</a>
