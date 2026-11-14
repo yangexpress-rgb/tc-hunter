@@ -206,7 +206,7 @@ export function ExperienceSections({ profile, targets, sort, copies }: { profile
               <p className="sortbar">
                 Sort: <a href="/profile#experience" aria-current={by === "date" ? "true" : undefined}>Most recent</a>
                 {targets.length ? <a href="/profile?sort=relevance#experience" aria-current={by === "relevance" ? "true" : undefined}>Closest to the roles you want</a>
-                  : <span className="muted"> (add target roles in <a href="/profile/preferences">What you want</a> to sort by fit)</span>}
+                  : <span className="muted"> (add a role in <a href="/profile/goals">Goals</a> to sort by fit)</span>}
               </p>
             ) : null}
             {byOrg(list as Role[]).map((roles) => <OrgBlock key={roles[0]!.id} roles={roles} back={back} />)}

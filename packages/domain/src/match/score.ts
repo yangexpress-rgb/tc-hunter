@@ -8,7 +8,7 @@ import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
  * number explained. AI never sets a score. Changing any rule here means a new
  * RULES_VERSION, so stored scores stay reproducible.
  */
-export const RULES_VERSION = "match-1";
+export const RULES_VERSION = "match-2";  // match-2: goals (companies, kind of work, occupation)
 export const WEIGHTS = { skills: 35, experience: 25, preferences: 20, keywords: 10, recency: 10 } as const;
 
 /** Early-career experience counts toward years at a recorded, visible discount (P2). */
@@ -38,6 +38,12 @@ export interface MatchPrefs {
   dealBreakers: string[];
   longTermTargetRole: string | null;
   targetFunction: string | null;
+  /** From a goal (match-2): the line of work, the companies named and the kinds of work wanted. */
+  occupation?: string | null;
+  companiesInclude?: string[];
+  employmentTypes?: string[];
+  /** The goal's short name, for the reasons. */
+  goalName?: string;
 }
 export interface MatchPosting {
   employer: string;
@@ -162,7 +168,7 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
   const la = applicantLevel(profile.experience);
   const lp = levelOf(posting.title);
   const sen = seniorityFit(lp, la);
-  const tr = titleRelevance(posting.title, [...prefs.targetTitles, ...profile.experience.map((e) => e.title)]);
+  const tr = titleRelevance(posting.title, [...prefs.targetTitles, ...(prefs.occupation ? [prefs.occupation] : []), ...profile.experience.map((e) => e.title)]);
   const expPoints = 10 * yearsRaw + 8 * sen.raw + 7 * tr.raw;
   const expDetail = [
     req ? `Asks for ${req}+ years; you have ${yrs.years} counted years.` : "No years of experience asked for.",
@@ -204,13 +210,21 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
 
   let indRaw = 1;
   const hay = `${posting.employer}\n${text}`;
+  const companies = (prefs.companiesInclude ?? []).filter((x) => x.trim());
   const excluded = prefs.industriesExclude.find((i) => containsPhrase(hay, i));
   if (excluded) { indRaw = 0; filterReasons.push(`Mentions ${excluded}, an industry you skip.`); }
-  else if (prefs.industriesInclude.length) {
+  else if (prefs.industriesInclude.length || companies.length) {
+    const company = companies.find((x) => sameEmployer(posting.employer, x));
     const hit = prefs.industriesInclude.find((i) => containsPhrase(hay, i));
-    indRaw = hit ? 1 : 0.5;
-    prefLines.push(hit ? `Mentions ${hit}, an industry you like.` : "Doesn't mention an industry you like.");
+    indRaw = company || hit ? 1 : 0.5;
+    prefLines.push(company ? `At ${posting.employer}, a company you named.` : hit ? `Mentions ${hit}, an industry you like.`
+      : companies.length && prefs.industriesInclude.length ? "Not a company or industry you named."
+      : companies.length ? "Not a company you named." : "Doesn't mention an industry you like.");
   }
+
+  const kinds = prefs.employmentTypes ?? [];
+  const kind = employmentKind(posting.title);
+  if (kinds.length && kind && !kinds.includes(kind)) filterReasons.push(`It's ${KIND_PHRASE[kind]}, and you want ${kinds.map((k) => KIND_LABEL[k] ?? k).join(" or ")} work.`);
   const prefPoints = 10 * placeRaw + 5 * payRaw + 5 * indRaw;
 
   const emp = prefs.employersExclude.find((e) => posting.employer.toLowerCase().includes(e.toLowerCase().trim()) && e.trim());
@@ -240,7 +254,7 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
   const components: Component[] = [
     { key: "skills", label: "Required skills", weight: 35, raw: skillsRaw, points: 35 * skillsRaw, detail: skillDetail },
     { key: "experience", label: "Experience", weight: 25, raw: expPoints / 25, points: expPoints, detail: expDetail },
-    { key: "preferences", label: "What you want", weight: 20, raw: prefPoints / 20, points: prefPoints, detail: prefLines },
+    { key: "preferences", label: "Your goals", weight: 20, raw: prefPoints / 20, points: prefPoints, detail: prefLines },
     { key: "keywords", label: "Field and keywords", weight: 10, raw: keywordRaw, points: 10 * keywordRaw, detail: kwDetail },
     { key: "recency", label: "Fresh and open", weight: 10, raw: (7 * recRaw + 3 * avail) / 10, points: 7 * recRaw + 3 * avail, detail: recDetail },
   ].map((c) => {
@@ -273,6 +287,26 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
     score, components, matchedSkills: matched, gapSkills: gaps, filtered: filterReasons.length > 0, filterReasons, reasonLine,
     ladderTag: ladder?.tag ?? null, ladderLabel: ladder?.label ?? null, adjustments: applied, rulesVersion: ctx.rulesVersion ?? RULES_VERSION,
   };
+}
+
+const KIND_LABEL: Record<string, string> = { full_time: "full-time", part_time: "part-time", contract: "contract", internship: "internship", temporary: "temporary", volunteer: "volunteer" };
+const KIND_PHRASE: Record<string, string> = { part_time: "a part-time job", contract: "a contract", internship: "an internship", temporary: "a temporary job", volunteer: "a volunteer role" };
+
+/** The kind of work a posting is, only when its title says so plainly. Null means it doesn't say (usually full time). */
+export function employmentKind(title: string): string | null {
+  const t = title.toLowerCase();
+  if (/\bpart[- ]?time\b/.test(t)) return "part_time";
+  if (/\bintern(ship)?s?\b|\bco-?op\b/.test(t)) return "internship";
+  if (/\b(contract|contractor|freelance|fixed[- ]term)\b/.test(t)) return "contract";
+  if (/\b(temporary|temp|seasonal)\b/.test(t)) return "temporary";
+  if (/\bvolunteer\b/.test(t)) return "volunteer";
+  return null;
+}
+
+const employerKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(inc|llc|ltd|corp|corporation|co|plc|gmbh|the)\b/g, " ").replace(/\s+/g, " ").trim();
+function sameEmployer(employer: string, named: string): boolean {
+  const a = employerKey(employer), b = employerKey(named);
+  return !!a && !!b && (a === b || ` ${a} `.includes(` ${b} `));
 }
 
 /** Does this posting's title relate to what the applicant wants or has done? (Big boards list hundreds of jobs.) */

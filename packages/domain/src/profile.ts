@@ -44,7 +44,7 @@ export function evidenceCoach(c: CoachCounts): Nudge[] {
   if (c.staleAnswers > 0) out.push({ key: "stale_answers", text: `${plural(c.staleAnswers, "answer hasn't", "answers haven't")} been reviewed in 90 days.`, href: "/profile/answers#stale" });
   if (c.draftAnswers > 0) out.push({ key: "draft_answers", text: `${plural(c.draftAnswers, "saved answer is", "saved answers are")} waiting for your OK.`, href: "/profile/answers" });
   if (c.draftStories > 0) out.push({ key: "draft_stories", text: `${plural(c.draftStories, "story is", "stories are")} still a draft.`, href: "/profile/stories" });
-  if (!c.hasPreferences) out.push({ key: "no_preferences", text: "Tell us what jobs you want so we can look for them.", href: "/profile/preferences" });
+  if (!c.hasPreferences) out.push({ key: "no_preferences", text: "Add a goal so we know what jobs to look for.", href: "/profile/goals" });
   return out;
 }
 

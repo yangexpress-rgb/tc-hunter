@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 type Props = { searchParams: Promise<Record<string, string | string[] | undefined>> };
 
 const TABS: Array<[ReportKey, string]> = [["pipeline", "Pipeline"], ["activity", "Activity"], ["fit", "Fit"], ["gap", "Gaps"], ["source", "Sources"]];
-const PART: Record<string, string> = { skills: "Required skills", experience: "Experience", preferences: "What you want", keywords: "Field and keywords", recency: "Fresh and open" };
+const PART: Record<string, string> = { skills: "Required skills", experience: "Experience", preferences: "Your goals", keywords: "Field and keywords", recency: "Fresh and open" };
 
 /** Reports (design 5.6): five plain tables, each downloadable as CSV or PDF, all built from the same rows (F7). */
 export default async function ReportsPage(props: Props) {

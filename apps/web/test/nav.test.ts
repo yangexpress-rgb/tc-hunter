@@ -12,6 +12,8 @@ describe("app navigation", () => {
     expect(at("/profile/experience")).toBe("me:/profile");
     expect(at("/profile/resumes/abc")).toBe("me:/profile/import");
     expect(at("/profile/review")).toBe("me:/profile/import");
+    expect(at("/profile/goals")).toBe("me:/profile/goals");
+    expect(at("/profile/preferences")).toBe("me:/profile/goals");
     expect(at("/jobs/J-123")).toBe("jobs:/jobs");
     expect(at("/jobs/paste")).toBe("jobs:/jobs/paste");
     expect(at("/applications/A-1")).toBe("applications:/applications");
@@ -21,6 +23,9 @@ describe("app navigation", () => {
     expect(at("/settings")).toBe("settings:/settings#security");
     expect(at("/settings", "#email")).toBe("settings:/settings#email");
     expect(at("/settings", "#nope")).toBe("settings:/settings#security");
+  });
+  it("names the Me tabs as Yong asked: Goals and Initial Input", () => {
+    expect(NAV.find((s) => s.key === "me")!.tabs.map((t) => t.label)).toEqual(["About you", "Stories", "Saved answers", "Goals", "Initial Input"]);
   });
   it("leaves sign-in pages out", () => {
     expect(at("/sign-in")).toBe("none");

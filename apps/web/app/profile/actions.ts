@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
-  removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
+  removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyFact, verifyRole, type FactTable,
 } from "@tc-hunter/db";
 import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
@@ -283,17 +283,36 @@ export async function deleteStoryAction(form: FormData) {
 const list = (v: FormDataEntryValue | null) => String(v ?? "").split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
 const num = (v: FormDataEntryValue | null) => (String(v ?? "").trim() === "" ? null : Number(String(v)));
 
-export async function savePreferencesAction(form: FormData) {
+/** Adds a goal, or changes one (with `id`). Every field is optional except when. */
+export async function saveGoalAction(form: FormData) {
+  const s = await requireSession();
+  const id = String(form.get("id") ?? "").trim() || undefined;
+  const amount = num(form.get("comp_amount"));
+  await act(form, () => saveGoal(app().pool, s, {
+    active: form.get("active") === "on",
+    timeFrame: String(form.get("time_frame") ?? "now") as never,
+    employmentTypes: form.getAll("employment_types").map(String) as never,
+    roles: list(form.get("roles")),
+    occupation: String(form.get("occupation") ?? "").trim() || null,
+    industries: list(form.get("industries")),
+    companies: list(form.get("companies")),
+    comp: amount === null || Number.isNaN(amount) ? null
+      : { amount, currency: String(form.get("comp_currency") ?? "USD").trim().toUpperCase().slice(0, 3) || "USD", period: String(form.get("comp_period") ?? "year") as never },
+    locations: list(form.get("locations")),
+    workplaceTypes: form.getAll("workplace_types").map(String) as never,
+  }, id), "/profile/goals");
+}
+
+export async function deleteGoalAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => deleteGoal(app().pool, s, String(form.get("id"))), "/profile/goals");
+}
+
+/** The settings that cover the whole search, whatever the goal. */
+export async function saveSearchSettingsAction(form: FormData) {
   const s = await requireSession();
   await act(form, () => savePreferences(app().pool, s, {
-    target_titles: list(form.get("target_titles")),
     seniority: list(form.get("seniority")),
-    locations: list(form.get("locations")).map((l) => ({ label: l })),
-    workplace_types: form.getAll("workplace_types").map(String),
-    salary_floor_amount: num(form.get("salary_floor_amount")),
-    salary_floor_currency: String(form.get("salary_floor_currency") ?? "USD").toUpperCase().slice(0, 3) || "USD",
-    salary_floor_period: String(form.get("salary_floor_period") ?? "year"),
-    industries_include: list(form.get("industries_include")),
     industries_exclude: list(form.get("industries_exclude")),
     employers_exclude: list(form.get("employers_exclude")),
     must_have_keywords: list(form.get("must_have_keywords")),
@@ -301,10 +320,8 @@ export async function savePreferencesAction(form: FormData) {
     scan_schedule: String(form.get("scan_schedule") ?? "daily"),
     notify_pref: String(form.get("notify_pref") ?? "in_app"),
     tailor_target_pages: num(form.get("tailor_target_pages")) ?? 2,
-    long_term_target_role: String(form.get("long_term_target_role") ?? "").trim() || null,
-    target_function: String(form.get("target_function") ?? "").trim() || null,
     weekly_application_budget: num(form.get("weekly_application_budget")),
     min_score_to_tailor: num(form.get("min_score_to_tailor")),
     weekly_review_enabled: form.get("weekly_review_enabled") === "on",
-  }), "/profile/preferences");
+  }), "/profile/goals");
 }

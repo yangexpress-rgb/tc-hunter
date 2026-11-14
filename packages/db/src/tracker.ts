@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  APPLICATION_STAGES, CLOSED, decryptField, encryptField, IN_PROGRESS, REPORTS, suggestCalibration, todayIn, addDays, weekOf, weeklyReview, WEIGHTS,
+  APPLICATION_STAGES, CLOSED, decryptField, encryptField, IN_PROGRESS, REPORTS, suggestCalibration, RULES_VERSION, todayIn, addDays, weekOf, weeklyReview, WEIGHTS,
   type ApplicationStage, type Calibration, type ReportInput, type ReportKey, type StageEvent, type TrackApp, type Weights,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -240,8 +240,8 @@ export async function acceptCalibration(pool: pg.Pool, session: Session): Promis
     const n = (await c.query("SELECT count(*)::int AS n FROM score_calibration")).rows[0].n as number;
     await c.query("UPDATE score_calibration SET active = false, updated_at = now() WHERE active");
     await c.query("INSERT INTO score_calibration (applicant_id, weights, rules_version, based_on, message) VALUES (app_applicant_id(), $1, $2, $3, $4)",
-      [JSON.stringify(suggestion.weights), `match-1+cal-${n + 1}`, suggestion.basedOn, suggestion.message]);
-    await recordAudit(c, "calibration.changed", { payload: { active: true, rules_version: `match-1+cal-${n + 1}` } });
+      [JSON.stringify(suggestion.weights), `${RULES_VERSION}+cal-${n + 1}`, suggestion.basedOn, suggestion.message]);
+    await recordAudit(c, "calibration.changed", { payload: { active: true, rules_version: `${RULES_VERSION}+cal-${n + 1}` } });
     await matchApplicant(c, new Date());
   });
 }
@@ -249,7 +249,7 @@ export async function acceptCalibration(pool: pg.Pool, session: Session): Promis
 export async function resetCalibration(pool: pg.Pool, session: Session): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
     await c.query("UPDATE score_calibration SET active = false, updated_at = now() WHERE active");
-    await recordAudit(c, "calibration.changed", { payload: { active: false, rules_version: "match-1" } });
+    await recordAudit(c, "calibration.changed", { payload: { active: false, rules_version: RULES_VERSION } });
     await matchApplicant(c, new Date());
   });
 }

@@ -4,7 +4,7 @@ import { t } from "@tc-hunter/domain/messages";
 
 const PROFILE_LINKS: Array<[string, string]> = [
   ["/profile", "About you"], ["/profile/stories", "Stories"],
-  ["/profile/answers", "Saved answers"], ["/profile/preferences", "What you want"], ["/profile/import", "Bring in a resume"],
+  ["/profile/answers", "Saved answers"], ["/profile/goals", "Goals"], ["/profile/import", "Initial Input"],
 ];
 
 export function ProfileNav({ current }: { current: string }) {
