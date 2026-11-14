@@ -6,7 +6,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { ClaudeResumeParser, readResume, RulesResumeParser, RulesRequirementsReader, SourceRefusedError, type Fetcher } from "@tc-hunter/domain";
 import {
   duplicateFlags, exportMyData, getResumeFile, listResumeFiles, readResumeFile, redigestResumeFile, runDigest, runNextWork, storeResumeFile,
-  verifyFact, withApplicant, deleteResumeFile, importParsedResume, profileDuplicates, removeProfileDuplicates, type AppConfig, type DigestDeps, type Session, type WorkDeps,
+  verifyFact, withApplicant, getReaderInstructions, saveReaderInstructions, deleteResumeFile, importParsedResume, profileDuplicates, removeProfileDuplicates, type AppConfig, type DigestDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
@@ -333,5 +333,18 @@ describe("Claude finds the sections itself", () => {
     await runDigest(pool, max, (await getResumeFile(pool, max, r.fileId)).latest!.id, digestDeps());
     const third = (await getResumeFile(pool, max, r.fileId)).latest!;
     expect(third.sections.filter((x) => x.chosen).map((x) => [x.heading, x.target])).toEqual([["EXPERIENCE", "volunteer"]]);
+  });
+
+  it("the person's notes for Claude are saved on their profile and used on the next reading", async () => {
+    const { session: ida } = await newApplicant(pool, cfg, "Ida");
+    expect(await getReaderInstructions(pool, ida)).toBe("");
+    await saveReaderInstructions(pool, ida, "  My certifications are listed under Training.  ");
+    expect(await getReaderInstructions(pool, ida)).toBe("My certifications are listed under Training.");
+    expect(await getReaderInstructions(pool, leo)).toBe("");
+    let seen: string | null | undefined;
+    const r = await storeResumeFile(pool, cfg, ida, { name: "ida.txt", bytes: Buffer.from("Ida Lund\n\nEXPERIENCE\nAnalyst — Contoso\nJan 2020 – Present\n• Built reports") });
+    if (!r.stored) throw new Error("expected a new file");
+    await runDigest(pool, ida, r.digestId, { cfg, reader: (_n, instructions) => { seen = instructions; return new RulesResumeParser(); } });
+    expect(seen).toBe("My certifications are listed under Training.");
   });
 });

@@ -245,7 +245,7 @@ export interface DigestSummary { roles: number; bullets: number; education: numb
 export interface DigestDeps {
   cfg: AppConfig;
   /** Builds the resume reader; given the applicant's names so they can be removed before any outside reader sees the text. */
-  reader: (names: string[]) => ResumeParser;
+  reader: (names: string[], instructions?: string | null) => ResumeParser;
   /** Told what each reading did (counts and stop reasons only, never resume text), for the worker's log. */
   onRead?: (info: Record<string, unknown>) => void;
 }
@@ -279,10 +279,10 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
     // 1. Reading: the original out of the vault, and its text out of the file.
     const file = await withApplicant(pool, sys, async (c) => {
       const f = (await c.query("SELECT * FROM resume_file WHERE id = $1", [claimed.resume_file_id])).rows[0];
-      const a = (await c.query("SELECT preferred_name, legal_name_enc FROM applicant WHERE id = $1", [ctx.applicantId])).rows[0];
+      const a = (await c.query("SELECT preferred_name, legal_name_enc, reader_instructions FROM applicant WHERE id = $1", [ctx.applicantId])).rows[0];
       const dk = await dataKeyFor(c, deps.cfg, ctx.applicantId);
       const names = [a.preferred_name, a.legal_name_enc ? decryptField(dk, "applicant.legal_name", a.legal_name_enc) : ""].filter((n: string) => n && n !== "You");
-      return { kind: f.kind as "resume" | "linkedin", fileKind: f.file_kind as FileKind, fileName: f.file_name as string, bytes: openFile(dk, f.content_enc), names };
+      return { kind: f.kind as "resume" | "linkedin", fileKind: f.file_kind as FileKind, fileName: f.file_name as string, bytes: openFile(dk, f.content_enc), names, instructions: (a.reader_instructions as string | null) ?? null };
     });
 
     let parsed: ParsedResume;
@@ -313,7 +313,7 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
         [claimed.resume_file_id, claimed.run])).rows[0]?.section_map ?? []) as InputSection[];
       const known = prior.filter((s) => s.key.startsWith("c-")).map((s) => ({ heading: s.heading, suggested: s.suggested }));
       const split = splitSections(text, overrides, known);
-      const reader = deps.reader(file.names);
+      const reader = deps.reader(file.names, file.instructions);
       await advance("sorting", `${lines} lines of text`);
 
       if (reader.sortsSections) {
@@ -532,3 +532,18 @@ async function saveDraftRows(c: pg.PoolClient, plan: DigestPlan, f: {
   return { batchId, outcomes };
 }
 
+
+// ---------------------------------------------------------------------------
+// The person's notes for the resume reader
+// ---------------------------------------------------------------------------
+
+export async function getReaderInstructions(pool: pg.Pool, session: Session): Promise<string> {
+  return withApplicant(pool, asApplicant(session), async (c) =>
+    ((await c.query("SELECT reader_instructions FROM applicant WHERE id = $1", [session.applicantId])).rows[0]?.reader_instructions as string | null) ?? "");
+}
+
+export async function saveReaderInstructions(pool: pg.Pool, session: Session, text: string): Promise<void> {
+  const t = text.replace(/\r/g, "").trim().slice(0, 2000);
+  await withApplicant(pool, asApplicant(session), (c) =>
+    c.query("UPDATE applicant SET reader_instructions = $2, updated_at = now() WHERE id = $1", [session.applicantId, t || null]));
+}

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { stripContactDetails } from "./pii";
 import { parseResumeText } from "./rulesParser";
 import { contactBlockEnd, DIGEST_TARGETS } from "./digest";
+import { readerSystem } from "./readerPrompt";
 import { EMPLOYMENT_TYPES, PROFICIENCIES, SKILL_CATEGORIES, type ParsedResume, type ReadHints, type ResumeParser } from "./types";
 
 /**
@@ -69,28 +70,6 @@ const RestOutput = z.object({
 /** Part 3: a second look at lines the first two parts didn't place anywhere. */
 const SweepOutput = RolesOutput.merge(RestOutput);
 
-const SYSTEM = `You read a resume into the sections of a profile, laid out the way LinkedIn lays out a profile, for the person who wrote it. They will check every row before it counts.
-
-First find every section of the resume, whatever its heading says ("Where I've worked", "Leadership", "Licenses", "Honors"), and decide where it belongs:
-experience (jobs), internships, projects, volunteer, activities (clubs, student leadership), coursework, education, skills (including spoken languages, category "language"), credentials (licences and certifications), awards (honors, awards, scholarships), or skip (summary, objective, interests, references, publications and anything else with no place). List each heading in "sections", exactly as written. If the resume has no headings, still read every row.
-
-Then read the rows:
-- Experience: one row per role, with organisation, title, location, start and end (end null when current), and type from its section (internships: internship, projects: project, volunteer: volunteer, activities: other, coursework: coursework; jobs: full_time, part_time or contract as the role says). A personal project with no organisation has employer null. One organisation with two titles is two roles. List each role once, with every bullet under it.
-- For each bullet, say whether it is a responsibility (what the person did or owned) or an outcome (a result, achievement or number). A paragraph under a role that isn't a bullet is its description.
-- Education: school, degree, field, dates, honours. Certifications and licences: name, issuer, date. Awards: title, issuer, date. Skills: each skill once; a stated level only if the resume states it next to the skill (for example "Python (expert)", "Spanish (fluent)").
-
-Copy text exactly as written: titles, organisations, bullets, descriptions and names must be word for word from the resume. Never add, combine, reword or improve anything.
-The file may be a LinkedIn profile saved as a PDF: its side column (Top Skills, Languages, Certifications, Honors-Awards) can appear mixed in with the main text, one organisation can list several roles under it with a total tenure ("6 years 2 months") that is not a role, and "Page 1 of 3" lines are page footers. Read the side column too.
-Contact details were removed and appear as [name], [email], [phone], [link] or [address]; ignore them.
-confidence is your certainty (0 to 1) that the row is read correctly.`;
-
-const PART_FOCUS = {
-  roles: "This pass: list every section heading in \"sections\", then read every role (experience, internships, projects, volunteering, activities, coursework) with all of its bullets. Do not stop early: a long resume has many roles.",
-  rest: "This pass: read everything that is NOT a role: every school and degree (education), every certification, licence or clearance (credentials), every honor or award, and every skill and spoken language. Look through the whole resume, including summary lines, sidebars and the bottom of the file, where these are often listed.",
-} as const;
-
-const SWEEP = `These lines are from the same resume. They were not placed in any profile section on the first reading. Read any rows they contain (a role, a bullet that belongs under a role, a school, a certification, an award, a skill), copying text exactly. A line that is only a heading, a date, a summary, an objective or an interest belongs nowhere: leave it out. List the headings you see in "sections".`;
-
 /** Lines a reading didn't place anywhere: not part of any row it read, and not a heading or a bare date. */
 export function unplacedLines(text: string, p: Pick<ParsedResume, "experience" | "education" | "skills" | "credentials"> & { awards?: ParsedResume["awards"] }): string[] {
   const n = (x: string) => x.toLowerCase().replace(/[‘’]/g, "'").replace(/[–—]/g, "-").replace(/^[\s•·*▪◦●\-–—>]+/, "").replace(/\s+/g, " ").trim();
@@ -145,7 +124,7 @@ export class ClaudeResumeParser implements ResumeParser {
   readonly sortsSections = true;
   /** Filled in by the last parse(). */
   trace: ReadTrace = { parts: {}, unplacedBefore: 0, unplacedAfter: 0, sentChars: 0, raw: { roles: 0, schools: 0, certs: 0, awards: 0, skills: 0 } };
-  constructor(private client: Anthropic = new Anthropic(), private names: string[] = []) {}
+  constructor(private client: Anthropic = new Anthropic(), private names: string[] = [], private personal: string | null = null) {}
 
   private async ask<T extends z.ZodTypeAny>(part: string, schema: T, system: string, content: string): Promise<z.infer<T> | null> {
     try {
@@ -181,8 +160,8 @@ export class ClaudeResumeParser implements ResumeParser {
     const content = `<resume>\n${redacted}\n</resume>${hintText}`;
 
     const [roles, rest] = await Promise.all([
-      this.ask("roles", RolesOutput, `${SYSTEM}\n\n${PART_FOCUS.roles}`, content),
-      this.ask("rest", RestOutput, `${SYSTEM}\n\n${PART_FOCUS.rest}`, content),
+      this.ask("roles", RolesOutput, readerSystem("roles", this.personal), content),
+      this.ask("rest", RestOutput, readerSystem("rest", this.personal), content),
     ]);
     if (!roles && !rest) return { ...local, notes: [...local.notes, "Read with the built-in reader."] };
 
@@ -205,7 +184,7 @@ export class ClaudeResumeParser implements ResumeParser {
     const missed = unplacedLines(redacted, parsed);
     this.trace.unplacedBefore = missed.length;
     if (missed.length) {
-      const sweep = await this.ask("sweep", SweepOutput, `${SYSTEM}\n\n${SWEEP}`,
+      const sweep = await this.ask("sweep", SweepOutput, readerSystem("sweep", this.personal),
         `<resume>\n${redacted}\n</resume>\n\n<not_placed>\n${missed.join("\n")}\n</not_placed>${hintText}`);
       if (sweep) {
         parsed = mergeReadings(parsed, {

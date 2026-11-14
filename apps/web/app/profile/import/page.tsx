@@ -1,5 +1,5 @@
-import { getProfile, listResumeFiles, resumeReaderName } from "@tc-hunter/db";
-import { t } from "@tc-hunter/domain";
+import { getProfile, getReaderInstructions, listResumeFiles, resumeReaderName } from "@tc-hunter/db";
+import { MAX_READER_INSTRUCTIONS, READER_PARTS, READER_PROMPT, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -7,7 +7,7 @@ import { DigestChip, fileSize } from "@/components/profile/Digest";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { importAction, redigestAction, saveLinkedInAction } from "../actions";
+import { importAction, redigestAction, saveLinkedInAction, saveReaderNotesAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -28,7 +28,7 @@ const LINKEDIN_RESULT: Record<string, string> = {
 export default async function ImportPage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, files, profile] = await Promise.all([flashOf(props), listResumeFiles(pool, session), getProfile(pool, cfg, session)]);
+  const [{ saved, error, params }, files, profile, notes] = await Promise.all([flashOf(props), listResumeFiles(pool, session), getProfile(pool, cfg, session), getReaderInstructions(pool, session)]);
   const li = typeof params.li === "string" ? params.li : "";
   const older = profile.imports.filter((b) => !b.resume_file_id);
   const busy = files.some((f) => f.latest && !["ready", "failed", "replaced"].includes(f.latest.status) && !f.latest.stuck);
@@ -91,6 +91,25 @@ export default async function ImportPage(props: PageProps) {
           </ul>
         </Details>
       ) : null}
+      <section className="card" id="how-claude-reads">
+        <h2>How Claude reads your file</h2>
+        <p>Claude follows the instructions below every time it reads a resume. Add your own notes to help it, for example “My certifications are listed under Training” or “Treat my MBA consulting project as a project, not a job”. Your notes can say where things go. They can't switch off the rule that everything is copied word for word.</p>
+        <form action={saveReaderNotesAction} className="stack">
+          <input type="hidden" name="back" value="/profile/import#how-claude-reads" />
+          <label>Your notes for Claude<textarea name="notes" rows={4} maxLength={MAX_READER_INSTRUCTIONS} defaultValue={notes} placeholder="Optional" /></label>
+          <button className="secondary">Save notes</button>
+        </form>
+        <p className="muted">Your notes are used the next time you press Re-scan.</p>
+        <Details summary="See Claude's instructions in full">
+          <pre className="prompt-text">{READER_PROMPT}</pre>
+          <p className="muted">Claude reads your file in parts, each with one more line of focus:</p>
+          <ul>
+            <li><strong>Roles:</strong> {READER_PARTS.roles}</li>
+            <li><strong>Everything else:</strong> {READER_PARTS.rest}</li>
+            <li><strong>Second look:</strong> {READER_PARTS.sweep}</li>
+          </ul>
+        </Details>
+      </section>
       <Advanced>
         <AdvancedRow label="Resume reader" value={resumeReaderName() === "claude" ? "Claude (contact details and names stripped before sending), built-in rules as fallback" : "built-in rules"} />
         <AdvancedRow label="Runs in" value="background worker (resume_digest work items)" />
