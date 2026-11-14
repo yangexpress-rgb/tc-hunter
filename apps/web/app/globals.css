@@ -246,3 +246,9 @@ ul.plain-list { list-style: none; padding: 0; }
   .side-nav a[aria-current="page"] { background: none; box-shadow: none; border-bottom-color: var(--accent); }
   .side-icon { display: none; }
 }
+/* Experience, laid out like a LinkedIn profile */
+.role-group + .role-group { margin-top: 28px; }
+.role .role-dates { margin: 0 0 2px; font-size: 14px; font-weight: 600; color: var(--muted); }
+.role h3 { margin: 0; }
+.role h4 { margin: 14px 0 4px; font-size: 14px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.role .role-description { margin: 10px 0 0; }

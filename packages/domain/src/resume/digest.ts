@@ -21,7 +21,7 @@ import type { ParsedResume } from "./types";
  */
 
 export const DIGEST_TARGETS = [
-  "experience", "internships", "projects", "volunteer", "activities", "coursework", "education", "skills", "credentials", "skip",
+  "experience", "internships", "projects", "volunteer", "activities", "coursework", "education", "skills", "credentials", "awards", "skip",
 ] as const;
 export type DigestTarget = (typeof DIGEST_TARGETS)[number];
 
@@ -34,19 +34,20 @@ export const DIGEST_TARGET_LABELS: Record<DigestTarget, string> = {
   coursework: "Experience (coursework)",
   education: "Education",
   skills: "Skills and languages",
-  credentials: "Certifications and licences",
+  credentials: "Licences and certifications",
+  awards: "Honors and awards",
   skip: "Don't use (kept in your original file)",
 };
 
 /** The heading each target is given in the text the reader sees. */
 const CANONICAL: Record<Exclude<DigestTarget, "skip">, string> = {
   experience: "EXPERIENCE", internships: "INTERNSHIPS", projects: "PROJECTS", volunteer: "VOLUNTEER EXPERIENCE",
-  activities: "ACTIVITIES", coursework: "COURSEWORK", education: "EDUCATION", skills: "SKILLS", credentials: "CERTIFICATIONS",
+  activities: "ACTIVITIES", coursework: "COURSEWORK", education: "EDUCATION", skills: "SKILLS", credentials: "CERTIFICATIONS", awards: "AWARDS",
 };
 
 const FROM_SECTION: Record<Section, DigestTarget> = {
   experience: "experience", projects: "projects", internships: "internships", volunteer: "volunteer", coursework: "coursework",
-  activities: "activities", education: "education", skills: "skills", credentials: "credentials", summary: "skip", other: "skip",
+  activities: "activities", education: "education", skills: "skills", credentials: "credentials", awards: "awards", summary: "skip", other: "skip",
 };
 
 /**
@@ -57,7 +58,8 @@ const EXTRA_HEADINGS: Array<[RegExp, DigestTarget]> = [
   [/^(research|teaching|military|leadership|relevant|additional|other|industry|consulting|freelance)( and \w+)? (experience|service)$|^military service$|^research$/i, "experience"],
   [/^(languages?|spoken languages|language skills)$/i, "skills"],
   [/^(professional )?(training|development|courses and certifications|licen[cs]es? (and|&) certifications?)$/i, "credentials"],
-  [/^(awards?|honou?rs?|honou?rs (and|&) awards|awards (and|&) honou?rs|achievements|accomplishments|publications?|presentations?|patents?|interests|hobbies|references?|additional information|affiliations|memberships|professional affiliations|associations)$/i, "skip"],
+  [/^(accomplishments|scholarships?|distinctions)$/i, "awards"],
+  [/^(publications?|presentations?|patents?|interests|hobbies|references?|additional information|affiliations|memberships|professional affiliations|associations)$/i, "skip"],
 ];
 
 export interface InputSection {
@@ -80,22 +82,46 @@ function extraHeading(line: string): DigestTarget | null {
   return null;
 }
 
+/** Looks like a heading: a few words in capitals, or a short line ending in a colon. No digits, @, commas or bars. */
+function looseHeading(line: string): boolean {
+  const t = line.trim();
+  if (!t || t.length > 40 || /[\d@,|•]/.test(t)) return false;
+  const words = t.replace(/:$/, "").split(/\s+/);
+  if (words.length > 5) return false;
+  return /:$/.test(t) || (t === t.toUpperCase() && /[A-Z]{3}/.test(t));
+}
+
+/** Where the contact block ends: the first line that starts a section. */
+export function contactBlockEnd(text: string): number {
+  return splitSections(text).header.length;
+}
+
 const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
 
 export interface SectionSplit { header: string[]; sections: Array<InputSection & { lines: string[] }> }
 
 /** Splits resume text at its headings. Lines above the first heading are the contact block. */
-export function splitSections(text: string, overrides: Record<string, string> = {}): SectionSplit {
+export function splitSections(text: string, overrides: Record<string, string> = {},
+  /** Headings found earlier by a reader that sorts the file itself (Claude), so they can be split and skipped too. */
+  known: Array<{ heading: string; suggested: DigestTarget }> = []): SectionSplit {
+  const c = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const knownOf = (line: string) => (c(line) ? known.find((k) => c(k.heading) === c(line)) : undefined);
   const lines = text.replace(/\r/g, "").split("\n").map((l) => l.replace(/\s+$/, ""));
   const header: string[] = [];
   const sections: SectionSplit["sections"] = [];
+  let seen = 0;
   for (const line of lines) {
-    const known = headingOf(line);
-    const extra = known ? null : extraHeading(line);
-    if (known || extra) {
+    const rule = headingOf(line);
+    const extra = rule ? null : extraHeading(line);
+    const found = rule || extra ? undefined : knownOf(line);
+    // Above the first known heading, a heading we don't recognise ("WHERE I'VE WORKED") still ends the
+    // contact block, so it isn't taken for contact details. Never the very first line (that's the name).
+    const loose = !rule && !extra && !found && sections.length === 0 && seen > 0 && looseHeading(line);
+    if (line.trim()) seen++;
+    if (rule || extra || found || loose) {
       const heading = line.trim().replace(/[:\s]+$/, "");
-      const suggested = known ? FROM_SECTION[known] : extra!;
-      const key = `${sections.length + 1}-${slug(heading)}`;
+      const suggested = rule ? FROM_SECTION[rule] : extra ?? found?.suggested ?? "skip";
+      const key = found ? `c-${slug(heading)}` : `${sections.length + 1}-${slug(heading)}`;
       const o = overrides[key];
       const chosen = typeof o === "string" && (DIGEST_TARGETS as readonly string[]).includes(o);
       sections.push({ key, heading, lineCount: 0, suggested, target: chosen ? (o as DigestTarget) : suggested, chosen, lines: [] });
@@ -122,6 +148,47 @@ export function mappedText(split: SectionSplit): string {
   return out.join("\n");
 }
 
+/**
+ * The text for a reader that sorts the file itself: everything as written,
+ * except sections the applicant chose not to use.
+ */
+export function readerText(split: SectionSplit): string {
+  const out = [...split.header];
+  for (const s of split.sections) {
+    if (s.chosen && s.target === "skip") continue;
+    // Referees are other people: their names and details never leave the server.
+    if (/^(references?|referees?)( available.*)?$/i.test(s.heading)) continue;
+    out.push("", s.heading, ...s.lines);
+  }
+  return out.join("\n");
+}
+
+/** The applicant's own choices, as hints for a reader that sorts the file itself. */
+export const sectionHints = (split: SectionSplit) =>
+  ({ sections: split.sections.filter((s) => s.chosen && s.target !== "skip").map((s) => ({ heading: s.heading, target: s.target })) });
+
+/**
+ * The section list to show after a reading: the reader's own sorting where it
+ * gave one (Claude), the applicant's choices on top, plus headings only the reader found.
+ */
+export function mergeSections(split: SectionSplit, found: Array<{ heading: string; target: string }> | undefined, overrides: Record<string, string>): InputSection[] {
+  const c = (x: string) => x.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const valid = (t: string): t is DigestTarget => (DIGEST_TARGETS as readonly string[]).includes(t);
+  const out = publicSections(split).map((s) => {
+    const f = found?.find((x) => c(x.heading) === c(s.heading));
+    const suggested = f && valid(f.target) ? f.target : s.suggested;
+    return { ...s, suggested, target: s.chosen ? s.target : suggested };
+  });
+  for (const f of found ?? []) {
+    if (!valid(f.target) || !c(f.heading) || out.some((s) => c(s.heading) === c(f.heading))) continue;
+    const key = `c-${slug(f.heading)}`;
+    const o = overrides[key];
+    const chosen = typeof o === "string" && valid(o);
+    out.push({ key, heading: f.heading.slice(0, 80), lineCount: 0, suggested: f.target, target: chosen ? (o as DigestTarget) : f.target, chosen });
+  }
+  return out;
+}
+
 export const publicSections = (split: SectionSplit): InputSection[] =>
   split.sections.map(({ lines: _lines, ...s }) => s);
 
@@ -136,9 +203,10 @@ export interface ProfileSnapshot {
   education: Array<ExistingRow & { institution: string; degree: string | null; field: string | null }>;
   skills: Array<ExistingRow & { name: string; aliases: string[] }>;
   credentials: Array<ExistingRow & { name: string; issuer: string | null }>;
+  awards?: Array<ExistingRow & { title: string; issuer: string | null }>;
 }
 
-export type RowKind = "experience" | "bullet" | "education" | "skill" | "credential";
+export type RowKind = "experience" | "bullet" | "education" | "skill" | "credential" | "award";
 export type RowDecision =
   /** New: saved as a draft. */
   | "add"
@@ -162,6 +230,7 @@ export interface DigestPlan {
   education: Array<PlannedRow<ParsedResume["education"][number]>>;
   skills: Array<PlannedRow<ParsedResume["skills"][number]>>;
   credentials: Array<PlannedRow<ParsedResume["credentials"][number]>>;
+  awards: Array<PlannedRow<NonNullable<ParsedResume["awards"]>[number]>>;
 }
 
 const ORG_NOISE = /\b(inc|llc|ltd|limited|corp|corporation|co|company|plc|gmbh|the)\b/g;
@@ -242,7 +311,7 @@ const periodsOverlap = (a: [number, number], b: [number, number]) => a[0] <= b[1
  * different dates still doesn't bring copies of bullets already there.
  */
 export function planDigest(parsed: ParsedResume, profile: ProfileSnapshot): DigestPlan {
-  const plan: DigestPlan = { experience: [], education: [], skills: [], credentials: [] };
+  const plan: DigestPlan = { experience: [], education: [], skills: [], credentials: [], awards: [] };
   type Role = { existing: Existing; plannedIndex?: number; employer: string | null; title: string; start: string; end: string | null; bullets: Array<{ existing: Existing; text: string }> };
   const roles: Role[] = profile.experience.map((e) => ({
     existing: ex(e, roleLabel(e.title, e.employer)), employer: e.employer, title: e.title, start: e.start, end: e.end,
@@ -321,6 +390,13 @@ export function planDigest(parsed: ParsedResume, profile: ProfileSnapshot): Dige
     else plan.credentials.push({ row: c, decision: "add" });
     if (!same) creds.push({ existing: { id: null, label: c.name, checked: false }, name: c.name, issuer: c.issuer ?? null });
   }
+  const awards = (profile.awards ?? []).map((x) => ({ existing: ex(x, x.title), title: x.title }));
+  for (const a of parsed.awards ?? []) {
+    const same = awards.find((x) => normText(x.title) === normText(a.title));
+    if (same) { plan.awards.push({ row: a, decision: "same", match: same.existing, reason: "Same award" }); continue; }
+    plan.awards.push({ row: a, decision: "add" });
+    awards.push({ existing: { id: null, label: a.title, checked: false }, title: a.title });
+  }
   return plan;
 }
 
@@ -334,7 +410,7 @@ export function planCounts(plan: DigestPlan): PlanCounts {
     count(e.decision);
     for (const b of e.bullets) { count(b.decision); if (e.decision === "same" && b.decision !== "same") c.intoExisting++; }
   }
-  for (const list of [plan.education, plan.skills, plan.credentials]) for (const r of list) count(r.decision);
+  for (const list of [plan.education, plan.skills, plan.credentials, plan.awards]) for (const r of list) count(r.decision);
   return c;
 }
 
@@ -417,6 +493,13 @@ export function findProfileDuplicates(profile: ProfileSnapshot): ProfileDuplicat
     const same = r.checked ? undefined : creds.find((c) => normText(c.name) === normText(r.name) && (!c.issuer || !r.issuer || normOrg(c.issuer) === normOrg(r.issuer)));
     if (same) out.push({ kind: "credential", id: r.id, label: r.name, keepId: same.id, keepLabel: same.name });
     else creds.push({ id: r.id, name: r.name, issuer: r.issuer });
+  }
+
+  const awards: Array<{ id: string; title: string }> = [];
+  for (const r of profile.awards ?? []) {
+    const same = r.checked ? undefined : awards.find((x) => normText(x.title) === normText(r.title));
+    if (same) out.push({ kind: "award", id: r.id, label: r.title, keepId: same.id, keepLabel: same.title });
+    else awards.push({ id: r.id, title: r.title });
   }
   return out;
 }

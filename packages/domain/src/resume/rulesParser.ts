@@ -1,6 +1,6 @@
 import { findDateRange, parseOneDate, SINGLE_DATE_RE } from "./dates";
 import type {
-  EmploymentType, ParsedBullet, ParsedCredential, ParsedEducation, ParsedExperience, ParsedMetric, ParsedResume,
+  EmploymentType, ParsedAward, ParsedBullet, ParsedCredential, ParsedEducation, ParsedExperience, ParsedMetric, ParsedResume,
   ParsedSkill, Proficiency, ResumeParser, SkillCategory,
 } from "./types";
 
@@ -12,7 +12,7 @@ import type {
  */
 export const RULES_PARSER_VERSION = "rules-1";
 
-export type Section = "experience" | "projects" | "internships" | "volunteer" | "coursework" | "activities" | "education" | "skills" | "credentials" | "summary" | "other";
+export type Section = "experience" | "projects" | "internships" | "volunteer" | "coursework" | "activities" | "education" | "skills" | "credentials" | "awards" | "summary" | "other";
 
 const HEADINGS: Array<[RegExp, Section]> = [
   [/^(work |professional |relevant )?experience|^employment( history)?|^work history|^career history/i, "experience"],
@@ -24,6 +24,7 @@ const HEADINGS: Array<[RegExp, Section]> = [
   [/^education|^academic background/i, "education"],
   [/^(technical |core |key )?skills|^competencies|^technologies|^tools/i, "skills"],
   [/^certifications?|^licen[cs]es?|^certifications? (and|&) licen[cs]es?|^credentials|^clearances?/i, "credentials"],
+  [/^(honou?rs?|awards?|honou?rs (and|&) awards|awards (and|&) honou?rs|achievements)$/i, "awards"],
   [/^(professional )?summary|^profile|^objective|^about( me)?/i, "summary"],
 ];
 
@@ -197,6 +198,16 @@ function parseCredentials(lines: string[]): ParsedCredential[] {
   });
 }
 
+function parseAwards(lines: string[]): ParsedAward[] {
+  return lines.map((raw) => raw.replace(BULLET_RE, "").trim()).filter(Boolean).map((line) => {
+    const single = SINGLE_DATE_RE.exec(line);
+    const text = line.replace(single?.[0] ?? "", "").replace(/[\s,|–—(-]+$/, "").replace(/\(\s*\)/, "").trim();
+    const [title, issuer] = text.split(/\s+(?:—|–|-|\|)\s+|,\s+/).map((x) => x.trim());
+    const d = single ? parseOneDate(single[1]!) : null;
+    return { title: title!, issuer: issuer || undefined, awardedOn: d?.iso, confidence: issuer ? 0.8 : 0.7 };
+  });
+}
+
 function parseExperience(lines: string[], section: Section): ParsedExperience[] {
   const out: ParsedExperience[] = [];
   let header: string[] = [];
@@ -265,9 +276,10 @@ export function parseResumeText(text: string): ParsedResume {
   const education = parseEducation(get("education"));
   const skills = parseSkills(get("skills"));
   const credentials = parseCredentials(get("credentials"));
+  const awards = parseAwards(get("awards"));
   if (!buckets.has("experience") && experience.length === 0) notes.push("We couldn't find an experience section.");
   for (const e of experience) if (e.confidence < 0.6) notes.push(`Check the organisation and title for "${e.title}".`);
-  return { contact: parseContact(buckets.get("header")!), experience, education, skills, credentials, parser: RULES_PARSER_VERSION, notes };
+  return { contact: parseContact(buckets.get("header")!), experience, education, skills, credentials, awards, parser: RULES_PARSER_VERSION, notes };
 }
 
 export class RulesResumeParser implements ResumeParser {

@@ -111,7 +111,7 @@ export async function importParsedResume(pool: pg.Pool, session: Session, input:
 export async function discardImport(pool: pg.Pool, session: Session, batchId: string): Promise<number> {
   return withApplicant(pool, asApplicant(session), async (c) => {
     let n = 0;
-    for (const t of ["experience_bullet", "skill", "credential", "education_item"]) {
+    for (const t of ["experience_bullet", "skill", "credential", "education_item", "honor_award"]) {
       n += (await c.query(`DELETE FROM ${t} WHERE import_batch_id = $1 AND verification = 'draft'`, [batchId])).rowCount ?? 0;
     }
     // An experience row goes only if it is a draft and none of its bullets were checked.
@@ -133,6 +133,7 @@ export interface ProfileData {
   education: Array<Record<string, any>>;
   skills: Array<Record<string, any> & { evidence: Array<Record<string, any>> }>;
   credentials: Array<Record<string, any>>;
+  awards: Array<Record<string, any>>;
   imports: Array<Record<string, any>>;
 }
 
@@ -158,6 +159,7 @@ export async function getProfile(pool: pg.Pool, cfg: AppConfig, session: Session
       education: (await c.query("SELECT * FROM education_item ORDER BY end_date DESC NULLS FIRST")).rows,
       skills: skills.map((s) => ({ ...s, evidence: evidence.filter((e) => e.skill_id === s.id) })),
       credentials: (await c.query("SELECT * FROM credential ORDER BY issued_on DESC NULLS LAST")).rows,
+      awards: (await c.query("SELECT * FROM honor_award ORDER BY awarded_on DESC NULLS LAST, created_at")).rows,
       imports: (await c.query("SELECT * FROM import_batch ORDER BY created_at DESC")).rows,
     };
   });
@@ -168,11 +170,12 @@ export async function getProfile(pool: pg.Pool, cfg: AppConfig, session: Session
 // ---------------------------------------------------------------------------
 
 export const FACT_TABLES = {
-  experience_item: ["employer_name", "title", "location", "start_date", "end_date", "date_precision", "employment_type", "sort_order"],
-  experience_bullet: ["experience_item_id", "text", "metric_value", "metric_unit", "metric_context", "sort_order"],
+  experience_item: ["employer_name", "title", "location", "start_date", "end_date", "date_precision", "employment_type", "sort_order", "description"],
+  experience_bullet: ["experience_item_id", "text", "kind", "metric_value", "metric_unit", "metric_context", "sort_order"],
   education_item: ["institution", "degree", "field", "start_date", "end_date", "honours"],
   skill: ["canonical_name", "aliases", "category", "proficiency"],
   credential: ["name", "kind", "issuer", "issued_on", "expires_on"],
+  honor_award: ["title", "issuer", "awarded_on", "description"],
 } as const;
 export type FactTable = keyof typeof FACT_TABLES;
 
@@ -396,7 +399,7 @@ export async function coachCounts(pool: pg.Pool, session: Session): Promise<Coac
       (SELECT count(*) FROM skill s WHERE NOT EXISTS (SELECT 1 FROM skill_evidence e WHERE e.skill_id = s.id)) AS no_proof,
       (SELECT count(*) FROM experience_item WHERE verification = 'draft') + (SELECT count(*) FROM experience_bullet WHERE verification = 'draft')
         + (SELECT count(*) FROM education_item WHERE verification = 'draft') + (SELECT count(*) FROM skill WHERE verification = 'draft')
-        + (SELECT count(*) FROM credential WHERE verification = 'draft') AS drafts,
+        + (SELECT count(*) FROM credential WHERE verification = 'draft') + (SELECT count(*) FROM honor_award WHERE verification = 'draft') AS drafts,
       (SELECT count(*) FROM answer_bank_item WHERE status = 'approved' AND last_reviewed_at < now() - interval '90 days') AS stale,
       (SELECT count(*) FROM answer_bank_item WHERE status = 'draft') AS draft_answers,
       (SELECT count(*) FROM story_bank_item WHERE status = 'draft') AS draft_stories,

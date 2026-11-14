@@ -118,6 +118,7 @@ export async function seedEverything(
     await one("resume_file", `INSERT INTO resume_file (applicant_id, kind, file_name, file_kind, byte_size, content_mac, content_enc)
       VALUES ($1, 'resume', 'seed.txt', 'text', 4, $2, '\\x00'::bytea) RETURNING id`, [me, randomBytes(16).toString("hex")]);
     await one("resume_digest", "INSERT INTO resume_digest (applicant_id, resume_file_id) VALUES ($1, $2) RETURNING id", [me, ids.resume_file]);
+    await one("honor_award", "INSERT INTO honor_award (applicant_id, title) VALUES ($1, 'Seed award') RETURNING id", [me]);
     return ids;
   });
 }

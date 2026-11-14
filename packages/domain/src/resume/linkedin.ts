@@ -85,15 +85,24 @@ export function parseLinkedInExport(zip: Buffer): { parsed: ParsedResume; source
     start: parseOneDate(r["Start Date"] ?? "")?.iso, end: parseOneDate(r["End Date"] ?? "")?.iso, honours: undefined, confidence: 0.95,
   }));
   // LinkedIn skills carry no level, so none is set (the applicant sets levels).
-  const skills = csv("skills.csv").filter((r) => r["Name"]).map((r) => ({ name: r["Name"]!, category: "technical" as const, confidence: 0.8 }));
+  const skills: ParsedResume["skills"] = csv("skills.csv").filter((r) => r["Name"]).map((r) => ({ name: r["Name"]!, category: "technical" as const, confidence: 0.8 }));
   const credentials = csv("certifications.csv").filter((r) => r["Name"]).map((r) => ({
     name: r["Name"]!, kind: /licen[cs]e/i.test(r["Name"]!) ? ("licence" as const) : ("certification" as const),
     issuer: r["Authority"] || undefined, issuedOn: parseOneDate(r["Started On"] ?? "")?.iso, confidence: 0.95,
   }));
+  // Languages are skills (category language); LinkedIn's proficiency words aren't levels we can copy, so none is set.
+  for (const r of csv("languages.csv")) {
+    if (r["Name"] && !skills.some((k) => k.name.toLowerCase() === r["Name"]!.toLowerCase())) {
+      skills.push({ name: r["Name"]!, category: "language", confidence: 0.9 });
+    }
+  }
+  const awards = csv("honors.csv").filter((r) => r["Title"]).map((r) => ({
+    title: r["Title"]!, description: r["Description"] || undefined, awardedOn: parseOneDate(r["Issued On"] ?? "")?.iso, confidence: 0.95,
+  }));
   if (files.size === 0) notes.push("That file doesn't look like a LinkedIn data export.");
   if (skills.length) notes.push("LinkedIn doesn't record how strong each skill is, so no levels were set.");
   return {
-    parsed: { contact: { links: [] }, experience, education, skills, credentials, parser: LINKEDIN_PARSER_VERSION, notes },
+    parsed: { contact: { links: [] }, experience, education, skills, credentials, awards, parser: LINKEDIN_PARSER_VERSION, notes },
     sourceText: linkedinSourceText(files),
   };
 }

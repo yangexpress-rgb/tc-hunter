@@ -18,6 +18,19 @@ export const EMPLOYMENT_LABELS: Array<[string, string]> = [
 ];
 export const employmentLabel = (v: string) => EMPLOYMENT_LABELS.find(([k]) => k === v)?.[1] ?? v;
 
+/** Responsibilities (what you did or owned) and outcomes (what came of it), the way a role reads on LinkedIn. */
+export const BULLET_KINDS: Array<[string, string]> = [["responsibility", "A responsibility"], ["outcome", "An outcome or achievement"]];
+
+/** "3 yrs 2 mos", counted the way LinkedIn counts (both months included). */
+export function duration(start: Date | string | null, end: Date | string | null): string {
+  if (!start) return "";
+  const s = new Date(start), e = end ? new Date(end) : new Date();
+  const months = (e.getUTCFullYear() - s.getUTCFullYear()) * 12 + (e.getUTCMonth() - s.getUTCMonth()) + 1;
+  if (months <= 0) return "";
+  const y = Math.floor(months / 12), m = months % 12;
+  return [y ? `${y} yr${y === 1 ? "" : "s"}` : "", m ? `${m} mo${m === 1 ? "" : "s"}` : ""].filter(Boolean).join(" ");
+}
+
 export const CATEGORY_LABELS: Array<[string, string]> = [
   ["technical", "Technical"], ["domain", "Field knowledge"], ["leadership", "Leadership"], ["language", "Language"], ["tool", "Tool"],
 ];
@@ -31,8 +44,10 @@ export const FIELD_SPECS: Record<FactTable, FieldSpec[]> = {
     { name: "location", label: "Location", type: "text" },
     { name: "start_date", label: "Started", type: "month", required: true },
     { name: "end_date", label: "Ended", type: "month", hint: "Leave empty if you're still doing it." },
+    { name: "description", label: "About this role (optional)", type: "textarea", hint: "A sentence or two, in your words." },
   ],
   experience_bullet: [
+    { name: "kind", label: "This is", type: "select", options: BULLET_KINDS, required: true },
     { name: "text", label: "What you did", type: "textarea", required: true },
     { name: "metric_value", label: "Number (optional)", type: "number", hint: "Kept exactly as you write it." },
     { name: "metric_unit", label: "Unit", type: "select", options: [["", "None"], ["percent", "%"], ["usd", "$"], ["count", "Count"], ["multiplier", "Times (x)"]] },
@@ -57,6 +72,12 @@ export const FIELD_SPECS: Record<FactTable, FieldSpec[]> = {
     { name: "issuer", label: "Issued by", type: "text" },
     { name: "issued_on", label: "Issued", type: "month" },
     { name: "expires_on", label: "Expires", type: "month" },
+  ],
+  honor_award: [
+    { name: "title", label: "Award or honor", type: "text", required: true },
+    { name: "issuer", label: "Given by", type: "text" },
+    { name: "awarded_on", label: "When", type: "month" },
+    { name: "description", label: "What it was for (optional)", type: "textarea" },
   ],
 };
 

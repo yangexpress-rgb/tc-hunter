@@ -50,7 +50,8 @@ export default async function ReviewPage(props: PageProps) {
   const education = profile.education.filter(inScope);
   const skills = profile.skills.filter(inScope);
   const credentials = profile.credentials.filter(inScope);
-  const total = items.reduce((n, e) => n + (inScope(e) ? 1 : 0) + e.bullets.filter(inScope).length, 0) + education.length + skills.length + credentials.length;
+  const awards = profile.awards.filter(inScope);
+  const total = items.reduce((n, e) => n + (inScope(e) ? 1 : 0) + e.bullets.filter(inScope).length, 0) + education.length + skills.length + credentials.length + awards.length;
   const notes: string[] = Array.isArray(batch?.notes) ? batch!.notes : [];
 
   return (
@@ -85,7 +86,7 @@ export default async function ReviewPage(props: PageProps) {
           ) : <h3>{e.title}{e.employer_name ? <span className="muted"> · {e.employer_name}</span> : null}</h3>}
           {e.bullets.filter(inScope).map((b) => (
             <DraftRow key={b.id} table="experience_bullet" row={b} back={back} title={b.text} dup={dups[b.id]}
-              detail={b.metric_value !== null ? `Number kept exactly as written: ${Number(b.metric_value).toLocaleString()}` : undefined} />
+              detail={[b.kind === "responsibility" ? "Responsibility" : "Outcome", b.metric_value !== null ? `number kept exactly as written: ${Number(b.metric_value).toLocaleString()}` : null].filter(Boolean).join(" · ")} />
           ))}
         </section>
       ))}
@@ -105,6 +106,12 @@ export default async function ReviewPage(props: PageProps) {
       {credentials.length ? <h2>{t("profile.credentials.title")}</h2> : null}
       {credentials.map((r) => (
         <DraftRow key={r.id} table="credential" row={r} back={back} title={r.name} dup={dups[r.id]} detail={[r.issuer, r.issued_on ? showMonth(r.issued_on) : null].filter(Boolean).join(" · ")} />
+      ))}
+
+      {awards.length ? <h2>Honors and awards</h2> : null}
+      {awards.map((r) => (
+        <DraftRow key={r.id} table="honor_award" row={r} back={back} title={r.title} dup={dups[r.id]}
+          detail={[r.issuer, r.awarded_on ? showMonth(r.awarded_on) : null].filter(Boolean).join(" · ")} />
       ))}
 
       {batchId && total > 0 ? (

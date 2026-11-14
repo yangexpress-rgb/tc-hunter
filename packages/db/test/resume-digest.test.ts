@@ -147,11 +147,11 @@ describe("resume digest", () => {
     await drain();
     let d = (await getResumeFile(pool, leo, r.fileId)).latest!;
     expect(d.sections.map((s) => [s.heading, s.target])).toEqual([
-      ["EXPERIENCE", "experience"], ["LEADERSHIP", "activities"], ["AWARDS", "skip"], ["LANGUAGES", "skills"],
+      ["EXPERIENCE", "experience"], ["LEADERSHIP", "activities"], ["AWARDS", "awards"], ["LANGUAGES", "skills"],
     ]);
     const captain = d.outcomes.find((o) => o.label.startsWith("Captain"));
     expect(captain?.decision).toBe("add");
-    expect(d.outcomes.some((o) => o.label.includes("Merit"))).toBe(false);
+    expect(d.outcomes.find((o) => o.label.includes("Merit"))).toMatchObject({ kind: "award", decision: "add" });
     expect(d.outcomes.filter((o) => o.kind === "skill").map((o) => o.label).sort()).toEqual(["English", "Korean"]);
     expect(await count(leo, "experience_item", "employment_type = 'other'")).toBe(1);
 
@@ -242,5 +242,57 @@ describe("copies already in the profile", () => {
     expect(await count(ann, "experience_item", `id = '${second}' AND verification = 'verified'`)).toBe(1);
     expect(await count(ann, "experience_bullet", `experience_item_id = '${second}' AND text = 'Ran the quarterly planning cycle'`)).toBe(1);
     expect(await profileDuplicates(pool, ann)).toEqual([]);
+  });
+});
+
+describe("Claude finds the sections itself", () => {
+  it("reads headings the built-in rules don't know, sorts bullets into responsibilities and outcomes, and follows the applicant's choices", async () => {
+    const { session: kim } = await newApplicant(pool, cfg, "Kim");
+    const text = [
+      "Kim Park", "kim@example.test",
+      "", "WHERE I'VE WORKED", "Product Analyst — Contoso", "Jan 2021 – Present", "Owns pricing analytics for two product lines.",
+      "• Ran weekly pricing reviews", "• Raised margin by 4% in one year",
+      "", "EDUCATION", "State University — B.S. in Economics, 2020",
+      "", "HONORS", "Dean's Award — State University, 2019",
+    ].join("\n");
+    const sent: string[] = [];
+    const output = {
+      sections: [{ heading: "WHERE I'VE WORKED", target: "experience" }, { heading: "EDUCATION", target: "education" }, { heading: "HONORS", target: "awards" }],
+      experience: [{ employer: "Contoso", title: "Product Analyst", location: null, start: "2021-01-01", end: null, precision: "month", type: "full_time",
+        description: "Owns pricing analytics for two product lines.", confidence: 0.9,
+        bullets: [{ text: "Ran weekly pricing reviews", kind: "responsibility" }, { text: "Raised margin by 4% in one year", kind: "outcome" }] }],
+      education: [{ institution: "State University", degree: "B.S.", field: "Economics", start: null, end: "2020-01-01", honours: null, confidence: 0.9 }],
+      skills: [], credentials: [],
+      awards: [{ title: "Dean's Award", issuer: "State University", date: "2019-01-01", description: null, confidence: 0.9 }],
+    };
+    const fake = { beta: { messages: { parse: async (req: { messages: Array<{ content: string }> }) => {
+      sent.push(req.messages[0]!.content);
+      return { stop_reason: "end_turn", model: "claude-opus-5-5", parsed_output: output };
+    } } } } as unknown as Anthropic;
+    const deps: DigestDeps = { cfg, reader: (names) => new ClaudeResumeParser(fake, names) };
+
+    const r = await storeResumeFile(pool, cfg, kim, { name: "kim.txt", bytes: Buffer.from(text) });
+    if (!r.stored) throw new Error("expected a new file");
+    expect(await runDigest(pool, kim, r.digestId, deps)).toBe("ready");
+    const d = (await getResumeFile(pool, kim, r.fileId)).latest!;
+    expect(sent[0]).toContain("WHERE I'VE WORKED");
+    expect(d.sections.map((s) => [s.heading, s.target])).toEqual([["WHERE I'VE WORKED", "experience"], ["EDUCATION", "education"], ["HONORS", "awards"]]);
+    expect(await count(kim, "experience_item", "description = 'Owns pricing analytics for two product lines.'")).toBe(1);
+    expect(await count(kim, "experience_bullet", "kind = 'responsibility'")).toBe(1);
+    expect(await count(kim, "experience_bullet", "kind = 'outcome' AND metric_value = 4")).toBe(1);
+    expect(await count(kim, "honor_award", "title = 'Dean''s Award' AND verification = 'draft'")).toBe(1);
+
+    // The applicant says "Where I've worked" should not be used: that part of the file isn't sent again.
+    const key = d.sections.find((s) => s.heading === "WHERE I'VE WORKED")!.key;
+    const edu = d.sections.find((s) => s.heading === "EDUCATION")!.key;
+    await redigestResumeFile(pool, kim, r.fileId, { [key]: "skip", [edu]: "education" });
+    const next = (await getResumeFile(pool, kim, r.fileId)).latest!;
+    output.experience = [];
+    await runDigest(pool, kim, next.id, deps);
+    expect(sent[1]).not.toContain("Ran weekly pricing reviews");
+    expect(sent[1]).toContain(`"EDUCATION": education`);
+    const after = (await getResumeFile(pool, kim, r.fileId)).latest!;
+    expect(after.sections.find((s) => s.key === key)).toMatchObject({ target: "skip", chosen: true });
+    expect(await count(kim, "experience_item")).toBe(0);
   });
 });
