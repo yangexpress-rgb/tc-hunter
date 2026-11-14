@@ -39,6 +39,11 @@ describe("Railway deploy", () => {
     expect(allowed("boards.greenhouse.io:443", web)).toBe(false);
   });
 
+  it("applies migrations and the tc_app password at every start, before the app connects", () => {
+    expect(start).toMatch(/spawnSync\(process\.execPath, \["--import", "tsx", "packages\/db\/src\/migrate\.ts"\]/);
+    expect(start.indexOf("migrate.ts")).toBeLessThan(start.indexOf('run("web"'));
+  });
+
   it("the app connects as tc_app, not as the database owner", () => {
     expect(start).toMatch(/u\.username = "tc_app"/);
     expect(start).not.toMatch(/DATABASE_URL = env\.DATABASE_OWNER_URL/);

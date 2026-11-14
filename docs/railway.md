@@ -52,9 +52,12 @@ Also pick a **sign-up code** (any phrase) to give Leo.
    yangexpress-rgb/tc-hunter**. (A new project in the same account costs nothing extra
    and keeps it apart from Trading Magician.) Railway reads `railway.json` and builds
    `deploy/railway/Dockerfile`. The first build fails until the variables are in; that's fine.
+   If Railway offers to split the repo into several services (web, worker, extension), don't:
+   TC Hunter is one service. Use **Create › Empty Service**, connect the repo, leave Root
+   Directory empty and set **Config-as-code** to `/railway.json`.
 2. In the same project: **Create › Database › PostgreSQL**. Leave its name as `Postgres`.
 3. Click the **tc-hunter** service › **Settings**:
-   - **Volumes › Add volume**, mount path **`/data`**. 1 GB is plenty.
+   - Add a volume: **+ Create › Volume**, attach it to tc-hunter, mount path **`/data`**.
    - **Networking › Generate domain**. You get an address like
      `https://tc-hunter-production.up.railway.app`. That's TC Hunter's address from now on.
 
@@ -64,6 +67,7 @@ Also pick a **sign-up code** (any phrase) to give Leo.
 
 | Variable | What to put |
 | --- | --- |
+| `PORT` | `3000` (the domain's port must match) |
 | `DATABASE_OWNER_URL` | leave as `${{Postgres.DATABASE_URL}}` |
 | `DB_APP_PASSWORD`, `TC_MASTER_KEY`, `TC_VAULT_KEY` | from step 1 |
 | `SIGNUP_CODE` | your sign-up code |
