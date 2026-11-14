@@ -3,10 +3,10 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type pg from "pg";
 import type Anthropic from "@anthropic-ai/sdk";
-import { ClaudeResumeParser, readResume, RulesResumeParser, RulesRequirementsReader, SourceRefusedError, type Fetcher } from "@tc-hunter/domain";
+import { ClaudeResumeParser, READER_PROMPT, readResume, RulesResumeParser, RulesRequirementsReader, SourceRefusedError, type Fetcher } from "@tc-hunter/domain";
 import {
   duplicateFlags, exportMyData, getResumeFile, listResumeFiles, readResumeFile, redigestResumeFile, runDigest, runNextWork, storeResumeFile,
-  verifyFact, withApplicant, getReaderInstructions, saveReaderInstructions, deleteResumeFile, importParsedResume, profileDuplicates, removeProfileDuplicates, type AppConfig, type DigestDeps, type Session, type WorkDeps,
+  verifyFact, withApplicant, getReaderInstructions, saveReaderInstructions, getReaderPrompt, getReaderPromptVersion, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, deleteResumeFile, importParsedResume, profileDuplicates, removeProfileDuplicates, type AppConfig, type DigestDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
@@ -345,6 +345,41 @@ describe("Claude finds the sections itself", () => {
     const r = await storeResumeFile(pool, cfg, ida, { name: "ida.txt", bytes: Buffer.from("Ida Lund\n\nEXPERIENCE\nAnalyst — Contoso\nJan 2020 – Present\n• Built reports") });
     if (!r.stored) throw new Error("expected a new file");
     await runDigest(pool, ida, r.digestId, { cfg, reader: (_n, instructions) => { seen = instructions; return new RulesResumeParser(); } });
-    expect(seen).toBe("My certifications are listed under Training.");
+    expect(seen).toContain(READER_PROMPT);
+    expect(seen).toContain("My certifications are listed under Training.");
+  });
+
+  it("the instructions are saved as versions; every reading uses the newest, and reset and restore bring older ones back", async () => {
+    const { session: una } = await newApplicant(pool, cfg, "Una");
+    const start = await getReaderPrompt(pool, una);
+    expect(start).toMatchObject({ body: READER_PROMPT, isDefault: true, savedAt: null, history: [] });
+    expect(await saveReaderPrompt(pool, una, READER_PROMPT)).toBe("unchanged");
+    await expect(saveReaderPrompt(pool, una, "   ")).rejects.toThrow("TC_PROMPT_EMPTY");
+
+    expect(await saveReaderPrompt(pool, una, "Read every line.\r\nCertifications are under Training.")).toBe("saved");
+    const edited = await getReaderPrompt(pool, una);
+    expect(edited.body).toBe("Read every line.\nCertifications are under Training.");
+    expect(edited.isDefault).toBe(false);
+    expect(edited.history).toHaveLength(1);
+    expect((await getReaderPrompt(pool, leo)).isDefault).toBe(true);
+
+    const r = await storeResumeFile(pool, cfg, una, { name: "una.txt", bytes: Buffer.from("Una Berg\n\nEXPERIENCE\nAnalyst — Contoso\nJan 2020 – Present\n• Built reports") });
+    if (!r.stored) throw new Error("expected a new file");
+    let seen: string | null | undefined;
+    await runDigest(pool, una, r.digestId, { cfg, reader: (_n, p) => { seen = p; return new RulesResumeParser(); } });
+    expect(seen).toBe("Read every line.\nCertifications are under Training.");
+
+    expect(await resetReaderPrompt(pool, una)).toBe("saved");
+    const reset = await getReaderPrompt(pool, una);
+    expect(reset.isDefault).toBe(true);
+    expect(reset.history.map((h) => h.kind)).toEqual(["reset", "edit"]);
+
+    const editId = reset.history[1]!.id;
+    expect(await getReaderPromptVersion(pool, leo, editId)).toBeNull();
+    expect(await restoreReaderPrompt(pool, una, editId)).toBe("saved");
+    const back = await getReaderPrompt(pool, una);
+    expect(back.body).toBe("Read every line.\nCertifications are under Training.");
+    expect(back.history[0]!.kind).toBe("restore");
+    expect(await restoreReaderPrompt(pool, una, editId)).toBe("unchanged");
   });
 });

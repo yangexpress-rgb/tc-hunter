@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { ClaudeResumeParser, contactBlockEnd, READER_PROMPT, readerSystem, readLinkedInProfile, SourceRefusedError, stripContactDetails, unplacedLines, type Fetcher } from "../src";
+import { ClaudeResumeParser, contactBlockEnd, MAX_READER_PROMPT, READER_APP_RULES, READER_PARTS, READER_PROMPT, readerSystem, withLegacyNotes, readLinkedInProfile, SourceRefusedError, stripContactDetails, unplacedLines, type Fetcher } from "../src";
 
 const TEXT = readFileSync(join(__dirname, "..", "..", "..", "fixtures", "f1", "sample-resume.txt"), "utf8");
 
@@ -71,14 +71,20 @@ describe("the reader's instructions", () => {
     expect(READER_PROMPT).toMatch(/Copy text exactly as written/);
   });
 
-  it("add the person's notes after the rules, and only when there are some", async () => {
-    expect(readerSystem("rest")).not.toContain("person_notes");
-    const sys = readerSystem("rest", "My certifications are under Training.");
-    expect(sys.indexOf("Rules you must not break")).toBeLessThan(sys.indexOf("My certifications are under Training."));
-    expect(readerSystem("rest", "x".repeat(5000)).length).toBeLessThan(READER_PROMPT.length + 3000);
+  it("use the person's own instructions in place of the default, always followed by the app's fixed rules", async () => {
+    expect(readerSystem("rest")).toContain(READER_PROMPT);
+    expect(readerSystem("rest", "   ")).toContain(READER_PROMPT);
+    const sys = readerSystem("rest", "Read my resume. Certifications are under Training.");
+    expect(sys).not.toContain(READER_PROMPT);
+    expect(sys.startsWith("Read my resume.")).toBe(true);
+    expect(sys).toContain(READER_PARTS.rest);
+    expect(sys.indexOf("Certifications are under Training.")).toBeLessThan(sys.indexOf(READER_APP_RULES));
+    expect(readerSystem("rest", "x".repeat(MAX_READER_PROMPT + 5000)).length).toBeLessThan(MAX_READER_PROMPT + 2000);
+    expect(withLegacyNotes("A", "")).toBe("A");
+    expect(withLegacyNotes("A", "My MBA project is a project.")).toContain("My MBA project is a project.");
     const { client, calls } = fakeClaude(() => ({ stop_reason: "end_turn", parsed_output: { ...empty } }));
     await new ClaudeResumeParser(client, [], "Treat my MBA project as a project.").parse(TEXT);
-    expect(calls.every((c) => c.system.includes("Treat my MBA project as a project."))).toBe(true);
+    expect(calls.every((c) => c.system.startsWith("Treat my MBA project as a project.") && c.system.includes(READER_APP_RULES))).toBe(true);
   });
 });
 

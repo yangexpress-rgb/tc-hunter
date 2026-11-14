@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
-  removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
+  removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyFact, verifyRole, type FactTable,
 } from "@tc-hunter/db";
 import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
@@ -136,7 +136,23 @@ export async function importAction(form: FormData) {
   redirect(target);
 }
 
-/** Your own notes for Claude when it reads your resume. */
+/** The instructions Claude follows when it reads your resume: save, reset or bring back a version. */
+export async function saveReaderPromptAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => saveReaderPrompt(app().pool, s, String(form.get("prompt") ?? "")), "/profile/import#how-claude-reads");
+}
+
+export async function resetReaderPromptAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => resetReaderPrompt(app().pool, s), "/profile/import#how-claude-reads");
+}
+
+export async function restoreReaderPromptAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => restoreReaderPrompt(app().pool, s, String(form.get("version") ?? "")), "/profile/import#how-claude-reads");
+}
+
+/** Your own notes for Claude when it reads your resume (older; folded into the instructions). */
 export async function saveReaderNotesAction(form: FormData) {
   const s = await requireSession();
   await act(form, () => saveReaderInstructions(app().pool, s, String(form.get("notes") ?? "")), "/profile/import#how-claude-reads");

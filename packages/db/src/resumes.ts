@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   decryptField, detectKind, extractText, mappedText, MAX_RESUME_BYTES, open, parseLinkedInExport, planCounts, planDigest,
   publicSections, readResume, readerText, sectionHints, mergeSections, findProfileDuplicates, type ProfileDuplicate, seal, splitSections, type DigestPlan, type InputSection, type ParsedResume, type ProfileSnapshot,
-  type ResumeFileKind, type ResumeParser, unplacedLines, stripContactDetails, contactBlockEnd,
+  type ResumeFileKind, type ResumeParser, unplacedLines, stripContactDetails, contactBlockEnd, READER_PROMPT, MAX_READER_PROMPT, withLegacyNotes,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
@@ -280,9 +280,10 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
     const file = await withApplicant(pool, sys, async (c) => {
       const f = (await c.query("SELECT * FROM resume_file WHERE id = $1", [claimed.resume_file_id])).rows[0];
       const a = (await c.query("SELECT preferred_name, legal_name_enc, reader_instructions FROM applicant WHERE id = $1", [ctx.applicantId])).rows[0];
+      const prompt = await currentReaderPrompt(c, ctx.applicantId, a.reader_instructions as string | null);
       const dk = await dataKeyFor(c, deps.cfg, ctx.applicantId);
       const names = [a.preferred_name, a.legal_name_enc ? decryptField(dk, "applicant.legal_name", a.legal_name_enc) : ""].filter((n: string) => n && n !== "You");
-      return { kind: f.kind as "resume" | "linkedin", fileKind: f.file_kind as FileKind, fileName: f.file_name as string, bytes: openFile(dk, f.content_enc), names, instructions: (a.reader_instructions as string | null) ?? null };
+      return { kind: f.kind as "resume" | "linkedin", fileKind: f.file_kind as FileKind, fileName: f.file_name as string, bytes: openFile(dk, f.content_enc), names, instructions: prompt.body };
     });
 
     let parsed: ParsedResume;
@@ -534,7 +535,69 @@ async function saveDraftRows(c: pg.PoolClient, plan: DigestPlan, f: {
 
 
 // ---------------------------------------------------------------------------
-// The person's notes for the resume reader
+// The instructions Claude follows when it reads a resume: the person's own,
+// saved as versions, or the app's default. Read fresh for every scan.
+// ---------------------------------------------------------------------------
+
+export interface ReaderPromptVersion { id: string; kind: "edit" | "reset" | "restore"; createdAt: string; body: string }
+export interface ReaderPromptView { body: string; isDefault: boolean; savedAt: string | null; history: ReaderPromptVersion[]; timeZone: string }
+
+async function currentReaderPrompt(c: pg.PoolClient, applicantId: string, legacyNotes: string | null): Promise<{ body: string; isDefault: boolean; savedAt: string | null }> {
+  const row = (await c.query("SELECT body, created_at FROM reader_prompt WHERE applicant_id = $1 ORDER BY created_at DESC LIMIT 1", [applicantId])).rows[0];
+  if (row) return { body: row.body as string, isDefault: false, savedAt: (row.created_at as Date).toISOString() };
+  const body = withLegacyNotes(READER_PROMPT, legacyNotes);
+  return { body, isDefault: body === READER_PROMPT, savedAt: null };
+}
+
+export async function getReaderPrompt(pool: pg.Pool, session: Session): Promise<ReaderPromptView> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const a = (await c.query("SELECT reader_instructions, timezone FROM applicant WHERE id = $1", [session.applicantId])).rows[0];
+    const cur = await currentReaderPrompt(c, session.applicantId, (a?.reader_instructions as string | null) ?? null);
+    let timeZone = (a?.timezone as string | null) || "UTC";
+    try { new Intl.DateTimeFormat("en", { timeZone }); } catch { timeZone = "UTC"; }
+    const history = (await c.query("SELECT id, kind, created_at, body FROM reader_prompt WHERE applicant_id = $1 ORDER BY created_at DESC LIMIT 30", [session.applicantId])).rows
+      .map((r) => ({ id: r.id as string, kind: r.kind as ReaderPromptVersion["kind"], createdAt: (r.created_at as Date).toISOString(), body: r.body as string }));
+    return { ...cur, isDefault: cur.isDefault || cur.body === READER_PROMPT, history, timeZone };
+  });
+}
+
+/** One saved version's text, for the history list. */
+export async function getReaderPromptVersion(pool: pg.Pool, session: Session, id: string): Promise<string | null> {
+  return withApplicant(pool, asApplicant(session), async (c) =>
+    ((await c.query("SELECT body FROM reader_prompt WHERE id = $1 AND applicant_id = $2", [id, session.applicantId])).rows[0]?.body as string | undefined) ?? null);
+}
+
+/** Saves a new version. Nothing is saved when the text is empty or unchanged. */
+export async function saveReaderPrompt(pool: pg.Pool, session: Session, text: string, kind: "edit" | "reset" = "edit"): Promise<"saved" | "unchanged"> {
+  const body = text.replace(/\r/g, "").trim();
+  if (!body) throw new DomainError("TC_PROMPT_EMPTY");
+  if (body.length > MAX_READER_PROMPT) throw new DomainError("TC_PROMPT_TOO_LONG");
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const notes = (await c.query("SELECT reader_instructions FROM applicant WHERE id = $1", [session.applicantId])).rows[0]?.reader_instructions as string | null;
+    const cur = await currentReaderPrompt(c, session.applicantId, notes ?? null);
+    if (cur.body === body && !(kind === "reset" && cur.savedAt === null && notes)) return "unchanged";
+    await c.query("INSERT INTO reader_prompt (applicant_id, body, kind) VALUES ($1, $2, $3)", [session.applicantId, body, kind]);
+    return "saved";
+  });
+}
+
+export const resetReaderPrompt = (pool: pg.Pool, session: Session) => saveReaderPrompt(pool, session, READER_PROMPT, "reset");
+
+/** Brings back an older version by saving it again as the newest. */
+export async function restoreReaderPrompt(pool: pg.Pool, session: Session, id: string): Promise<"saved" | "unchanged"> {
+  const body = await getReaderPromptVersion(pool, session, id);
+  if (body === null) throw new DomainError("TC_NOT_FOUND");
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const latest = (await c.query("SELECT body FROM reader_prompt WHERE applicant_id = $1 ORDER BY created_at DESC LIMIT 1", [session.applicantId])).rows[0]?.body;
+    if (latest === body) return "unchanged" as const;
+    await c.query("INSERT INTO reader_prompt (applicant_id, body, kind) VALUES ($1, $2, 'restore')", [session.applicantId, body]);
+    return "saved" as const;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The person's older notes for the resume reader (now folded into the instructions above)
+
 // ---------------------------------------------------------------------------
 
 export async function getReaderInstructions(pool: pg.Pool, session: Session): Promise<string> {
