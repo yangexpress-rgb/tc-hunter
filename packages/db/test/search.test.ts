@@ -5,10 +5,10 @@ import {
   type Fetcher, type MailReader, type RawPosting, type SearchQuery, type SearchSite,
 } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, connectEmail, latestScan, listMatches, listSources, requestEmailCheck, requestScan, runNextWork, saveGoal, unfollowSource,
+  addEvidence, addFact, connectEmail, latestScan, scanStatus, listMatches, listSources, requestEmailCheck, requestScan, runNextWork, saveGoal, unfollowSource,
   type AppConfig, type GoalInput, type Session, type WorkDeps,
 } from "../src";
-import { appPool, freshDatabase, newApplicant, testConfig } from "./helpers";
+import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
 const job = (id: string, title: string, employer: string): RawPosting => ({
   externalId: `adzuna:${id}`, url: `https://www.adzuna.ca/land/ad/${id}`, employer, title, locationRaw: "Toronto, ON", workplaceType: null,
@@ -92,6 +92,47 @@ describe("job search sites, searched first for every goal", () => {
     await requestScan(pool, yong);
     await drain();
     expect(site.queries.length).toBe(before);
+  });
+});
+
+describe("live status of a search (Yong: no response after Look again now)", () => {
+  it("says the search is waiting, what it's reading while it runs, and sums up when it's done", async () => {
+    const sally = (await newApplicant(pool, cfg, "Sally")).session;
+    await saveGoal(pool, sally, goal({ roles: ["Operations Analyst"], locations: ["Toronto"] }));
+    while (await runNextWork(pool, deps)) { /* the scan the goal queued */ }
+    await requestScan(pool, sally, { discover: true, fresh: true });
+    expect((await scanStatus(pool, sally)).state).toBe("waiting");
+    const seen: Array<Awaited<ReturnType<typeof scanStatus>>> = [];
+    const watching: SearchSite = { id: "adzuna", name: "Adzuna", search: async (q) => { seen.push(await scanStatus(pool, sally)); return site.search(q); } };
+    while (await runNextWork(pool, { ...deps, search: [watching] })) { /* drain */ }
+    expect(seen[0]).toMatchObject({ state: "running", step: "Searching Adzuna", done: 0, total: 1 });
+    expect(await scanStatus(pool, sally)).toMatchObject({ state: "done", step: null, places: 1, failed: null });
+  });
+
+  it("pressed while a search is running, a new one starts with the latest goals once it ends", async () => {
+    const tom = (await newApplicant(pool, cfg, "Tom")).session;
+    await saveGoal(pool, tom, goal({ roles: ["Operations Analyst"] }));
+    await requestScan(pool, tom);
+    let pressed = false;
+    const pressing: SearchSite = { id: "adzuna", name: "Adzuna", search: async (q) => {
+      if (!pressed) { pressed = true; await requestScan(pool, tom, { discover: true, fresh: true }); }
+      return site.search(q);
+    } };
+    while (await runNextWork(pool, { ...deps, search: [pressing] })) { /* drain */ }
+    const runs = (await ownerQuery("SELECT count(*)::int AS n FROM scan_run WHERE applicant_id = $1", [tom.applicantId])).rows[0].n;
+    expect(runs).toBe(2);
+  });
+
+  it("a search that stops part way says so, instead of looking busy forever", async () => {
+    const ann = (await newApplicant(pool, cfg, "Ann")).session;
+    await saveGoal(pool, ann, goal({ roles: ["Operations Analyst"], companies: ["Fabrikam"] }));
+    await requestScan(pool, ann, { discover: true });
+    const broken: Fetcher = { async get() { throw new Error("socket hang up"); } };
+    const proposer = { version: "named-only-1", propose: async () => [] };
+    while (await runNextWork(pool, { ...deps, fetcher: broken, discover: { proposer } })) { /* drain, including retries */ }
+    const s = await scanStatus(pool, ann);
+    expect(s.state).toBe("failed");
+    expect(s.failed).toMatch(/^The search stopped part way: socket hang up/);
   });
 });
 

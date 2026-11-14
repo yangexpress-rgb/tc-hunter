@@ -41,7 +41,8 @@ export async function discoveryDue(c: pg.PoolClient): Promise<boolean> {
 
 export interface DiscoveryResult { companiesChecked: number; boardsFound: number; newlyFollowed: number; unfollowed: number }
 
-export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: Fetcher, deps: DiscoverDeps): Promise<DiscoveryResult> {
+export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: Fetcher, deps: DiscoverDeps,
+  progress: (step: string, done?: number, total?: number) => Promise<void> = async () => {}): Promise<DiscoveryResult> {
   const { runId, goals, watching } = await withApplicant(pool, ctx, async (c) => ({
     runId: (await c.query("INSERT INTO discovery_run (applicant_id, proposer) VALUES (app_applicant_id(), $1) RETURNING id", [deps.proposer.version])).rows[0].id as string,
     goals: (await c.query("SELECT * FROM hunt_goal WHERE active ORDER BY created_at")).rows.map(goalFromRow),
@@ -57,7 +58,9 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
     if (k && !ideas.has(k)) ideas.set(k, { name, reason: "A company you named", goalId: g.id });
   }
   const namedKeys = new Set(ideas.keys());
+  let asked = 0;
   for (const g of goals) {
+    await progress(deps.proposer.version.startsWith("named") ? "Gathering the companies you named" : "Asking Claude for employers that fit your goals", asked++, goals.length);
     const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes, levels: g.levels.map(goalLevelLabel), specialties: g.specialties, languages: g.languages };
     if (!g.roles.length && !g.occupation && !g.industries.length && !g.companies.length) continue;
     const suggested = await deps.proposer.propose(brief, [...watching, ...[...ideas.values()].map((i) => i.name)], deps.perGoal ?? 12);
@@ -72,7 +75,9 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
   // 2. Each employer's public job board, from the shared cache or by asking the board itself.
   let checked = 0, found = 0, followed = 0;
   const limit = deps.maxLookups ?? 30;
+  let n = 0;
   for (const [key, idea] of ideas) {
+    await progress(`Checking ${idea.name}'s jobs page`, n++, ideas.size);
     const cached = await withApplicant(pool, ctx, async (c) => (await c.query(
       `SELECT job_source_id FROM employer_board WHERE company_key = $1 AND checked_at > now() - make_interval(days => $2)`, [key, RECHECK_DAYS])).rows[0]);
     let sourceId: string | null = cached ? cached.job_source_id : null;

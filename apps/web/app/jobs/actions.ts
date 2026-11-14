@@ -36,7 +36,7 @@ export async function refreshAction(form: FormData) {
   await act(form, async () => {
     const { pool } = app();
     await rescoreMatches(pool, s);
-    await requestScan(pool, s, { discover: true });
+    await requestScan(pool, s, { discover: true, fresh: true });
   }, "/jobs", "refreshed");
 }
 
