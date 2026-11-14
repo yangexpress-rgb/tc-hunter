@@ -3,7 +3,7 @@ import { runEmailCheck, type EmailDeps } from "./email";
 import {
   dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
-  SourceRefusedError, titleIsRelated, levelOf,
+  SourceRefusedError, titleIsRelated, levelOf, searchQueries, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -285,7 +285,11 @@ export async function watchAlerts(c: pg.PoolClient, eventIds: string[]): Promise
 // The worker's two jobs: a scan, and reading one pasted link
 // ---------------------------------------------------------------------------
 
-export interface WorkDeps { fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps; email?: EmailDeps; digest?: DigestDeps; discover?: DiscoverDeps }
+export interface WorkDeps {
+  fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps; email?: EmailDeps; digest?: DigestDeps; discover?: DiscoverDeps;
+  /** Job-search sites searched first, for every goal in use (those whose keys are set). */
+  search?: SearchSite[];
+}
 
 const PLAIN_REFUSAL: Record<string, string> = {
   robots: "This site asks automated readers not to look at its job pages, so we won't.",
@@ -307,19 +311,63 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
   const now = deps.now?.() ?? new Date();
   const wall = Date.now(); // freshness and back-off use the real clock, like the database's last_success_at
   const fresh = (deps.freshMinutes ?? 30) * 60_000;
-  const { runId, sources, targets } = await withApplicant(pool, ctx, async (c) => {
+  const { runId, sources, targets, queries } = await withApplicant(pool, ctx, async (c) => {
     const run = await c.query("INSERT INTO scan_run (applicant_id) VALUES (app_applicant_id()) RETURNING id");
     const src = (await c.query(
-      `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows;
+      `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted AND s.kind <> 'job_search' ORDER BY s.name`)).rows;
     const prefs = await prefsFor(c);
     const exp = (await c.query("SELECT title FROM experience_item WHERE verification = 'verified'")).rows.map((r) => r.title as string);
     const wanted = goalTargets(prefs);
-    return { runId: run.rows[0].id as string, sources: src, targets: wanted.length ? wanted : exp };
+    const goals = (await c.query("SELECT * FROM hunt_goal WHERE active ORDER BY created_at")).rows.map(goalFromRow);
+    return { runId: run.rows[0].id as string, sources: src, targets: wanted.length ? wanted : exp, queries: searchQueries(goals) };
   });
 
   let checked = 0, fresh0 = 0, updated = 0, closed = 0;
   const events: string[] = [];
   const notes: Array<{ source: string; note: string }> = [];
+
+  // 1. Job-search sites first: each goal's roles in each of its places (Yong, 2026-11-14).
+  let searched = 0;
+  for (const site of queries.length ? deps.search ?? [] : []) {
+    const follow = await withApplicant(pool, ctx, async (c) => {
+      const id = await upsertSource(c, { type: "aggregator", kind: "job_search", key: site.id, name: site.name, url: SEARCH_HOME[site.id] });
+      const r = await c.query(
+        `INSERT INTO applicant_job_source (applicant_id, job_source_id, origin, reason) VALUES (app_applicant_id(), $1, 'search', 'Job search site')
+         ON CONFLICT (applicant_id, job_source_id) DO UPDATE SET updated_at = now() RETURNING muted`, [id]);
+      return { id, muted: r.rows[0].muted as boolean };
+    });
+    if (follow.muted) continue;
+    try {
+      let taken = 0;
+      for (const q of queries) {
+        const found = (await site.search(q, deps.fetcher)).filter((p) => p.title && p.employer && p.descriptionText && titleIsRelated(p.title, targets));
+        checked += found.length;
+        // At most 15 a search and 60 a site each scan, best first as the site ranks them: each new job is read once.
+        const take = found.slice(0, Math.min(15, 60 - taken));
+        taken += take.length;
+        await withApplicant(pool, ctx, async (c) => {
+          for (const raw of take) {
+            const o = await ingestPosting(c, follow.id, raw, deps.reader);
+            if (o.isNew) fresh0++; else if (o.changed) updated++;
+            events.push(...o.eventIds);
+          }
+        });
+        if (taken >= 60) break;
+      }
+      searched++;
+      await withApplicant(pool, ctx, (c) => c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now() WHERE id = $1", [follow.id]));
+    } catch (e) {
+      const reason = e instanceof SourceRefusedError ? e.reason : "unreachable";
+      const detail = e instanceof SourceRefusedError ? e.detail : (e as Error).message;
+      await withApplicant(pool, ctx, (c) => c.query(
+        "UPDATE job_source SET health = $2, health_reason = $3, failures = failures + 1, last_checked_at = now() WHERE id = $1",
+        [follow.id, reason === "refused" ? "blocked" : "degraded", `${reason}: ${detail}`.slice(0, 300)]));
+      notes.push({ source: site.name, note: reason === "refused" ? `${site.name} turned down our key, so it wasn't searched. The key in the app's settings needs checking.`
+        : `${site.name} couldn't be searched this time. ${PLAIN_REFUSAL[reason] ?? PLAIN_REFUSAL.unreachable}` });
+    }
+  }
+
+  // 2. Then the employers' own jobs pages.
   for (const s of sources) {
     if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
@@ -365,9 +413,9 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
     await c.query(
       `UPDATE scan_run SET finished_at = now(), sources_checked = $2, new_count = $3, updated_count = $4, expired_count = $5,
          jobs_checked = $6, related_count = $7, source_notes = $8 WHERE id = $1`,
-      [runId, sources.length, m.newMatches, updated, closed, checked, m.related, JSON.stringify(notes)]);
+      [runId, sources.length + searched, m.newMatches, updated, closed, checked, m.related, JSON.stringify(notes)]);
     await recordAudit(c, "scan.finished", { objectType: "scan_run", objectId: runId, payload: { sources: sources.length, checked, new_jobs: m.newMatches, updated, closed } });
-    return { ...found, sources: sources.length, checked, newPostings: fresh0, newMatches: m.newMatches, updated, closed, alerts };
+    return { ...found, sources: sources.length, search_sites: searched, checked, newPostings: fresh0, newMatches: m.newMatches, updated, closed, alerts };
   });
 }
 
@@ -396,6 +444,10 @@ export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload:
 }
 
 export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link" | "tailor" | "email_check" | "resume_digest"; payload: Record<string, any>; attempts: number }
+
+const SEARCH_HOME: Record<SearchSiteId, string> = {
+  adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com",
+};
 
 /** Takes and runs one piece of queued work. Returns false when there was nothing to do. */
 export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolean> {
@@ -435,7 +487,7 @@ export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: 
   await withApplicant(pool, asApplicant(session), async (c) => {
     // A place the app found is kept as "don't watch", so it isn't found and followed again.
     const r = await c.query(
-      `WITH m AS (UPDATE applicant_job_source SET muted = true WHERE job_source_id = $1 AND origin = 'found' AND NOT muted RETURNING job_source_id),
+      `WITH m AS (UPDATE applicant_job_source SET muted = true WHERE job_source_id = $1 AND origin IN ('found','search') AND NOT muted RETURNING job_source_id),
             d AS (DELETE FROM applicant_job_source WHERE job_source_id = $1 AND origin = 'you' RETURNING job_source_id)
        SELECT job_source_id FROM m UNION ALL SELECT job_source_id FROM d`, [sourceId]);
     if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");

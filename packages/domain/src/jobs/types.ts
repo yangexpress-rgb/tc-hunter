@@ -37,7 +37,7 @@ export interface RequirementsReader {
 /** One configured place we look for jobs (shared catalogue, no personal data). */
 export interface SourceSpec {
   type: SourceType;
-  kind: AtsKind | "careers_page" | "pasted_link";
+  kind: AtsKind | "careers_page" | "pasted_link" | "job_search";
   /** Board token / company id / careers URL. */
   key: string;
   name: string;

@@ -1,5 +1,5 @@
 import { latestDiscovery, listGoals, listSources } from "@tc-hunter/db";
-import { goalName, t } from "@tc-hunter/domain";
+import { goalName, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -10,6 +10,21 @@ import { app, requireSession } from "@/lib/server";
 import { followSourceAction, refreshAction, unfollowSourceAction } from "../actions";
 
 export const dynamic = "force-dynamic";
+
+/** Why a source failed, in plain words, from what the last search recorded. */
+const WHY: Record<string, string> = {
+  robots: "The site asks automated readers not to look, so we don't.",
+  refused: "The site turned us down (for a search site, its key was refused).",
+  rate_limited: "The site asked us to slow down.",
+  not_found: "No job listings were found at its address.",
+  unreachable: "We couldn't reach it.",
+  too_big: "Its page was too large to read.",
+};
+const why = (reason: string | null) => WHY[String(reason ?? "").split(":")[0]!.trim()] ?? "It didn't answer as expected.";
+const KIND: Record<string, string> = {
+  job_search: "Job search site", greenhouse: "Company jobs page", lever: "Company jobs page", ashby: "Company jobs page",
+  smartrecruiters: "Company jobs page", careers_page: "Company careers page", pasted_link: "Pasted links",
+};
 
 const health = (h: string) => (h === "blocked" ? t("jobs.sources.unavailable") : h === "degraded" ? t("jobs.sources.trouble") : t("jobs.sources.ok"));
 
@@ -23,7 +38,45 @@ export default async function SourcesPage(props: PageProps) {
   const [{ saved, error, params }, sources, goals, last] = await Promise.all([flashOf(props), listSources(pool, session), listGoals(pool, session), latestDiscovery(pool, session)]);
   const names = new Map(goals.map((g) => [g.id, goalName(g)]));
   const found = sources.filter((s) => s.origin === "found");
-  const mine = sources.filter((s) => s.origin !== "found");
+  const mine = sources.filter((s) => s.origin === "you");
+  const searchRows = new Map(sources.filter((s) => s.origin === "search").map((s) => [s.url, s]));
+  const sites = searchSites(process.env).status;
+  const HOME: Record<string, string> = { adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com" };
+  // One row per source for the status table: job sites (on or not), LinkedIn alerts, and every followed page.
+  type StatusRow = { key: string; name: string; kind: string; status: string; last: Date | null; jobs: number; reason: string; link?: { href: string; label: string } };
+  const table: StatusRow[] = [
+    ...sites.filter((x) => !x.on).map((x) => ({ key: `off-${x.id}`, name: x.name, kind: "Job search site", status: "Off", last: null, jobs: 0,
+      reason: `Needs ${x.needs}.`, link: { href: x.signup!, label: "Get one free" } })),
+    ...sources.map((s) => {
+      const never = !s.last_checked_at;
+      const failed = !never && s.health !== "ok";
+      return { key: s.id, name: s.name, kind: s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : KIND[s.kind] ?? "Jobs page",
+        status: never ? "Not searched yet" : failed ? "Failed" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
+        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : "" };
+    }),
+    ...(!searchRows.has("https://www.linkedin.com/jobs/") ? [{ key: "linkedin", name: "LinkedIn job alerts", kind: "LinkedIn alert emails", status: "Not set up", last: null, jobs: 0,
+      reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
+  ];
+  const KINDS = [...new Set(table.map((r) => r.kind))].sort();
+  const STATUSES = ["Succeeded", "Failed", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
+  const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
+  const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
+  const fQ = (params.q ?? "").slice(0, 60);
+  const COLS = [["name", "Source"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
+  const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "status") as (typeof COLS)[number][0];
+  const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
+  const RANK: Record<string, number> = { Failed: 0, Off: 1, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
+  const val = (r: StatusRow): string | number => sortBy === "status" ? RANK[r.status] ?? 9 : sortBy === "last" ? r.last ? new Date(r.last).getTime() : -1
+    : sortBy === "jobs" ? r.jobs : String(r[sortBy]).toLowerCase();
+  const shown = table.filter((r) => (!fKind || r.kind === fKind) && (!fStatus || r.status === fStatus) && (!fQ || r.name.toLowerCase().includes(fQ.toLowerCase())))
+    .sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : a.name.localeCompare(b.name)) * (dir === "asc" ? 1 : -1); });
+  const failedCount = table.filter((r) => r.status === "Failed").length;
+  const href = (over: Record<string, string>) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries({ kind: fKind, status: fStatus, q: fQ, ...over })) if (v) p.set(k, v);
+    return `/jobs/sources?${p}#status`;
+  };
+
   const Row = ({ s }: { s: (typeof sources)[number] }) => (
     <li className="card source-row">
       <div>
@@ -47,14 +100,99 @@ export default async function SourcesPage(props: PageProps) {
       {params.refreshed ? <p className="status" role="status">We're looking again. This takes a few minutes.</p> : null}
 
       <section className="card stack">
-        <p>We find employers that fit your <a href="/profile/goals">goals</a>, check their public jobs pages, and read the jobs there for you. You don't need to do anything here.</p>
+        <p>We search job sites for each of your <a href="/profile/goals">goals</a> first, then find employers that fit and read their own jobs pages. Jobs that fit come back to Jobs, scored. You don't need to do anything here.</p>
         <p className="muted">{last?.finished_at
           ? `Last looked ${ago(last.finished_at)}: checked ${last.companies_checked} ${last.companies_checked === 1 ? "employer" : "employers"}, found ${last.boards_found} with jobs pages we can read.`
           : goals.some((g) => g.active) ? "We haven't looked yet. It starts with the next search." : "Add a goal and we'll start looking."}</p>
         <form action={refreshAction}><input type="hidden" name="back" value="/jobs/sources" /><button>Look again now</button></form>
       </section>
 
-      <h2>Found for your goals</h2>
+      <section className="card" id="status">
+        <h2>Every source, and how its last search went</h2>
+        <form method="get" action="/jobs/sources#status" className="fields">
+          <label>Kind<select name="kind" defaultValue={fKind}><option value="">All</option>{KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
+          <label>Status<select name="status" defaultValue={fStatus}><option value="">All</option>{STATUSES.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
+          <label>Name<input name="q" defaultValue={fQ} placeholder="e.g. Adzuna" /></label>
+          {sortBy !== "status" ? <input type="hidden" name="sort" value={sortBy} /> : null}
+          {params.dir ? <input type="hidden" name="dir" value={dir} /> : null}
+          <button className="small">Filter</button>
+          {fKind || fStatus || fQ ? <a href="/jobs/sources#status">Clear</a> : null}
+        </form>
+        <p className="muted small">{shown.length} of {table.length} sources{failedCount ? <> · <span className="error">{failedCount} failed last time</span></> : null}</p>
+        <div className="table-wrap">
+          <table className="report jobs-matrix">
+            <thead><tr>
+              {COLS.map(([k, label]) => {
+                const on = sortBy === k;
+                const next = on ? (dir === "asc" ? "desc" : "asc") : k === "jobs" || k === "last" ? "desc" : "asc";
+                return <th key={k} scope="col" className={k === "jobs" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+                  <a href={href({ sort: k, dir: next })}>{label}{on ? (dir === "asc" ? " ▲" : " ▼") : ""}</a></th>;
+              })}
+            </tr></thead>
+            <tbody>
+              {shown.map((r) => (
+                <tr key={r.key}>
+                  <td>{r.name}</td>
+                  <td>{r.kind}</td>
+                  <td className={r.status === "Failed" || r.status === "Off" ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
+                  <td>{r.last ? ago(r.last) : "Never"}</td>
+                  <td className="num">{r.jobs}</td>
+                  <td className={r.status === "Failed" || r.status === "Off" ? "error wrap" : "muted wrap"}>{r.reason}{r.link ? <> <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a></> : null}</td>
+                </tr>
+              ))}
+              {shown.length === 0 ? <tr><td colSpan={6} className="muted">No sources match these filters.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <h2>Job search sites</h2>
+      <ul className="plain source-list">
+        {sites.map((site) => {
+          const row = searchRows.get(HOME[site.id]);
+          return (
+            <li key={site.id} className="card source-row">
+              <div>
+                <strong>{site.name}</strong>
+                <div className="muted">{site.covers}</div>
+                {site.on ? (row ? <>
+                  <div className={row.health === "ok" ? "muted" : "warn"}>{row.health === "ok" ? "Searching" : `Couldn't search it last time${row.health === "blocked" ? ": it turned us down" : ""}. We'll try again.`}</div>
+                  <div className="muted">{row.open_jobs} open {row.open_jobs === 1 ? "job" : "jobs"} found · searched {ago(row.last_checked_at)}</div>
+                </> : <div className="muted">On. It's searched with your next look.</div>)
+                  : <div className="warn">Not on yet: it needs {site.needs}. <a href={site.signup} target="_blank" rel="noreferrer">Get one free</a>.</div>}
+              </div>
+              {site.on && row ? (
+                <form action={unfollowSourceAction}>
+                  <input type="hidden" name="id" value={row.id} /><input type="hidden" name="back" value="/jobs/sources" />
+                  <button className="small secondary">Don't use</button>
+                </form>
+              ) : null}
+            </li>
+          );
+        })}
+        {(() => {
+          const row = searchRows.get("https://www.linkedin.com/jobs/");
+          return (
+            <li className="card source-row">
+              <div>
+                <strong>LinkedIn job alerts</strong>
+                <div className="muted">Jobs from LinkedIn's alert emails in your connected Gmail</div>
+                {row ? <div className="muted">{row.open_jobs} open {row.open_jobs === 1 ? "job" : "jobs"} found · read {ago(row.last_checked_at)}</div>
+                  : <div className="muted">Not set up yet. <a href="/profile/goals#linkedin">How to turn it on</a>.</div>}
+              </div>
+              {row ? (
+                <form action={unfollowSourceAction}>
+                  <input type="hidden" name="id" value={row.id} /><input type="hidden" name="back" value="/jobs/sources" />
+                  <button className="small secondary">Don't use</button>
+                </form>
+              ) : null}
+            </li>
+          );
+        })()}
+      </ul>
+      <p className="muted small">LinkedIn and Indeed don't let other apps search them, so we never read them directly. Adzuna and Jooble bring in many of the same jobs, with a link to the original, and LinkedIn's own alert emails bring in the rest. You can also paste any job's link in <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
+
+      <h2>Employers found for your goals</h2>
       {found.length === 0 ? <p className="muted empty">Nothing yet.</p> : <ul className="plain source-list">{found.map((s) => <Row key={s.id} s={s} />)}</ul>}
 
       {mine.length ? (<><h2>Added by you</h2><ul className="plain source-list">{mine.map((s) => <Row key={s.id} s={s} />)}</ul></>) : null}
@@ -70,8 +208,9 @@ export default async function SourcesPage(props: PageProps) {
       </Details>
 
       <Details summary="How we find jobs">
-        <p>For each goal, we start with the companies you named. When Claude is set up, it also suggests employers that hire for the goal. We then check each employer's public jobs page on Greenhouse, Lever, Ashby or SmartRecruiters, or its own careers page, and only watch the ones that answer with jobs.</p>
-        <p>We look again when you change a goal, when you press Refresh, and once a week. We follow each site's rules for automated visitors, and never use paid job sites.</p>
+        <p>First, we search the job search sites above for each goal's roles in each of its places. We only send a job title and a place, never anything about you.</p>
+        <p>Then, for each goal, we start with the companies you named. When Claude is set up, it also suggests employers that hire for the goal. We check each employer's public jobs page on Greenhouse, Lever, Ashby or SmartRecruiters, or its own careers page, and only watch the ones that answer with jobs.</p>
+        <p>We look again when you change a goal, when you press Refresh, and once a day (or as often as your search settings say). We follow each site's rules for automated visitors.</p>
         <p>Employers whose jobs pages we can't read (many large companies use other systems) won't show up. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
       </Details>
 

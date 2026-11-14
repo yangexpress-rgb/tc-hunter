@@ -5,7 +5,7 @@
  */
 import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, loadSecretStore, resumeReaderName, runNextWork, type EmailDeps } from "@tc-hunter/db";
 import {
-  ClaudeCompanyProposer, ClaudeLetterProposer, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
+  ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type RequirementsReader,
 } from "@tc-hunter/domain";
 
@@ -24,7 +24,7 @@ const tailor = {
 // Connected Gmail (decision 13.3): only when a Google client is configured and the vault is mounted.
 const google = googleClientFrom(process.env);
 const email: EmailDeps | undefined = google && process.env.TC_VAULT_DIR
-  ? { vault: loadSecretStore(), cfg, reader: (token) => new GmailReader(google, token) } : undefined;
+  ? { vault: loadSecretStore(), cfg, reader: (token) => new GmailReader(google, token), postings: reader } : undefined;
 // Resume digest (decision 13.6): Claude with contact details and the applicant's names removed, or the built-in rules.
 const digest = {
   cfg,
@@ -35,6 +35,8 @@ const digest = {
 // Finding places to look (Yong, 2026-11-14): Claude suggests employers for each goal when set up;
 // otherwise only the companies the person named are looked up. Every board is checked before it's followed.
 const discover = { proposer: resumeReaderName() === "claude" && process.env.TC_COMPANY_FINDER !== "rules" ? new ClaudeCompanyProposer() : new NamedCompaniesOnly() };
+// Job-search sites (Yong, 2026-11-14): searched first for every goal; each turns on when its free key is set.
+const search = searchSites(process.env).sites;
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
@@ -42,7 +44,7 @@ let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
 async function main() {
-  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail.readonly" : "off", companies: discover.proposer.version });
+  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail.readonly" : "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
   let lastSchedule = 0;
   while (!stopping) {
     try {
@@ -53,7 +55,7 @@ async function main() {
         if (queued || mail) log.info("worker.scheduled", { scans: queued, email_checks: mail });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search });
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
     } catch (e) {
       log.warn("worker.error", { message: String((e as Error).message ?? e).slice(0, 200) });
