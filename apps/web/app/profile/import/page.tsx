@@ -7,9 +7,19 @@ import { DigestChip, fileSize } from "@/components/profile/Digest";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { importAction } from "../actions";
+import { importAction, saveLinkedInAction } from "../actions";
 
 export const dynamic = "force-dynamic";
+
+/** What happened when we tried to read the profile from its link, in plain words. */
+const LINKEDIN_RESULT: Record<string, string> = {
+  robots: "Link saved. LinkedIn asks apps not to read profile pages, so we didn't. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
+  sign_in: "Link saved. LinkedIn showed a sign-in page instead of your profile, so there was nothing to read. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
+  refused: "Link saved. LinkedIn turned the request away, so we couldn't read your profile. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
+  not_found: "Link saved, but LinkedIn says there's no profile at that address. Check the link.",
+  empty: "Link saved. LinkedIn sent back almost nothing to read. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
+  unreachable: "Link saved, but we couldn't reach LinkedIn just now. Try again in a few minutes.",
+};
 
 /**
  * Bring in a resume (brief 5.1). The file is stored as it is; the digest then
@@ -18,7 +28,8 @@ export const dynamic = "force-dynamic";
 export default async function ImportPage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error }, files, profile] = await Promise.all([flashOf(props), listResumeFiles(pool, session), getProfile(pool, cfg, session)]);
+  const [{ saved, error, params }, files, profile] = await Promise.all([flashOf(props), listResumeFiles(pool, session), getProfile(pool, cfg, session)]);
+  const li = typeof params.li === "string" ? params.li : "";
   const older = profile.imports.filter((b) => !b.resume_file_id);
   const busy = files.some((f) => f.latest && !["ready", "failed", "replaced"].includes(f.latest.status) && !f.latest.stuck);
   return (
@@ -31,14 +42,22 @@ export default async function ImportPage(props: PageProps) {
       <Flash saved={saved} error={error} />
       <section className="card">
         <form action={importAction} className="stack">
+          <h2>Your resume</h2>
           <label>Your file<input type="file" name="file" accept=".pdf,.docx,.txt,.md,.zip" required /></label>
           <button>Save and read my file</button>
         </form>
         <p className="muted">{t("profile.import.privacy")}</p>
       </section>
-      <Details summary="How to get your LinkedIn download">
-        <p>On LinkedIn, open Settings, then Data privacy, then Get a copy of your data. Pick the larger download, wait for the email, and upload the file it gives you here as it is.</p>
-      </Details>
+
+      <section className="card" id="linkedin">
+        <h2>Your LinkedIn profile</h2>
+        <p>Paste the link to your LinkedIn profile. We keep it on your profile for applications, and try to read the profile as a second source alongside your resume. Anything already in your profile is matched, not added twice.</p>
+        {li ? <p className="status" role="status">{LINKEDIN_RESULT[li] ?? LINKEDIN_RESULT.unreachable}</p> : null}
+        <form action={saveLinkedInAction} className="stack">
+          <label>Profile link<input name="linkedin" placeholder="linkedin.com/in/your-name" defaultValue={profile.about.links?.linkedin ?? ""} /></label>
+          <button>Save and read my LinkedIn</button>
+        </form>
+      </section>
 
       {files.length ? (
         <section>

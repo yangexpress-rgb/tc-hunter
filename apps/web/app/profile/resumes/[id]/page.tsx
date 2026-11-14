@@ -53,12 +53,12 @@ export default async function ResumeFilePage(props: Props) {
 
       <section className="card">
         <h2>{file.fileName}</h2>
-        <p className="muted">{FILE_KIND_LABEL[file.fileKind]} · {fileSize(file.byteSize)} · uploaded {new Date(file.createdAt).toLocaleString("en-US")}</p>
+        <p className="muted">{file.kind === "linkedin" && file.fileKind === "pdf" ? "LinkedIn profile (PDF)" : FILE_KIND_LABEL[file.fileKind]} · {fileSize(file.byteSize)} · uploaded {new Date(file.createdAt).toLocaleString("en-US")}</p>
         <p className="muted">Kept exactly as you uploaded it, locked with your own key. Reading it never changes it.</p>
         <div className="row-actions">
           {canView ? <a className="button small" href={`/profile/resumes/${file.id}/file`} target="_blank" rel="noopener">Open</a> : null}
           <a className="button small secondary" href={`/profile/resumes/${file.id}/file?download=1`}>Download</a>
-          {file.kind === "resume" ? <a className="button small secondary" href={`/profile/resumes/${file.id}?text=1#text`}>See the text we read</a> : null}
+          {file.fileKind !== "zip" ? <a className="button small secondary" href={`/profile/resumes/${file.id}?text=1#text`}>See the text we read</a> : null}
         </div>
       </section>
 
@@ -110,7 +110,7 @@ export default async function ResumeFilePage(props: Props) {
             </Details>
           ) : null}
           {d.notes.length ? (
-            <Details summary="Things we left out">
+            <Details summary={`Things we left out or couldn't place (${d.notes.length})`}>
               <ul>{d.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>
             </Details>
           ) : null}
@@ -134,7 +134,7 @@ export default async function ResumeFilePage(props: Props) {
             <button className="secondary">Read my file again with these choices</button>
           </form>
         </section>
-      ) : d && !running && file.kind === "resume" ? (
+      ) : d && !running && file.fileKind !== "zip" ? (
         <form action={redigestAction}>
           <input type="hidden" name="file_id" value={file.id} />
           <button className="secondary">Read my file again</button>
