@@ -1,5 +1,5 @@
 import { emailStatus, getPreferences, listGoals } from "@tc-hunter/db";
-import { GOAL_TYPES, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
+import { GOAL_LEVELS, GOAL_TYPES, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { EditDialog } from "@/components/profile/EditDialog";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -47,6 +47,13 @@ function GoalForm({ g }: { g?: Goal }) {
           ))}
         </fieldset>
         <fieldset>
+          <legend>Level</legend>
+          {GOAL_LEVELS.map(([k, l]) => (
+            <label key={k} className="check"><input type="checkbox" name="levels" value={k} defaultChecked={g?.levels.includes(k) ?? false} /> {l}</label>
+          ))}
+          <span className="hint">Pick any that fit. Jobs at these levels score higher for this goal; leave all unticked for any level.</span>
+        </fieldset>
+        <fieldset>
           <legend>How you'd like to work</legend>
           {WORKPLACES.map(([k, l]) => (
             <label key={k} className="check"><input type="checkbox" name="workplace_types" value={k} defaultChecked={g?.workplaceTypes.includes(k) ?? false} /> {l}</label>
@@ -74,7 +81,7 @@ function GoalForm({ g }: { g?: Goal }) {
 }
 
 function GoalItem({ g }: { g: Goal }) {
-  const when = [timeFrameLabel(g.timeFrame), g.employmentTypes.map(goalTypeLabel).join(", ")].filter(Boolean).join(" · ");
+  const when = [timeFrameLabel(g.timeFrame), g.levels.map(goalLevelLabel).join(", "), g.employmentTypes.map(goalTypeLabel).join(", ")].filter(Boolean).join(" · ");
   const field = [g.occupation, g.industries.join(", ")].filter(Boolean).join(" · ");
   const where = [g.locations.join(", "), g.workplaceTypes.map((w) => WORKPLACES.find(([k]) => k === w)?.[1] ?? w).join(", ")].filter(Boolean).join(" · ");
   const p = pay(g);
@@ -93,7 +100,7 @@ function GoalItem({ g }: { g: Goal }) {
   );
 }
 
-/** Goals (was "What you want"): several goals, each with when, what kind, role, occupation, industry, company, pay and place. */
+/** Goals (was "What you want"): several goals, each with when, what kind, level, role, occupation, industry, company, pay and place. */
 export default async function GoalsPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();

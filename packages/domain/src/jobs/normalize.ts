@@ -96,6 +96,36 @@ export function levelOf(title: string): Level | null {
 }
 export const levelIndex = (l: Level) => LEVELS.indexOf(l);
 
+/**
+ * The levels a goal can ask for (Yong, 2026-11-14), lowest first. Finer than the
+ * ladder above: junior sits between entry and mid, senior director between director and VP.
+ */
+export const GOAL_LEVELS = [
+  ["entry", "Entry level"], ["junior", "Junior"], ["mid", "Mid level"], ["senior", "Senior"], ["manager", "Manager or lead"],
+  ["director", "Director"], ["senior_director", "Senior director"], ["vp", "VP"], ["executive", "Executive (C-level)"],
+] as const;
+export type GoalLevel = (typeof GOAL_LEVELS)[number][0];
+export const goalLevelLabel = (k: string) => GOAL_LEVELS.find(([v]) => v === k)?.[1] ?? k;
+/** Position on the goal ladder; an internship sits just below entry level. */
+export const goalLevelIndex = (k: GoalLevel | "intern") => (k === "intern" ? -1 : GOAL_LEVELS.findIndex(([v]) => v === k));
+
+/** A posting's level in the goal's terms, from its title. Null when the title doesn't say. */
+export function goalLevelOf(title: string): GoalLevel | "intern" | null {
+  const l = levelOf(title);
+  if (!l) return null;
+  const t = normalizeTitle(title);
+  switch (l) {
+    case "intern": return "intern";
+    case "entry": return /\bjunior\b/.test(t) ? "junior" : "entry";
+    case "mid": return "mid";
+    case "senior": return "senior";
+    case "lead": return "manager";
+    case "director": return /\b(senior|executive) director\b/.test(t) ? "senior_director" : "director";
+    case "vp": return "vp";
+    case "c_level": return "executive";
+  }
+}
+
 /** Words of a title that name the work, not the rank. */
 export function functionWords(title: string): string[] {
   return normalizeTitle(title).split(" ").filter((w) => w && !LEVEL_WORDS.has(w) && w !== "of" && w !== "and");

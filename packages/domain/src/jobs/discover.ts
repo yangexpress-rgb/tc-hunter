@@ -21,6 +21,8 @@ export interface GoalBrief {
   locations: string[];
   workplaceTypes: string[];
   employmentTypes: string[];
+  /** Levels wanted, e.g. Director, VP. */
+  levels?: string[];
 }
 
 export interface CompanyIdea {

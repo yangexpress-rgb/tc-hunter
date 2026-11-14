@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { companyKey, findBoard, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
+import { companyKey, findBoard, goalLevelLabel, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
@@ -52,7 +52,7 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
   // 1. Employers for each goal: the named ones first, then suggestions.
   const ideas = new Map<string, CompanyIdea & { goalId: string }>();
   for (const g of goals) {
-    const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes };
+    const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes, levels: g.levels.map(goalLevelLabel) };
     for (const name of g.companies) {
       const k = companyKey(name);
       if (k && !ideas.has(k)) ideas.set(k, { name, reason: "A company you named", goalId: g.id });

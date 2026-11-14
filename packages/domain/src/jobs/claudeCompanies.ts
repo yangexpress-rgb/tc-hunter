@@ -35,6 +35,7 @@ export class ClaudeCompanyProposer implements CompanyProposer {
       goal.occupation ? `Line of work: ${goal.occupation}` : null,
       goal.industries.length ? `Industries: ${goal.industries.join(", ")}` : null,
       goal.companies.length ? `Companies they named: ${goal.companies.join(", ")}` : null,
+      goal.levels?.length ? `Levels: ${goal.levels.join(", ")}` : null,
       goal.locations.length ? `Places: ${goal.locations.join(", ")}` : null,
       goal.workplaceTypes.length ? `Ways of working: ${goal.workplaceTypes.join(", ")}` : null,
       goal.employmentTypes.length ? `Kind of work: ${goal.employmentTypes.join(", ").replace(/_/g, " ")}` : null,

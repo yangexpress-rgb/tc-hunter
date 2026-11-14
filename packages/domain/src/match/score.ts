@@ -1,6 +1,6 @@
 import { canonicalSkill, findSkills } from "../jobs/skills";
 import { containsPhrase } from "../jobs/text";
-import { functionWords, LEVEL_LABEL, levelIndex, levelOf, normalizeTitle, type Level } from "../jobs/normalize";
+import { functionWords, goalLevelIndex, goalLevelLabel, goalLevelOf, LEVEL_LABEL, levelIndex, levelOf, normalizeTitle, type GoalLevel, type Level } from "../jobs/normalize";
 import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
 
 /**
@@ -8,7 +8,7 @@ import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
  * number explained. AI never sets a score. Changing any rule here means a new
  * RULES_VERSION, so stored scores stay reproducible.
  */
-export const RULES_VERSION = "match-2";  // match-2: goals (companies, kind of work, occupation)
+export const RULES_VERSION = "match-3";  // match-2: goals (companies, kind of work, occupation); match-3: the goal's levels
 export const WEIGHTS = { skills: 35, experience: 25, preferences: 20, keywords: 10, recency: 10 } as const;
 
 /** Early-career experience counts toward years at a recorded, visible discount (P2). */
@@ -42,6 +42,8 @@ export interface MatchPrefs {
   occupation?: string | null;
   companiesInclude?: string[];
   employmentTypes?: string[];
+  /** From a goal (match-3): the levels wanted. Empty or missing means any level. */
+  levels?: GoalLevel[];
   /** The goal's short name, for the reasons, and its id, so a match can say which goal it fits best. */
   goalName?: string;
   goalId?: string;
@@ -180,7 +182,7 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
     "Counted years: full-time and contract 1×, part-time and internships 0.5×, projects and volunteering 0.25×, coursework 0.1×.",
   ];
 
-  // 3. Preference fit (20 = place 10 + pay 5 + industry 5) --------------------------------
+  // 3. Preference fit (20 = place 10 + pay 5 + industry 5; with levels chosen, place 8 + level 6 + pay 3 + industry 3)
   const prefLines: string[] = [];
   const loc = (posting.locationRaw ?? "").toLowerCase();
   const isRemote = posting.workplaceType === "remote" || /\bremote\b/.test(loc);
@@ -228,7 +230,13 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
   const kinds = prefs.employmentTypes ?? [];
   const kind = employmentKind(posting.title);
   if (kinds.length && kind && !kinds.includes(kind)) filterReasons.push(`It's ${KIND_PHRASE[kind]}, and you want ${kinds.map((k) => KIND_LABEL[k] ?? k).join(" or ")} work.`);
-  const prefPoints = 10 * placeRaw + 5 * payRaw + 5 * indRaw;
+  const levels = prefs.levels ?? [];
+  let prefPoints = 10 * placeRaw + 5 * payRaw + 5 * indRaw;
+  if (levels.length) {
+    const lv = levelFit(posting.title, levels);
+    prefLines.push(lv.line);
+    prefPoints = 8 * placeRaw + 6 * lv.raw + 3 * payRaw + 3 * indRaw;
+  }
 
   const emp = prefs.employersExclude.find((e) => posting.employer.toLowerCase().includes(e.toLowerCase().trim()) && e.trim());
   if (emp) filterReasons.push(`${posting.employer} is on your skip list.`);
@@ -304,6 +312,21 @@ export function employmentKind(title: string): string | null {
   if (/\b(temporary|temp|seasonal)\b/.test(t)) return "temporary";
   if (/\bvolunteer\b/.test(t)) return "volunteer";
   return null;
+}
+
+/**
+ * How close a posting's level is to the levels a goal asks for: a chosen level counts
+ * fully, one step away half, further away not at all. A title that doesn't say counts 0.6.
+ */
+export function levelFit(title: string, levels: GoalLevel[]): { raw: number; line: string } {
+  const wanted = levels.map((l) => goalLevelLabel(l)).join(", ");
+  const lp = goalLevelOf(title);
+  if (!lp) return { raw: 0.6, line: `The title doesn't say its level (you want ${wanted}).` };
+  const label = lp === "intern" ? "Internship" : goalLevelLabel(lp);
+  if ((levels as string[]).includes(lp)) return { raw: 1, line: `${label}, a level you chose.` };
+  const d = Math.min(...levels.map((l) => Math.abs(goalLevelIndex(l) - goalLevelIndex(lp))));
+  return d === 1 ? { raw: 0.5, line: `${label}: one step from the levels you chose (${wanted}).` }
+    : { raw: 0, line: `${label}: not near the levels you chose (${wanted}).` };
 }
 
 const employerKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(inc|llc|ltd|corp|corporation|co|plc|gmbh|the)\b/g, " ").replace(/\s+/g, " ").trim();
