@@ -9,7 +9,7 @@ export * from "./honesty";
 export * from "./pii";
 export * from "./extract";
 export * from "./linkedin";
-export { ClaudeResumeParser } from "./claudeParser";
+export { ClaudeResumeParser, unplacedLines, type ReadTrace } from "./claudeParser";
 
 /**
  * Reads resume text with the configured reader, falls back to the rule reader
@@ -28,3 +28,4 @@ export async function readResume(text: string, parser: ResumeParser = new RulesR
   return groundInSource(parsed, text);
 }
 export * from "./digest";
+export * from "./linkedinLink";

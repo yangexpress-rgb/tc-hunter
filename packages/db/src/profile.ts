@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  decryptField, encryptField, evidenceCoach, isStale, unwrapDataKey, type CoachCounts, type Nudge, type ParsedResume,
+  decryptField, encryptField, LINKEDIN_URL, normaliseLinkedInUrl, evidenceCoach, isStale, unwrapDataKey, type CoachCounts, type Nudge, type ParsedResume,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
@@ -267,6 +267,16 @@ export async function saveAbout(pool: pg.Pool, cfg: AppConfig, session: Session,
        a.timezone?.trim() || "UTC", enc("applicant.work_auth_summary", a.workAuthSummary), JSON.stringify(a.links ?? {})],
     );
   });
+}
+
+/** Saves only the LinkedIn profile address (from the "Bring in" page). Must be a linkedin.com/in/ address, or empty. */
+export async function saveLinkedInLink(pool: pg.Pool, session: Session, url: string): Promise<void> {
+  const u = url.trim();
+  if (u && !LINKEDIN_URL.test(u)) throw new DomainError("TC_LINKEDIN_URL");
+  const full = normaliseLinkedInUrl(u);
+  await withApplicant(pool, asApplicant(session), (c) => c.query(
+    `UPDATE applicant SET links = CASE WHEN $2 = '' THEN coalesce(links, '{}'::jsonb) - 'linkedin' ELSE coalesce(links, '{}'::jsonb) || jsonb_build_object('linkedin', $2::text) END, updated_at = now() WHERE id = $1`,
+    [session.applicantId, full]));
 }
 
 // ---------------------------------------------------------------------------

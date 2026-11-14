@@ -29,6 +29,7 @@ const email: EmailDeps | undefined = google && process.env.TC_VAULT_DIR
 const digest = {
   cfg,
   reader: (names: string[]) => (resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, names) : new RulesResumeParser()),
+  onRead: (info: Record<string, unknown>) => log.info("resume.digest_read", info),
 };
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;

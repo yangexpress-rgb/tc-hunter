@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   decryptField, detectKind, extractText, mappedText, MAX_RESUME_BYTES, open, parseLinkedInExport, planCounts, planDigest,
   publicSections, readResume, readerText, sectionHints, mergeSections, findProfileDuplicates, type ProfileDuplicate, seal, splitSections, type DigestPlan, type InputSection, type ParsedResume, type ProfileSnapshot,
-  type ResumeFileKind, type ResumeParser,
+  type ResumeFileKind, type ResumeParser, unplacedLines, stripContactDetails, contactBlockEnd,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
@@ -68,12 +68,14 @@ export type StoreResult =
  * Stores an uploaded resume unchanged and queues its digest. Uploading the very
  * same file again stores nothing and points at the earlier copy instead.
  */
-export async function storeResumeFile(pool: pg.Pool, cfg: AppConfig, session: Session, file: { name: string; bytes: Uint8Array }): Promise<StoreResult> {
+export async function storeResumeFile(pool: pg.Pool, cfg: AppConfig, session: Session,
+  file: { name: string; bytes: Uint8Array; source?: "resume" | "linkedin" }): Promise<StoreResult> {
   if (file.bytes.length === 0) throw new DomainError("TC_RESUME_UNREADABLE");
   if (file.bytes.length > MAX_RESUME_BYTES) throw new DomainError("TC_RESUME_TOO_BIG");
   const fileKind = kindOf(file.name, file.bytes);
   if (!fileKind) throw new DomainError("TC_RESUME_UNREADABLE");
-  const kind = fileKind === "zip" ? "linkedin" : "resume";
+  // A LinkedIn download is always LinkedIn; a PDF or text counts as LinkedIn when it came from the LinkedIn profile.
+  const kind = fileKind === "zip" || (file.source === "linkedin" && (fileKind === "pdf" || fileKind === "text")) ? "linkedin" : "resume";
   const name = file.name.replace(/[\u0000-\u001f]/g, "").slice(0, 200) || "resume";
   return withApplicant(pool, asApplicant(session), async (c) => {
     const dk = await dataKeyFor(c, cfg, session.applicantId);
@@ -237,6 +239,8 @@ export interface DigestDeps {
   cfg: AppConfig;
   /** Builds the resume reader; given the applicant's names so they can be removed before any outside reader sees the text. */
   reader: (names: string[]) => ResumeParser;
+  /** Told what each reading did (counts and stop reasons only, never resume text), for the worker's log. */
+  onRead?: (info: Record<string, unknown>) => void;
 }
 
 class DigestFailure extends Error {}
@@ -324,6 +328,14 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
       }
       readerName = parsed.parser;
       sectionMap = mergeSections(split, parsed.sections, overrides);
+      // Completeness check: list every line of the file that ended up in no section, so nothing goes missing quietly.
+      const sent = reader.sortsSections ? readerText(split) : mappedText(split);
+      const unplaced = unplacedLines(stripContactDetails(sent, { names: file.names, firstSectionLine: contactBlockEnd(sent) }), parsed);
+      for (const l of unplaced.slice(0, 30)) parsed.notes.push(`Not placed in any section: "${short(l, 120)}"`);
+      if (unplaced.length > 30) parsed.notes.push(`…and ${unplaced.length - 30} more lines not placed in any section.`);
+      deps.onRead?.({ reader: readerName, trace: (reader as { trace?: unknown }).trace ?? null, unplaced: unplaced.length,
+        roles: parsed.experience.length, education: parsed.education.length, credentials: parsed.credentials.length,
+        awards: parsed.awards?.length ?? 0, skills: parsed.skills.length });
     }
 
     // 4. Matching: compare every row with the profile, including drafts from earlier files.

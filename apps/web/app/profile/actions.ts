@@ -2,10 +2,10 @@
 import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
-  removeEvidence, rescoreMatches, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
+  removeEvidence, rescoreMatches, saveLinkedInLink, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyFact, verifyRole, type FactTable,
 } from "@tc-hunter/db";
-import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, RulesResumeParser } from "@tc-hunter/domain";
+import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -124,12 +124,40 @@ export async function importAction(form: FormData) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let target: string;
   try {
-    const r = await storeResumeFile(app().pool, app().cfg, s, { name: file.name, bytes });
+    const source = form.get("source") === "linkedin" ? "linkedin" as const : "resume" as const;
+    const r = await storeResumeFile(app().pool, app().cfg, s, { name: file.name, bytes, source });
     target = r.stored ? `/profile/resumes/${r.fileId}` : `/profile/resumes/${r.fileId}?same=1`;
   } catch (e) {
     const code = errorCode(e) ?? "TC_RESUME_UNREADABLE";
     log.warn("profile.import_failed", { code });
     target = `/profile/import?e=${code.startsWith("TC_") ? code : "TC_RESUME_UNREADABLE"}`;
+  }
+  redirect(target);
+}
+
+/**
+ * The LinkedIn profile address: kept on your profile, then one polite attempt to
+ * read the public profile from it as a second source. LinkedIn often refuses apps;
+ * when it does, the page says so plainly.
+ */
+export async function saveLinkedInAction(form: FormData) {
+  const s = await requireSession();
+  const url = String(form.get("linkedin") ?? "").trim();
+  try {
+    await saveLinkedInLink(app().pool, s, url);
+  } catch (e) {
+    redirect(`/profile/import?e=${errorCode(e) ?? "TC_LINKEDIN_URL"}#linkedin`);
+  }
+  if (!url) redirect("/profile/import?saved=1#linkedin");
+  const read = await readLinkedInProfile(url, new PoliteFetcher({ perHostMs: 0, timeoutMs: 15000 }));
+  log.info("profile.linkedin_read", { ok: read.ok, reason: read.ok ? null : read.reason });
+  if (!read.ok) redirect(`/profile/import?li=${read.reason}#linkedin`);
+  let target = "/profile/import?li=unreachable#linkedin";
+  try {
+    const r = await storeResumeFile(app().pool, app().cfg, s, { name: "LinkedIn profile (from your link).txt", bytes: new TextEncoder().encode(read.text), source: "linkedin" });
+    target = r.stored ? `/profile/resumes/${r.fileId}` : `/profile/resumes/${r.fileId}?same=1`;
+  } catch (e) {
+    log.warn("profile.linkedin_store_failed", { code: errorCode(e) ?? "TC_UNKNOWN" });
   }
   redirect(target);
 }

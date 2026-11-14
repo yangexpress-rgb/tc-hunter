@@ -285,12 +285,15 @@ describe("Claude finds the sections itself", () => {
     // The applicant says "Where I've worked" should not be used: that part of the file isn't sent again.
     const key = d.sections.find((s) => s.heading === "WHERE I'VE WORKED")!.key;
     const edu = d.sections.find((s) => s.heading === "EDUCATION")!.key;
+    const firstRun = sent.length;
     await redigestResumeFile(pool, kim, r.fileId, { [key]: "skip", [edu]: "education" });
     const next = (await getResumeFile(pool, kim, r.fileId)).latest!;
     output.experience = [];
     await runDigest(pool, kim, next.id, deps);
-    expect(sent[1]).not.toContain("Ran weekly pricing reviews");
-    expect(sent[1]).toContain(`"EDUCATION": education`);
+    const second = sent.slice(firstRun);
+    expect(second.length).toBeGreaterThan(0);
+    for (const m of second) expect(m).not.toContain("Ran weekly pricing reviews");
+    expect(second[0]).toContain(`"EDUCATION": education`);
     const after = (await getResumeFile(pool, kim, r.fileId)).latest!;
     expect(after.sections.find((s) => s.key === key)).toMatchObject({ target: "skip", chosen: true });
     expect(await count(kim, "experience_item")).toBe(0);
