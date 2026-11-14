@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { decryptField, writeZip, type SecretStore } from "@tc-hunter/domain";
+import { decryptField, open as openSealed, writeZip, type SecretStore } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { hasFreshStepUp, type Session } from "./auth";
 import type { AppConfig } from "./config";
@@ -28,6 +28,7 @@ export async function exportMyData(pool: pg.Pool, cfg: AppConfig, session: Sessi
       const out: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(row)) {
         if (NEVER_EXPORT.test(k) || k === "applicant_id") continue;
+        if (table === "resume_file" && k === "content_enc") continue;  // the original file goes in resumes/, as it is
         if (k.endsWith("_enc")) {
           const name = k.replace(/_enc$/, "");
           if (!v) { out[name] = null; continue; }
@@ -58,18 +59,25 @@ export async function exportMyData(pool: pg.Pool, cfg: AppConfig, session: Sessi
       try { story = typeof s.story === "string" ? JSON.parse(s.story) : s.story; } catch { /* keep as text */ }
       return { ...s, story };
     });
+    // Original resumes, byte for byte as uploaded.
+    const originals = (await c.query("SELECT id, file_name, content_enc FROM resume_file ORDER BY created_at")).rows.map((f, i) => ({
+      name: `resumes/${i + 1}-${String(f.file_name).replace(/[^A-Za-z0-9._ -]/g, "_")}`,
+      data: openSealed(dk, f.content_enc, "file:resume_file.content"),
+    }));
     const docs = (data.document as Array<Record<string, unknown>>) ?? [];
     const readme = [
       "TC Hunter: your data export",
       "",
       "profile.json holds everything TC Hunter keeps about you, with encrypted fields opened.",
       "documents/ holds each document version's editable content.",
+      "resumes/ holds the original resume files you uploaded, exactly as uploaded.",
       "Not included, by design: your sign-in password, your two-step key, and the employer-site passwords in your vault.",
       "",
     ].join("\n");
     const zip = writeZip([
       { name: "README.txt", data: Buffer.from(readme) },
       { name: "profile.json", data: Buffer.from(JSON.stringify(data, null, 2)) },
+      ...originals,
       ...docs.map((d) => ({ name: `documents/${d.public_ref}-v${d.version}.json`, data: Buffer.from(JSON.stringify(d.source_json, null, 2)) })),
     ]);
     const day = new Date().toISOString().slice(0, 10);

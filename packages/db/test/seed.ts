@@ -115,6 +115,9 @@ export async function seedEverything(
       VALUES ($1, $2, $3, 'interview', 'interview', 'contoso.example', now()) RETURNING id`, [me, ids.application, `seed${Date.now()}${Math.floor(Math.random() * 1e6)}`]);
     await one("extension_device", "INSERT INTO extension_device (applicant_id, label, token_hash) VALUES ($1, 'Seed browser', $2) RETURNING id",
       [me, randomBytes(32).toString("hex")]);
+    await one("resume_file", `INSERT INTO resume_file (applicant_id, kind, file_name, file_kind, byte_size, content_mac, content_enc)
+      VALUES ($1, 'resume', 'seed.txt', 'text', 4, $2, '\\x00'::bytea) RETURNING id`, [me, randomBytes(16).toString("hex")]);
+    await one("resume_digest", "INSERT INTO resume_digest (applicant_id, resume_file_id) VALUES ($1, $2) RETURNING id", [me, ids.resume_file]);
     return ids;
   });
 }

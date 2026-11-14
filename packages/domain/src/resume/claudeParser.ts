@@ -51,7 +51,8 @@ const Output = z.object({
 
 const SYSTEM = `You read resumes into structured rows for the person who wrote them. They will check every row before it counts.
 Copy text exactly as written: titles, organisations, bullets and skill names must be word for word from the resume. Never add, combine, reword or improve anything.
-Projects, internships, volunteering, coursework and part-time roles are experience; set "type" accordingly. For a personal project with no organisation, employer is null.
+Each section heading says what its rows are; the person chose these headings, so follow them: rows under INTERNSHIPS are type internship, PROJECTS are project, VOLUNTEER EXPERIENCE are volunteer, ACTIVITIES are other, COURSEWORK are coursework. Under EXPERIENCE, set full_time, part_time or contract from what the role says. For a personal project with no organisation, employer is null.
+List each role once, with every bullet under it. A role held at one organisation with two titles is two roles.
 Set stated_level only when the resume states a level next to that skill (for example "Python (expert)"); otherwise null.
 Contact details were removed and appear as [name], [email], [phone], [link] or [address]; ignore them.
 confidence is your certainty (0 to 1) that the row is read correctly.`;
@@ -69,7 +70,7 @@ export class ClaudeResumeParser implements ResumeParser {
       max_tokens: 16000,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      output_config: { effort: "low", format: zodOutputFormat(Output) },
+      output_config: { effort: "medium", format: zodOutputFormat(Output) },
       system: SYSTEM,
       messages: [{ role: "user", content: `<resume>\n${redacted}\n</resume>` }],
     });

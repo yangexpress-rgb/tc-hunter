@@ -1,15 +1,16 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteStory, discardImport, FACT_TABLES, importParsedResume,
-  removeEvidence, rescoreMatches, resumeReaderName, saveAbout, saveAnswer, savePreferences, saveStory, updateFact, verifyFact, type FactTable,
+  addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, discardImport, FACT_TABLES, redigestResumeFile,
+  removeEvidence, rescoreMatches, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
+  verifyFact, type FactTable,
 } from "@tc-hunter/db";
-import {
-  ANSWER_PRESETS, ClaudeResumeParser, detectKind, errorCode, extractText, MAX_RESUME_BYTES, parseLinkedInExport, readResume,
-  RulesResumeParser,
-} from "@tc-hunter/domain";
+import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
 import { app, log, requireSession } from "@/lib/server";
+
+/** Decision 13.6: Claude with contact details and names removed when configured; the built-in reader otherwise. */
+const resumeReader = (names: string[]) => (resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, names) : new RulesResumeParser());
 
 /** Only ever send people back to a profile page (never an outside address). */
 function backTo(form: FormData, fallback = "/profile"): string {
@@ -108,36 +109,60 @@ export async function saveAboutAction(form: FormData) {
 
 // Import ------------------------------------------------------------------------
 
+/** Stores the uploaded file unchanged, then its digest runs in the background. */
 export async function importAction(form: FormData) {
   const s = await requireSession();
   const file = form.get("file");
-  if (!(file instanceof File) || file.size === 0) redirect("/profile/import?e=unreadable");
-  if (file.size > MAX_RESUME_BYTES) redirect("/profile/import?e=too_big");
+  if (!(file instanceof File) || file.size === 0) redirect("/profile/import?e=TC_RESUME_UNREADABLE");
+  if (file.size > MAX_RESUME_BYTES) redirect("/profile/import?e=TC_RESUME_TOO_BIG");
   const bytes = new Uint8Array(await file.arrayBuffer());
-  let batchId: string | null = null;
-  let rows = 0;
+  let target: string;
   try {
-    const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b && /\.zip$/i.test(file.name);
-    if (isZip) {
-      const { parsed, sourceText } = parseLinkedInExport(Buffer.from(bytes));
-      const grounded = await readResume(sourceText, { name: parsed.parser, parse: async () => parsed });
-      const r = await importParsedResume(app().pool, s, { kind: "linkedin", fileName: file.name, fileKind: "zip", parsed: grounded });
-      batchId = r.batchId; rows = Object.values(r.counts).reduce((a, b) => a + b, 0);
-    } else {
-      const kind = detectKind(file.name, bytes);
-      if (!kind) throw new Error("unreadable");
-      const text = await extractText(kind, bytes);
-      if (text.trim().length < 40) throw new Error("unreadable");
-      // Decision 13.6: Claude with contact details removed when configured; the built-in reader otherwise.
-      const reader = resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, [s.preferredName]) : new RulesResumeParser();
-      const parsed = await readResume(text, reader);
-      const r = await importParsedResume(app().pool, s, { kind: "resume", fileName: file.name, fileKind: kind, parsed });
-      batchId = r.batchId; rows = Object.values(r.counts).reduce((a, b) => a + b, 0);
-    }
+    const r = await storeResumeFile(app().pool, app().cfg, s, { name: file.name, bytes });
+    target = r.stored ? `/profile/resumes/${r.fileId}` : `/profile/resumes/${r.fileId}?same=1`;
   } catch (e) {
-    log.warn("profile.import_failed", { code: errorCode(e) ?? "unreadable" });
+    const code = errorCode(e) ?? "TC_RESUME_UNREADABLE";
+    log.warn("profile.import_failed", { code });
+    target = `/profile/import?e=${code.startsWith("TC_") ? code : "TC_RESUME_UNREADABLE"}`;
   }
-  redirect(batchId ? `/profile/review?batch=${batchId}&rows=${rows}` : "/profile/import?e=unreadable");
+  redirect(target);
+}
+
+const fileIdOf = (form: FormData) => {
+  const id = String(form.get("file_id") ?? "");
+  if (!/^[0-9a-f-]{36}$/.test(id)) throw new Error("TC_NOT_FOUND");
+  return id;
+};
+
+/** Read the stored file again, with the applicant's own section choices. */
+export async function redigestAction(form: FormData) {
+  const s = await requireSession();
+  const id = fileIdOf(form);
+  const overrides: Record<string, string> = {};
+  for (const [k, v] of form.entries()) if (k.startsWith("section:") && typeof v === "string") overrides[k.slice(8)] = v;
+  let target = `/profile/resumes/${id}`;
+  try { await redigestResumeFile(app().pool, s, id, overrides); } catch (e) { target += `?e=${errorCode(e) ?? "TC_UNKNOWN"}`; }
+  redirect(target);
+}
+
+/** "Start now": runs a digest that is still waiting, right here instead of in the background. */
+export async function runDigestNowAction(form: FormData) {
+  const s = await requireSession();
+  const id = fileIdOf(form);
+  const digestId = String(form.get("digest_id") ?? "");
+  try {
+    await runDigest(app().pool, s, digestId, { cfg: app().cfg, reader: resumeReader });
+  } catch (e) {
+    log.warn("profile.digest_failed", { code: errorCode(e) ?? "TC_UNKNOWN" });
+  }
+  redirect(`/profile/resumes/${id}`);
+}
+
+export async function deleteResumeFileAction(form: FormData) {
+  const s = await requireSession();
+  const id = fileIdOf(form);
+  try { await deleteResumeFile(app().pool, s, id); } catch (e) { redirect(`/profile/resumes/${id}?e=${errorCode(e) ?? "TC_UNKNOWN"}`); }
+  redirect("/profile/import?saved=1");
 }
 
 export async function discardImportAction(form: FormData) {
