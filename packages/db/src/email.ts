@@ -10,7 +10,8 @@ import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
 import { setStage } from "./tracker";
-import { markSubmitted } from "./assist";
+import { markSubmitted, resolveOutcome } from "./assist";
+import { randomUUID } from "node:crypto";
 
 /**
  * Connected email (decision 13.3, Yong 2026-11-14). One read-only Gmail per applicant.
@@ -154,11 +155,17 @@ export async function listEmailSignals(pool: pg.Pool, session: Session, appRef?:
 export async function acceptEmailSignal(pool: pg.Pool, session: Session, id: string, cfg?: AppConfig): Promise<string> {
   const s = (await listEmailSignals(pool, session)).find((x) => x.id === id);
   if (!s) throw new DomainError("TC_NOT_FOUND");
-  const open = s.kind === "acknowledgement" && cfg ? await withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT 1 FROM application_packet k JOIN application a ON a.id = k.application_id
-      WHERE a.public_ref = $1 AND k.state IN ('approved_to_apply','filling','waiting_for_applicant','ready_to_submit')`, [s.appRef])).rowCount) : 0;
-  if (open && cfg) await markSubmitted(pool, cfg, session, s.appRef, s.confirmationRef);
-  else await setStage(pool, session, s.appRef, { stage: s.suggestedStage, outcomeTag: s.kind === "rejection" ? null : undefined, confirmationRef: s.confirmationRef ?? undefined });
+  const packet = s.kind === "acknowledgement" ? await withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    `SELECT k.state, k.failure_reason FROM application_packet k JOIN application a ON a.id = k.application_id
+      WHERE a.public_ref = $1 AND k.state <> 'abandoned' ORDER BY k.version DESC LIMIT 1`, [s.appRef])).rows[0]) : undefined;
+  if (packet?.state === "failed" && packet.failure_reason === "outcome_unknown") {
+    // "We couldn't confirm it went through", and the employer has now confirmed it (decision 13.8).
+    await resolveOutcome(pool, session, s.appRef, true, s.confirmationRef, randomUUID());
+  } else if (packet && ["approved_to_apply", "filling", "waiting_for_applicant", "ready_to_submit"].includes(packet.state) && cfg) {
+    await markSubmitted(pool, cfg, session, s.appRef, s.confirmationRef);
+  } else {
+    await setStage(pool, session, s.appRef, { stage: s.suggestedStage, outcomeTag: s.kind === "rejection" ? null : undefined, confirmationRef: s.confirmationRef ?? undefined });
+  }
   await withApplicant(pool, asApplicant(session), async (c) => {
     await c.query("UPDATE email_signal SET status = 'accepted', decided_at = now(), updated_at = now() WHERE id = $1", [id]);
     await recordAudit(c, "email.suggestion_accepted", { objectType: "email_signal", objectId: id, payload: { application_ref: s.appRef, kind: s.kind } });

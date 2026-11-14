@@ -9,8 +9,10 @@
     <ol class="steps">
       <li><button id="read">Read this form</button><div class="hint">TC Hunter suggests an answer for each question. You check them in TC Hunter.</div></li>
       <li><button id="fill">Fill the form</button><div class="hint">Types only the answers you approved. Questions that are yours stay empty and are outlined.</div></li>
-      <li><button id="done" class="secondary">I submitted it</button><div class="hint">After you press Submit on their site yourself.</div></li>
+      <li><button id="check" class="secondary">I've done my part: get it ready to send</button><div class="hint">After you answer your own questions. You approve sending in TC Hunter.</div></li>
+      <li><button id="send" disabled>Send it</button><div class="hint" id="send-hint">Only after you approve sending this exact form. TC Hunter presses Submit once.</div></li>
     </ol>
+    <p class="hint">Rather press Submit yourself? Do it, then choose <button id="done" class="link">I submitted it</button>.</p>
   </div>
   <p class="foot"><a href="options.html" target="_blank">Settings</a></p>
   <script src="popup.js"></script>

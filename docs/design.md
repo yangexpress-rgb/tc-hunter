@@ -4,7 +4,7 @@
 
 **App name:** TC Hunter. "TC" is for Tim Cook: not a founder, a person who was *hired* into a good job, rose to CEO, and became a billionaire as an employee. Tagline: *"Get hired. Rise like Tim Cook."* **Brand rule:** TC Hunter is an aspirational reference only. Never market the app as endorsed by, affiliated with, or using the likeness of Tim Cook or Apple. The name and the tagline are the brand; the story is internal positioning. (Enforced by a test: no Tim Cook or Apple reference may appear in user-facing text except the tagline.)
 
-**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0–4a merged. Phase 4b (Assisted Fill) built. Per Yong (2026-11-14), Phases 3, 4a and 4b run back to back without a review stop; Phase 5 still needs Yong's separate written go-ahead.
+**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0–4b merged. Phase 5 (Guided Automation) built on Yong's written go-ahead (2026-11-14); waiting for Yong's review. Per Yong (2026-11-14), Phases 3, 4a and 4b run back to back without a review stop; Phase 5 still needs Yong's separate written go-ahead.
 
 ### Decision log
 
@@ -23,6 +23,7 @@
 | 2026-11-14 | Phase 4a merged (PR #5). |
 | 2026-11-14 | §13.7: right-to-work and sponsorship questions are filled from the applicant's own approved, current saved answer (Yong: "Just answer based on profile data"); with none, they stay the applicant's step (§2.3, §5.5). |
 | 2026-11-14 | §13.8: an unclear outcome stops and asks, never retries; first the confirmation is taken from the employer's page or, with Gmail connected, from their "we received your application" email, confirmed with one tap (§5.5). |
+| 2026-11-14 | Phase 4b merged (PR #6). Phase 5 go-ahead from Yong ("Go ahead"). |
 | 2026-11-13 | §13.2: public job-board feeds only (Greenhouse, Lever, Ashby, SmartRecruiters, plus careers pages); LinkedIn and Indeed by pasted link; no licensed aggregator (folded into §5.2). |
 
 ---
@@ -257,7 +258,13 @@ Cover letters, "Why this company", referral-request and follow-up drafts use the
 Phase numbering follows §11: **4b = Assisted Fill**, **5 = Guided Automation**.
 
 - **Assisted Fill (Phase 4b):** the app prepares a complete Application Packet; a browser extension in the applicant's own browser fills the open form when they click Fill and never clicks Submit; a copy-paste panel is the fallback. The extension is paired to one applicant's account at a time.
-- **Guided Automation (Phase 5, needs Yong's separate written go-ahead):** proposed to run through the same extension in the applicant's own browser, so sign-in, CAPTCHA and MFA happen naturally on their screen. Decided at the Phase 5 gate.
+- **Guided Automation (Phase 5, built after Yong's go-ahead on 2026-11-14):** runs through the same extension in the applicant's own browser, so sign-in, CAPTCHA and MFA happen on their screen, by them. As built:
+  1. Reading the form records its hiring system (from the page address) and its shape (a fingerprint of every question, kind and choice).
+  2. TC Hunter may send only when: the form is on Greenhouse, Lever, Ashby or SmartRecruiters; it has that system's usual questions (the form map); and every question is either answered at confidence ≥ 0.85 (or typed by the applicant) or one of the applicant's own steps. Otherwise the review says why, in plain words, and it stays Assisted Fill. Workday, iCIMS, Taleo, LinkedIn, Indeed and forms embedded in an employer's own page are never sent; the database refuses an automated click on them too.
+  3. After filling, the applicant does their own steps on the employer's form, then chooses *I've done my part*. The extension re-reads the form: a different shape means Assisted Fill. It sends a hash of the filled form (every value, tick and file name; nothing else leaves the page).
+  4. *Approve sending this application* in TC Hunter needs a fresh "confirm it's you" and binds to that filled-form hash (database-enforced).
+  5. *Send it* in the extension: checks the form still matches and the Submit button is there, then TC Hunter spends the single-use key and the extension presses that system's Submit button once. A changed form is refused before anything is spent. The only retry is when the request never reached TC Hunter, before any click.
+  6. The extension reads the page for up to 30 seconds and TC Hunter's rules decide: the system's thank-you means sent (confirmation number exactly as shown, or none), with a receipt. Anything else, or a browser that goes quiet for 3 minutes, is *"Did it go through?"*: nothing is sent again, Gmail is checked if connected (one tap to accept), and the applicant answers *It went through* (optionally with a number) or *It didn't* (back to review; a new approval is needed for another attempt).
 - **Adapters:** Tier 1 Greenhouse, Lever, Ashby, SmartRecruiters. **Workday, iCIMS and Taleo are Assisted Fill only in v1.** LinkedIn Easy Apply and Indeed Apply are not automated. Each adapter: detect (ATS + employer tenant), form fingerprint, form map, uploads, applicant-step detectors, confirmation capture. If a live form differs from its fingerprint, or any field is below the confidence threshold (0.85, tuned in 4b), the adapter stops and falls back to Assisted Fill.
 
 **`application_packet` (the unit of approval):** application_id, version, tailored_resume_document_id (approved only, database-enforced), cover_letter_document_id, state, waiting_reason, failure_reason, packet_hash, approved_hash, approved_at, submit_approved_hash, submit_approved_at, submission_key, submission_key_used_at, submit_clicked_at, confirmation_ref, confirmation_screenshot_ref, submitted_at. **`packet_field`:** question_as_shown, answer_value_enc, source (`master_profile | answer_bank | tailored_doc | applicant_typed`), source_ref_id, confidence, requires_applicant_step, step_kind, fill_status. **`packet_state_event`**, **`submission_attempt`** (lease, outcome, screenshots, error detail in Layer 3 only), **`site_account`** (site_host, login_email_enc, vault_ref — no password or session column exists).
@@ -392,7 +399,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 | **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | **Built — F4 passing** |
 | **4a. Tracker & Reports** | Module F: pipeline, follow-ups, 5 reports, dashboard, weekly budget (P5), outcome tags (P8), weekly review (P9); then score calibration (P10); connected Gmail (§13.3) | F7 pass | **Built — F7 passing** |
 | **4b. Assisted Fill** | Application Packet + browser extension fill (Tier 1), application receipt (P11) | F5 (assisted) pass | **Built — F5 (assisted) passing** |
-| **5. Guided Automation** | Automation, Tier 1 adapters, pause / resume, confirmation capture | **Requires Yong's separate written go-ahead after 4b review.** F5 (full) on a sandbox flow, then one real application with Yong present | Not started |
+| **5. Guided Automation** | Automation, Tier 1 adapters, pause / resume, confirmation capture | Go-ahead given 2026-11-14. F5 (full) on a sandbox flow, then one real application with Yong present | **Built — F5 (full) passing on the sandbox; the real application with Yong present is still to do** |
 | **v1.1** | Interview prep pack (P12) | — | Roadmap |
 
 ---
@@ -555,3 +562,15 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Screens | application page (`#packet`), Settings › Your browser, receipt download | review with sources, approve, your turn, sent + receipt |
 | Fixes | `documents.ts` | approving a tailored resume now moves the application to Ready to apply (the 4a check used the wrong type) |
 | Tests | `packages/*/test`, `apps/extension/test` | F5 assisted through the app (review with sources, fill refused before approval, attestation never filled, confirmation verbatim, re-run leaves one of everything, email acknowledgement), the extension helper in Chromium on the demo form, plus an end-to-end browser run of pairing, review, approve, fill, submit and receipt |
+
+## Appendix — Phase 5 as built
+
+| Area | Where | Notes |
+|---|---|---|
+| Schema | `packages/db/migrations/010_guided.sql` | packet hiring system, form fingerprint and filled-form hash; approval must match the filled form; no automated click outside Tier 1 |
+| Rules | `packages/domain/src/packet/adapters.ts` | detection, form map, Submit button, thank-you signs per system; form fingerprint; when TC Hunter may send, with reasons |
+| Data | `packages/db/src/assist.ts` | ready to send, approve sending (fresh confirm), start (single-use key, attempt with a 3-minute lease), finish (sent / still waiting / unclear), lease expiry, did it go through; email acknowledgement settles an unclear outcome |
+| Extension | `apps/extension` 0.5 | `submit.js` (the only click, once), `background.js` (keeps watching after the click), popup steps 3 and 4; asks for access to the four systems' pages only when sending |
+| Screens | application page | why it can or can't be sent, Ready to send + approve (with inline confirm), Approved to send, Sending, Did it go through? |
+| Tests | `packages/db/test/f5-guided.test.ts`, `apps/extension/test` | F5 full: which forms can be sent, changed form falls back, no send before approval / without fresh confirm / for a different form, one click even when asked twice, thank-you captured verbatim, re-run leaves one of everything, unclear outcome blocks, email settles it, quiet browser, second attempt after a fresh approval, never-automated systems refused; the one-click helper in Chromium; plus an end-to-end browser run of both the sent and the unclear path |
+| Still to do | with Yong | one real application with Yong present (§11 gate) |

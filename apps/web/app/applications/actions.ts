@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, markSubmitted, dismissEmailSignal, resetCalibration, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, markSubmitted, resolveOutcome, dismissEmailSignal, resetCalibration, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -109,4 +109,21 @@ export async function submittedAction(form: FormData) {
   const ref = String(form.get("app") ?? "");
   const { pool, cfg } = app();
   await act(form, () => markSubmitted(pool, cfg, s, ref, str(form, "confirmation")), `/applications/${ref}#packet`, "submitted");
+}
+
+/** "Approve sending this application": fresh "confirm it's you", bound to the exact filled form. */
+export async function sendApproveAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const { pool, cfg } = app();
+  await act(form, () => approveSending(pool, cfg, s, ref, String(form.get("filled") ?? ""), String(form.get("rk") ?? "")), `/applications/${ref}#packet`, "send_approved");
+}
+
+/** The applicant's answer to "Did it go through?". */
+export async function resolveOutcomeAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const went = form.get("went") === "1";
+  await act(form, () => resolveOutcome(app().pool, s, ref, went, went ? str(form, "confirmation") : null, String(form.get("rk") ?? "")),
+    `/applications/${ref}#packet`, went ? "submitted" : "not_sent");
 }
