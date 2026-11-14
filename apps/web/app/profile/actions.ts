@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
-  removeEvidence, rescoreMatches, saveLinkedInLink, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
+  removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyFact, verifyRole, type FactTable,
 } from "@tc-hunter/db";
 import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
@@ -10,7 +10,8 @@ import { fieldsFromForm } from "@/lib/profile";
 import { app, log, requireSession } from "@/lib/server";
 
 /** Decision 13.6: Claude with contact details and names removed when configured; the built-in reader otherwise. */
-const resumeReader = (names: string[]) => (resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, names) : new RulesResumeParser());
+const resumeReader = (names: string[], instructions?: string | null) =>
+  (resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, names, instructions ?? null) : new RulesResumeParser());
 
 /** Only ever send people back to a profile page (never an outside address). */
 function backTo(form: FormData, fallback = "/profile"): string {
@@ -133,6 +134,12 @@ export async function importAction(form: FormData) {
     target = `/profile/import?e=${code.startsWith("TC_") ? code : "TC_RESUME_UNREADABLE"}`;
   }
   redirect(target);
+}
+
+/** Your own notes for Claude when it reads your resume. */
+export async function saveReaderNotesAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => saveReaderInstructions(app().pool, s, String(form.get("notes") ?? "")), "/profile/import#how-claude-reads");
 }
 
 /**

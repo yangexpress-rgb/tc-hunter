@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type Anthropic from "@anthropic-ai/sdk";
-import { ClaudeResumeParser, contactBlockEnd, readLinkedInProfile, SourceRefusedError, stripContactDetails, unplacedLines, type Fetcher } from "../src";
+import { ClaudeResumeParser, contactBlockEnd, READER_PROMPT, readerSystem, readLinkedInProfile, SourceRefusedError, stripContactDetails, unplacedLines, type Fetcher } from "../src";
 
 const TEXT = readFileSync(join(__dirname, "..", "..", "..", "fixtures", "f1", "sample-resume.txt"), "utf8");
 
@@ -59,6 +59,26 @@ describe("Claude reads the whole resume thoroughly", () => {
     expect(left).not.toContain("Certified Supply Chain Professional (CSCP) — APICS, 2022");
     expect(left).not.toContain("EDUCATION");
     expect(left).not.toContain("Mar 2021 – Present");
+  });
+});
+
+describe("the reader's instructions", () => {
+  it("cover every profile section, the completeness check and the copy-exactly rule", () => {
+    for (const s of ["experience:", "internships:", "projects:", "volunteer:", "activities:", "coursework:", "education:", "credentials:", "awards:", "skills:", "skip:"]) {
+      expect(READER_PROMPT).toContain(s);
+    }
+    expect(READER_PROMPT).toMatch(/Check your work before you answer/);
+    expect(READER_PROMPT).toMatch(/Copy text exactly as written/);
+  });
+
+  it("add the person's notes after the rules, and only when there are some", async () => {
+    expect(readerSystem("rest")).not.toContain("person_notes");
+    const sys = readerSystem("rest", "My certifications are under Training.");
+    expect(sys.indexOf("Rules you must not break")).toBeLessThan(sys.indexOf("My certifications are under Training."));
+    expect(readerSystem("rest", "x".repeat(5000)).length).toBeLessThan(READER_PROMPT.length + 3000);
+    const { client, calls } = fakeClaude(() => ({ stop_reason: "end_turn", parsed_output: { ...empty } }));
+    await new ClaudeResumeParser(client, [], "Treat my MBA project as a project.").parse(TEXT);
+    expect(calls.every((c) => c.system.includes("Treat my MBA project as a project."))).toBe(true);
   });
 });
 

@@ -29,3 +29,4 @@ export async function readResume(text: string, parser: ResumeParser = new RulesR
 }
 export * from "./digest";
 export * from "./linkedinLink";
+export * from "./readerPrompt";

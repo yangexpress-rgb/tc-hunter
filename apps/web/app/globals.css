@@ -326,3 +326,5 @@ details.more[open] { display: flex; flex-direction: column-reverse; }
 
 .file-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .file-row form { margin: 0; }
+
+.prompt-text { white-space: pre-wrap; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; max-height: 480px; overflow: auto; }
