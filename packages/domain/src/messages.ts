@@ -38,7 +38,7 @@ export const L1 = {
   "home.next_action.preferences": "Tell us what jobs you want",
   "home.next_action.improve": "Strengthen your profile",
   "home.next_action.done": "Your profile is in good shape",
-  "home.next_action.done_note": "Finding jobs for you arrives in the next update.",
+  "home.next_action.done_note": "We'll tell you here when new jobs match you.",
   "home.coach.title": "To make your profile stronger",
 
   // Profile (Module A)
@@ -92,6 +92,38 @@ export const L1 = {
   "settings.delete.type_email": "Type your email to confirm",
   "signin.passkey_cta": "Sign in with a passkey",
   "signin.passkey_failed": "That passkey didn't work here. Try again, or use your password.",
+  "home.next_action.sources": "Choose where to look for jobs",
+  "home.next_action.sources_note": "Follow a few companies' job pages and we'll check them every day.",
+  "home.next_action.matches": "{n} new jobs match you well",
+  "home.next_action.alerts": "A job you saved has changed",
+  "home.alerts.title": "Changes to jobs you saved",
+
+  // Jobs (Phase 2)
+  "jobs.title": "Jobs",
+  "jobs.scan_cta": "Look for jobs now",
+  "jobs.scanning": "Looking for jobs now. This page updates when it's done.",
+  "jobs.never_scanned": "We haven't looked for jobs yet.",
+  "jobs.no_sources": "Choose companies to follow, and we'll look for jobs there every day.",
+  "jobs.empty": "No new jobs match you right now. We'll keep looking.",
+  "jobs.save": "Save",
+  "jobs.pass": "Pass",
+  "jobs.not_a_fit": "Not a fit",
+  "jobs.undo": "Put back",
+  "jobs.gaps.title": "Skills to show or build",
+  "jobs.gaps.hint": "Missing from your profile, or listed without proof. We never add these to anything for you.",
+  "jobs.adjust.title": "How your choices change this list",
+  "jobs.adjust.none": "Nothing yet. When you pass on several similar jobs, we'll show them lower and tell you here.",
+  "jobs.closed": "This job has closed.",
+  "jobs.sources.title": "Where we look",
+  "jobs.sources.intro": "Paste the address of a company's jobs page. We read the jobs it lists, politely and at a gentle pace, and never sign in anywhere.",
+  "jobs.sources.unavailable": "This source isn't available right now.",
+  "jobs.sources.trouble": "We had trouble reaching this last time. We'll try again.",
+  "jobs.sources.ok": "Working",
+  "jobs.paste.title": "Add a job by its link",
+  "jobs.paste.intro": "Found a job somewhere else? Paste its address and we'll read and score it for you.",
+  "jobs.paste.no_fetch": "We don't open LinkedIn, Indeed and similar sites automatically. For those, paste the job's title, employer and text below too.",
+  "jobs.paste.reading": "Reading that job. This page updates when it's done.",
+
   "home.tile.new_matches": "New matches today",
   "home.tile.in_progress": "Applications in progress",
   "home.tile.follow_ups": "Follow-ups due",
@@ -164,6 +196,7 @@ export const L1 = {
   "error.fact_locked": "You've checked this, so only you can change it.",
   "error.story_fact": "Link this story to something in your own experience.",
   "error.fields": "Some of that doesn't fit. Check the dates and required fields and try again.",
+  "error.source": "We can't read jobs from that address. Use a company's careers or jobs page address that starts with https.",
   "error.erase_confirm": "That email doesn't match your account, so nothing was deleted.",
 } as const;
 
@@ -209,6 +242,7 @@ export const ERROR_MESSAGES: Record<string, L1Key> = {
   TC_ERASE_CONFIRM_MISMATCH: "error.erase_confirm",
   TC_BAD_INPUT: "error.fields",
   TC_STEP_UP_FAILED: "settings.confirm.failed",
+  TC_SOURCE_NOT_SUPPORTED: "error.source",
 };
 
 /** Layer 1 sentence for any error. Technical detail belongs in Layer 3 only. */

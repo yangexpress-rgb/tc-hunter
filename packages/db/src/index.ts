@@ -10,3 +10,5 @@ export { migrate } from "./migrate";
 export * from "./profile";
 export * from "./privacy";
 export * from "./passkeys";
+export * from "./jobs";
+export * from "./matches";

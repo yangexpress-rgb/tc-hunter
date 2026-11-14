@@ -1,0 +1,54 @@
+{
+  "about": "Fixture F2 (brief 12): a profile that covers 8 of the posting's 9 must-have skills. Requirements are pinned here, so a change in posting parsing cannot move the expected numbers. Expected component points are computed by hand below; the test allows ±2 on each.",
+  "now": "2026-11-13T12:00:00Z",
+  "profile": {
+    "skills": [
+      { "id": "s-sql", "name": "SQL", "aliases": [], "evidenceIds": ["b-1"] },
+      { "id": "s-py", "name": "Python", "aliases": [], "evidenceIds": ["b-2"] },
+      { "id": "s-xl", "name": "Excel", "aliases": ["spreadsheets"], "evidenceIds": ["b-1"] },
+      { "id": "s-tab", "name": "Tableau", "aliases": [], "evidenceIds": ["b-3"] },
+      { "id": "s-fc", "name": "Forecasting", "aliases": [], "evidenceIds": ["b-2"] },
+      { "id": "s-sm", "name": "Stakeholder management", "aliases": [], "evidenceIds": ["e-1"] },
+      { "id": "s-sc", "name": "Supply chain", "aliases": [], "evidenceIds": ["e-1"] },
+      { "id": "s-pm", "name": "Project management", "aliases": [], "evidenceIds": ["b-3"] },
+      { "id": "s-snow", "name": "Snowflake", "aliases": [], "evidenceIds": [] }
+    ],
+    "unprovenSkills": ["Snowflake"],
+    "experience": [
+      { "id": "e-1", "title": "Operations Analyst", "employmentType": "full_time", "start": "2021-01-01", "end": "2025-01-01",
+        "text": "Built SQL and Excel forecasting models for the supply chain team. Shipped Tableau dashboards used by leadership." },
+      { "id": "e-2", "title": "Data Intern", "employmentType": "internship", "start": "2020-01-01", "end": "2021-01-01",
+        "text": "Cleaned data in Python." }
+    ]
+  },
+  "prefs": {
+    "targetTitles": ["Operations Analyst"], "locations": [], "workplaceTypes": ["remote"],
+    "salaryFloor": { "amount": 90000, "currency": "USD", "period": "year" },
+    "industriesInclude": [], "industriesExclude": [], "employersExclude": [], "mustHaveKeywords": [], "dealBreakers": [],
+    "longTermTargetRole": "Chief Operating Officer", "targetFunction": "operations"
+  },
+  "posting": {
+    "employer": "Contoso", "title": "Senior Operations Analyst", "locationRaw": "Remote (US)", "workplaceType": "remote",
+    "descriptionFile": "posting.txt",
+    "requirements": {
+      "must_have": ["SQL", "Python", "Excel", "Tableau", "Forecasting", "Stakeholder management", "Project management", "Supply chain", "Snowflake"],
+      "nice_to_have": ["Power BI", "Six Sigma"], "years": 5, "education": null, "authorisation": null, "confidence": "high"
+    },
+    "salary": { "min": 100000, "max": 120000, "currency": "USD", "period": "year" },
+    "postedAt": "2026-11-11T12:00:00Z", "status": "active"
+  },
+  "expected": {
+    "components": {
+      "skills": { "points": 31.1, "why": "8 of 9 must-haves covered with proof (Snowflake has no proof): 35 × 8/9 = 31.11" },
+      "experience": { "points": 22.0, "why": "years: 4.0 full-time × 1 + 1.0 internship × 0.5 = 4.5 of 5 asked → 10 × 0.9 = 9.0; level: Senior posting, current level Mid (one step up) → 8 × 0.75 = 6.0; title: 'operations analyst' fully matches the target title → 7 × 1 = 7.0; total 22.0" },
+      "preferences": { "points": 20.0, "why": "remote and remote wanted → 10; published pay up to 120,000 ≥ 90,000 floor → 5; no industry preferences → 5" },
+      "keywords": { "points": 10.0, "why": "at least 5 of the applicant's skills and terms appear in the posting → 10 × 1" },
+      "recency": { "points": 10.0, "why": "posted 2 days ago → 7 × 1; still open and not passed on → 3" }
+    },
+    "score": 93,
+    "gapSkills": ["Snowflake"],
+    "reasonLine": "Strong fit — you cover 8 of 9 required skills.",
+    "ladderTag": "step_toward",
+    "ladderLabel": "A step toward Chief Operating Officer"
+  }
+}

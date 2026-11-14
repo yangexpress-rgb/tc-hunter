@@ -24,6 +24,11 @@ export const AUDIT_ALLOWED_KEYS = {
   "passkey.removed": [],
   "data.exported": ["format"],
   "data.deleted": [],
+  "source.followed": ["kind"],
+  "source.unfollowed": ["kind"],
+  "scan.finished": ["sources", "checked", "new_jobs", "updated", "closed"],
+  "match.feedback": ["job_ref", "action", "reason"],
+  "adjustment.changed": ["kind", "active"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AuditAction = keyof typeof AUDIT_ALLOWED_KEYS;

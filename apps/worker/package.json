@@ -1,0 +1,15 @@
+{
+  "name": "@tc-hunter/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tc-hunter/db": "*",
+    "@tc-hunter/domain": "*",
+    "tsx": "^4.19.2"
+  }
+}

@@ -81,6 +81,38 @@ services:
       - ./tailscale-serve.json:/config/serve.json:ro
     networks: [internal, egress]
 
+  # Scans job boards and careers pages, reads pasted links (design 5.2). No ports, no internet route
+  # of its own: it reaches public sites only through egress-worker.
+  worker:
+    build: { context: .., target: worker }
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://tc_app:${DB_APP_PASSWORD}@db:5432/tc_hunter
+      TC_MASTER_KEY: ${TC_MASTER_KEY:?set TC_MASTER_KEY in deploy/.env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TC_POSTING_READER: ${TC_POSTING_READER:-}
+      HTTPS_PROXY: http://egress-worker:3128
+      NO_PROXY: db,localhost
+      NODE_USE_ENV_PROXY: "1"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    read_only: true
+    tmpfs: [/tmp]
+    networks: [internal]
+
+  # The worker's way out: HTTPS to public hosts only. Private and home-network addresses are refused.
+  egress-worker:
+    image: node:22-bookworm-slim
+    restart: unless-stopped
+    command: ["node", "/proxy/proxy.mjs"]
+    environment:
+      ALLOW_HOSTS: "*"
+    volumes:
+      - ./egress-proxy:/proxy:ro
+    read_only: true
+    user: node
+    networks: [internal, egress]
+
   # The only way out for the web app: HTTPS tunnels to an allow-list of hosts, nothing else.
   egress-proxy:
     image: node:22-bookworm-slim
@@ -115,7 +147,7 @@ services:
 networks:
   internal:
     internal: true   # no route to the internet; db and web live only here
-  egress: {}         # tailscale, backup and egress-proxy reach out (tailnet, off-site copy, Claude API)
+  egress: {}         # tailscale, backup and the two egress gates reach out (tailnet, off-site copy, Claude API, job sites)
 
 volumes:
   db-data:

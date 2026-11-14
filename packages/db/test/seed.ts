@@ -99,6 +99,12 @@ export async function seedEverything(
     ids.audit_event = (await c.query("SELECT id FROM audit_event ORDER BY seq DESC LIMIT 1")).rows[0].id;
     await one("import_batch", "INSERT INTO import_batch (applicant_id, kind, parser) VALUES ($1, 'resume', 'rules-1') RETURNING id", [me]);
     await c.query("INSERT INTO request_key (applicant_id, key, action) VALUES ($1, 'seed-key', 'seed')", [me]);
+    const srcId = (await c.query("SELECT job_source_id FROM job_posting_source WHERE job_posting_id = $1", [jobId])).rows[0].job_source_id;
+    await one("applicant_job_source", "INSERT INTO applicant_job_source (applicant_id, job_source_id) VALUES ($1, $2) RETURNING id", [me, srcId]);
+    const ev = (await c.query("INSERT INTO job_posting_event (job_posting_id, kind) VALUES ($1, 'description_changed') RETURNING id", [jobId])).rows[0].id;
+    await one("posting_alert", "INSERT INTO posting_alert (applicant_id, match_id, event_id, kind, message) VALUES ($1, $2, $3, 'description_changed', 'Changed') RETURNING id",
+      [me, ids.match, ev]);
+    await one("work_item", "INSERT INTO work_item (applicant_id, kind, status) VALUES ($1, 'scan', 'done') RETURNING id", [me]);
     return ids;
   });
 }

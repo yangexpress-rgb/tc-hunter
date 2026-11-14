@@ -4,7 +4,7 @@
 
 **App name:** TC Hunter. "TC" is for Tim Cook: not a founder, a person who was *hired* into a good job, rose to CEO, and became a billionaire as an employee. Tagline: *"Get hired. Rise like Tim Cook."* **Brand rule:** TC Hunter is an aspirational reference only. Never market the app as endorsed by, affiliated with, or using the likeness of Tim Cook or Apple. The name and the tagline are the brand; the story is internal positioning. (Enforced by a test: no Tim Cook or Apple reference may appear in user-facing text except the tagline.)
 
-**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phase 0 merged. Phase 1 built, awaiting Yong's review.
+**From:** Yong (design & review) · **Builder:** Claude · **Status:** Phases 0 and 1 merged. Phase 2 built, awaiting Yong's review.
 
 ### Decision log
 
@@ -16,6 +16,8 @@
 | 2026-11-13 | §15 proposals: P1–P5 and P7–P11 accepted; P6 accepted with three conditions (fixture F8); P12 accepted for the v1.1 roadmap only. P2 and P6 built in Phase 0. §15 resolved. Brief v1.2 approved. |
 | 2026-11-13 | Phase 0 approved and merged. |
 | 2026-11-13 | §13.6: resume import is read by Claude (Anthropic API) with contact details removed before sending; the built-in rule reader is the fallback (folded into §2.5, §5.1). |
+| 2026-11-13 | Phase 1 approved and merged. |
+| 2026-11-13 | §13.2: public job-board feeds only (Greenhouse, Lever, Ashby, SmartRecruiters, plus careers pages); LinkedIn and Indeed by pasted link; no licensed aggregator (folded into §5.2). |
 
 ---
 
@@ -177,6 +179,15 @@ Sources in preference order: (1) official public job-board feeds (Greenhouse, Le
 
 **Deduplication (MUST):** same employer + normalised title + location + description text similarity ≥ 0.9 = one posting with all source links.
 
+**As built (Phase 2).**
+- *Following a source:* the applicant pastes a jobs-page address on *Where we look*. The address is recognised as a Greenhouse, Lever, Ashby or SmartRecruiters board (read from that board's public feed) or as a careers page (read from the schema.org `JobPosting` data the page publishes, following its job links). The source row is shared (`job_source.kind`, `source_key`, unique together); who follows it is per applicant (`applicant_job_source`). LinkedIn, Indeed, Glassdoor, ZipRecruiter and similar hosts are refused as sources and are never fetched.
+- *Pasted link:* any job address can be added on *Add a job by its link*. Feed and careers-page links are read; for no-fetch hosts the applicant pastes the title, employer and text, and only that is used.
+- *Polite fetching:* every request is identified (`TCHunter/1.0`), HTTPS only, size- and time-capped, at most one request every 6 s per host. Careers pages are checked against robots.txt first. 401 / 403 / a robots refusal mark the source *blocked* (Layer 1: *"This source isn't available right now"*) and it is retried after 7 days; timeouts and 429 mark it *degraded*. There are no workarounds: no proxy rotation, disguised browser or sign-in.
+- *Reading requirements:* the rule reader splits required / nice-to-have from headings and lists, plus years, education and work authorisation. With an Anthropic key the Claude reader does the same from the job text only (nothing about the applicant is sent), and its output is grounded: a requirement that isn't in the text is dropped. Readers are versioned (`parser_version`); salary is copied only when published, never inferred.
+- *Dedupe as built:* `dedupe_key` (employer + normalised title + location) narrows candidates; description similarity is word 3-shingle Jaccard ≥ 0.9. Each source link keeps its own content fingerprint, so two copies of one job that differ slightly don't flip the posting back and forth.
+- *Closing:* a job missing from a complete read of its source is marked inactive there; when no active source is left the posting closes (`closed_at`, kept, never deleted). A closed job that comes back is a new posting with `reposted_from`.
+- *Posting watch as built:* changes are written to `job_posting_event` (closed, requirements_changed, description_changed, reposted; append-only). An applicant gets a `posting_alert` when the match is saved or the application stage is interested / tailoring / ready-to-apply, and any unsubmitted packet goes back to *ready for review* (not for reposts).
+
 **Posting watch (P7, Phase 2):** for saved / tailoring / ready-to-apply jobs, each scan compares the posting with its last snapshot. Layer 1: *"A job you saved has closed"*, *"Requirements changed for [Job] — review before applying"*, *"[Job] was reposted"*. A changed posting returns any unsubmitted packet to review (the Phase 0 approval-voiding guard already supports this).
 
 ### 5.3 Module C — Matching Engine
@@ -196,6 +207,16 @@ Score 0–100, deterministic first; AI may assist parsing, never the score.
 - **Career ladder — the TC lens (P3, Phase 2):** if the applicant sets a long-term target role (e.g. COO), each match gets `ladder_tag` *step_toward*, *same_level* or *side_step* (Layer 1: *"A step toward COO"*), from the posting's title / seniority / function and the applicant's level and target only (nothing inferred about the employer). The tag is shown and filterable; it is **not** a score component unless the applicant turns on a visible preference adjustment. The Gap report shows the skills between the applicant and the next rung.
 - **Feedback** (`match_feedback`: save / dismiss / not a fit + reason) becomes a visible, switch-off-able `preference_adjustment`, never a silent change to the maths.
 - **Score calibration, visible (P10, after 4a):** after 20+ outcomes, the Fit report may suggest weight changes (*"required skills predicted interviews best for you"*) that the applicant accepts or ignores. Accepted changes are recorded with a new rules_version.
+
+**As built (Phase 2, rules `match-1`).**
+- Only *checked* skills with proof count toward required skills; a skill listed without proof is named as a gap (*"You list Tableau but it has no proof yet"*). Gaps are shown, never added to anything.
+- Experience = years (10) + level (8) + title relevance (7). Years are weighted by kind and the weights are printed in Layer 2: full-time and contract 1×, part-time and internship 0.5×, project and volunteering 0.25×, coursework 0.1×.
+- Preferences = place (10) + pay (5, only if the job publishes pay) + industry (5). Keywords = overlap of the applicant's own terms with the posting, with must-have keywords when set. Recency = 7 for freshness + 3 for still open and not passed on.
+- Filters (the job is kept but hidden, with the reason): place impossible, pay below the floor, excluded industry or employer, a deal-breaker word, closed.
+- Reason line bands: Strong fit ≥ 80, Good fit ≥ 60, Partial fit ≥ 40, otherwise Weak fit.
+- Only jobs whose title relates to what the applicant wants (or has done) are matched; the rest stay in the shared catalogue.
+- Feedback adjustments proposed from feedback: two passes on similar titles (−10), two saves (+5), *not a fit: employer* (−20), *not a fit: location* (−15). Each shows as a sentence (*"Showing fewer Manager roles"*) under *How your choices change this list* with an on / off switch; the points it moved are printed in that job's breakdown.
+- Rescoring happens after each scan, after a profile or preference change, and when an adjustment is switched; it never fetches anything.
 
 `match`: applicant_id, job_posting_id (unique together), score, components (raw + weighted), matched_skills (skill + evidence ids), gap_skills[], filtered, filter_reasons, reason_line, ladder_tag (P3), **status `new | saved | dismissed | not_a_fit`**, rules_version, parser_version, computed_at. "Tailored" and "applied" are derived from documents and applications, not stored twice.
 
@@ -270,7 +291,7 @@ Allowed transitions are a table in the database and a function in code, tested t
 
 - **Monorepo (TypeScript, npm workspaces):** `apps/web` (Next.js app router; server actions are the API layer for this household app), `packages/domain` (pure rules: state machines, fingerprints, encryption, vault interface, redaction, audit allow-list, Layer 1 catalogue), `packages/db` (SQL migrations, data access, sign-in, guards).
 - **Database access:** plain SQL migrations + `pg` instead of Prisma. Reason: Phase 0's guarantees (row-level security, triggers, partial unique indexes, composite foreign keys) are database features Prisma does not model, and the tests run against them directly. A typed query layer can be added later without changing the schema.
-- **Background jobs:** proposed `pg-boss` (a queue inside Postgres) instead of Redis + BullMQ, so the home server runs one fewer service. Added in Phase 2 with the first scheduled scan; not built in Phase 0.
+- **Background jobs (Phase 2):** a small queue inside Postgres (`work_item`) instead of Redis or pg-boss: the household load is tiny and plain SQL keeps it under row-level security. `claim_work()` takes the next item with `SKIP LOCKED`, reclaims items left running too long, and gives up after 3 attempts; one queued or running scan per applicant; `enqueue_due_scans()` queues scans by each applicant's schedule; `prune_work()` tidies finished items. `apps/worker` runs the loop and works each item as actor *system* inside that applicant's context, so it can only see that applicant's rows.
 - **LLM use:** parsing, tailoring drafts, cover letters, question → Answer Bank matching. All output that touches a document or form is draft until applicant-approved. Provider behind an abstraction; prompt + model version recorded on each generated document.
 - **Browser automation:** see §5.5 (extension in the applicant's own browser).
 - **Email (optional):** deferred to v1.1 (§13.3 recommendation); schema has room.
@@ -283,6 +304,8 @@ The whole app runs as one Docker Compose stack (`deploy/compose.yaml`) on a home
 1. **Nightly encrypted backups copied off the home server.** The `backup` service runs nightly (default 03:15 UTC): database dump + vault volume → one bundle → encrypted with `age` to a public key whose private key is kept **off** the server (Yong's password manager) → copied to an off-site rclone remote → old copies pruned (7 days local, 60 remote) → `last-success` marker written. `restore.sh` does a full restore; a restore drill is part of setup (docs/deploy.md). **Fixture F8** runs the real backup and restore scripts in the test suite: the backup is age-encrypted, lands in a separate off-site folder, cannot be opened with another key, and restores into a clean database with both applicants' data identical, both able to sign in, isolation intact and audit chains verified; it also checks no Compose service publishes a port.
 2. **Leo's remote access via private network only, no public ports.** No service publishes a port. The `tailscale` service serves the app over HTTPS inside the household tailnet only (Funnel off); nothing is opened on the router. Leo joins the tailnet (or gets the device shared) and signs in with his own TC Hunter account.
 3. **Portable to a VPS.** Named volumes only, no host paths or host networking, all settings in one `deploy/.env`. Moving = restore the latest backup on the new host with the same keys.
+
+Phase 2 adds `worker` (internal network only) and its own way out, `egress-worker`: HTTPS tunnels to public hosts on port 443 only, refusing IP literals, local names (.local, .internal, .lan, .home.arpa and similar) and any name that resolves to a private, loopback, link-local or CGNAT address, so the worker can never reach the home network. The web app keeps its own gate (`egress-proxy`, `api.anthropic.com` only). F8 checks both.
 
 Additional hardening: `db` and `web` sit on an internal network with no internet route; `web` runs as non-root with a read-only filesystem; the app connects as `tc_app`, which cannot bypass row-level security.
 
@@ -327,8 +350,8 @@ The same story must work for an early-career applicant whose profile is mostly p
 | Phase | Scope | Gate | Status |
 |---|---|---|---|
 | **0. Foundations** | Repo, sign-in, household accounts (Yong + Leo), full schema, per-applicant vault pattern, audit log, layered UI shell, state machines + database guards, early-career experience types (P2), household server stack with encrypted off-site backups and private access (P6), F4/F5 fixtures authored | Schema + fixtures reviewed; F6b, F8 pass | **Merged — F6, F6b, F8 passing** |
-| **1. Applicant Vault** | Module A incl. import → draft → verify, Answer Bank, Preferences, evidence coach (P1), story bank (P4), passkeys, export / delete-my-data | F1, F6 pass | **Built — F1, F6 passing; awaiting review** |
-| **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | Not started |
+| **1. Applicant Vault** | Module A incl. import → draft → verify, Answer Bank, Preferences, evidence coach (P1), story bank (P4), passkeys, export / delete-my-data | F1, F6 pass | **Merged — F1, F6 passing** |
+| **2. Scan & Match** | Module B (Tier 1 feeds + pasted link + 1 careers page) + Module C with reasons + feedback, TC lens (P3), posting watch (P7), background queue | F2, F3 pass | **Built — F2, F3 passing; awaiting review** |
 | **3. Tailor & Documents** | Module D: tailored resume with diff / gaps / blocked list, cover letter, PDF / DOCX export | F4 pass; truthfulness tests green | Not started |
 | **4a. Tracker & Reports** | Module F: pipeline, follow-ups, 5 reports, dashboard, weekly budget (P5), outcome tags (P8), weekly review (P9); then score calibration (P10) | F7 pass | Not started |
 | **4b. Assisted Fill** | Application Packet + browser extension fill (Tier 1), application receipt (P11) | F5 (assisted) pass | Not started |
@@ -340,8 +363,8 @@ The same story must work for an early-career applicant whose profile is mostly p
 ## 12. Acceptance fixtures
 
 - **F1 — Import honesty** (Phase 1). *Passing* (`packages/db/test/f1-import.test.ts`): the sample resume in `fixtures/f1/` (text, PDF and Word) imports with every row draft / unverified, parse confidence on every row, no level above what the resume states (Python "advanced" → Strong, Spanish "conversational" → Working, others unset); an adversarial reader that invents a job, a bullet, a number and a higher level is cut back to the file's own words; reader failure and refusal fall back to the rule reader; contact details never reach the reader; LinkedIn download imports the same way.
-- **F2 — Match explainability** (Phase 2). Parsed requirements are pinned in the fixture so AI parsing variance cannot break the ±2 tolerance.
-- **F3 — Deduplication** (Phase 2).
+- **F2 — Match explainability** (Phase 2). *Passing* (`packages/domain/test/jobs.test.ts`, `fixtures/f2/`). Parsed requirements are pinned in the fixture so AI parsing variance cannot break the ±2 tolerance. Expected and met: score 93 (skills 31.1, experience 22, preferences 20, keywords 10, recency 10), gap Snowflake, *"Strong fit — you cover 8 of 9 required skills."*, *"A step toward Chief Operating Officer"*.
+- **F3 — Deduplication** (Phase 2). *Passing* (`packages/db/test/f3-scan.test.ts`, `fixtures/f3/`): the same job from a Greenhouse feed and a careers page is one posting with two source links; scanning again adds nothing; the same suite covers matching, feedback adjustments, posting watch (alerts, packet back to review, reposts), blocked sources, pasted links and isolation of the new tables.
 - **F4 — Tailoring truthfulness** (Phase 3). *Authored in Phase 0:* `fixtures/f4/` (profile, posting with gap skill, adversarial model output with expected block reasons); test placeholders in `packages/db/test/pending-fixtures.test.ts`.
 - **F5 — Application flow** (4b assisted, 5 full). *Authored in Phase 0:* `fixtures/f5/` (demo form with attestation and work-authorisation steps, confirmation id). *Phase 0 foundation:* idempotency guards tested (one application per job, single-use submit key, unknown-outcome block, double-click safety).
 - **F6 — Isolation, both directions.** *Passing in Phase 0* for every applicant-owned table (the test reads the table list from the live schema, so a new table cannot skip it).
@@ -354,7 +377,7 @@ The same story must work for an early-career applicant whose profile is mostly p
 ## 13. Decisions
 
 1. **Single tool vs product — DECIDED:** personal household tool, two fully separate applicants (Yong and Leo). Pricing / accounts / support for others are out of scope.
-2. **Sources beyond Tier 1 ATS — open (before Phase 2).** Recommendation: LinkedIn and Indeed as pasted-link only; no licensed aggregator until the Source report shows a need.
+2. **Sources beyond Tier 1 ATS — DECIDED (Yong, 2026-11-13):** public job-board feeds and careers pages only; LinkedIn and Indeed as pasted-link only; no licensed aggregator unless the Source report later shows a need.
 3. **Connected email — open (before Phase 4a).** Recommendation: defer to v1.1.
 4. **Future auto-apply mode — open, not needed for v1.** Recommendation: park.
 5. **Name — DECIDED:** TC Hunter.
@@ -444,3 +467,17 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Screens | `apps/web/app/profile/*`, `apps/web/app/settings` | My profile (about you, experience, education, skills, certifications, stories, saved answers, what you want, bring in a resume, check imported rows); Settings (passkeys, confirm it's you, download, delete); passkey sign-in; Home next step from the coach |
 | Household stack | `deploy/` | new settings `TC_PUBLIC_ORIGIN`, `ANTHROPIC_API_KEY`, `TC_RESUME_READER`; web still has no internet route: a small allow-list gate (`deploy/egress-proxy`, HTTPS to `api.anthropic.com` only) is its one way out, checked by F8 |
 | Tests | `packages/*/test` | 242 passing (F1, F6 incl. `import_batch`, vault, passkeys with a software authenticator, export canary, erase), plus an end-to-end browser run of the whole flow |
+
+## Appendix — Phase 2 as built
+
+| Area | Where | Notes |
+|---|---|---|
+| Schema | `packages/db/migrations/005_scan_match.sql` | source kinds and health, posting close / repost, per-source fingerprints, `job_posting_event`, `applicant_job_source`, `posting_alert`, `work_item` + queue functions |
+| Reading jobs | `packages/domain/src/jobs/` | address detection, polite fetcher with robots.txt, four feed readers, careers-page reader, requirements (rules + Claude), normalising and dedupe, skills lexicon |
+| Matching | `packages/domain/src/match/` | score with reasons, filters, career-step tag, feedback adjustments |
+| Scan and watch | `packages/db/src/jobs.ts` | follow / unfollow, scan, pasted link, ingest + dedupe, close, alerts, queue runner |
+| Matches | `packages/db/src/matches.ts` | list / detail, feedback, adjustments, alerts, home summary |
+| Worker | `apps/worker` | queue loop, schedule tick every 15 min |
+| Screens | `apps/web/app/jobs/*`, home | Jobs (New / Saved / Passed, sort and filter, reasons, career step, save / pass / not a fit), job detail (score working-out, matched skills with proof, gaps, requirements, full text, what changed), Where we look, Add a job by its link; Home next step, new-matches and skill-gap tiles, job alerts; Jobs in the top bar |
+| Household stack | `deploy/` | `worker` + `egress-worker` gate; new setting `TC_POSTING_READER` |
+| Tests | `packages/*/test` | 299 passing (F2, F3, worker gate in F8, isolation of new tables), plus an end-to-end browser run: follow two sources, scan, list, detail, save, pasted LinkedIn job |
