@@ -1,4 +1,4 @@
-import { coachCounts, jobsSummary, listAlerts } from "@tc-hunter/db";
+import { coachCounts, jobsSummary, listAlerts, listDocuments } from "@tc-hunter/db";
 import { evidenceCoach, t } from "@tc-hunter/domain";
 import { Details, NextAction } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -13,7 +13,8 @@ const TILES = ["home.tile.new_matches", "home.tile.in_progress", "home.tile.foll
 export default async function Home() {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [counts, jobs, alerts] = await Promise.all([coachCounts(pool, session), jobsSummary(pool, session), listAlerts(pool, session)]);
+  const [counts, jobs, alerts, docs] = await Promise.all([coachCounts(pool, session), jobsSummary(pool, session), listAlerts(pool, session), listDocuments(pool, session)]);
+  const draftDoc = docs.find((d) => d.status === "draft");
   const nudges = evidenceCoach(counts);
   const next = counts.experienceRows === 0
     ? { title: t("home.next_action.profile"), note: t("home.next_action.profile_soon"), href: "/profile/import" }
@@ -21,6 +22,7 @@ export default async function Home() {
     : !counts.hasPreferences ? { title: t("home.next_action.preferences"), href: "/profile/preferences" }
     : jobs.following === 0 ? { title: t("home.next_action.sources"), note: t("home.next_action.sources_note"), href: "/jobs/sources" }
     : alerts.length ? { title: t("home.next_action.alerts"), note: alerts[0]!.message, href: "/jobs" }
+    : draftDoc ? { title: `Look over your ${draftDoc.type === "cover_letter" ? "cover letter" : "resume"} for ${draftDoc.title}`, note: "Approve it when it reads right.", href: `/documents/${draftDoc.public_ref}` }
     : jobs.newToday > 0 ? { title: t("home.next_action.matches", { n: String(jobs.newToday) }), href: "/jobs" }
     : nudges.length ? { title: t("home.next_action.improve"), note: nudges[0]!.text, href: nudges[0]!.href }
     : { title: t("home.next_action.done"), note: t("home.next_action.done_note"), href: "/profile" };
@@ -57,7 +59,7 @@ export default async function Home() {
         <p>Nothing is ever sent to an employer until you approve that specific application.</p>
       </Details>
       <Advanced>
-        <AdvancedRow label="Build" value="Phase 2 (scan and match)" />
+        <AdvancedRow label="Build" value="Phase 3 (tailor and documents)" />
         <AdvancedRow label="Session idle timeout" value={`${cfg.sessionIdleMinutes} min`} />
         <AdvancedRow label="Two-step sign-in" value={session.mfaEnabled ? "on" : "off"} />
       </Advanced>

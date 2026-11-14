@@ -11,6 +11,7 @@ export function TopBar({ signedIn }: { signedIn: boolean }) {
         <nav>
           <a href="/">Home</a>
           <a href="/jobs">{t("jobs.title")}</a>
+          <a href="/documents">Documents</a>
           <a href="/profile">{t("profile.title")}</a>
           <a href="/settings">{t("settings.title")}</a>
         </nav>

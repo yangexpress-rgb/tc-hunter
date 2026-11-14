@@ -29,6 +29,7 @@ This is the household setup (design §7.1). It runs the same way on a small VPS.
 8. **Resume reading (optional, decision 13.6):** put an Anthropic API key in `ANTHROPIC_API_KEY` and run step 4 again. Uploaded resumes are then read by Claude after names, email, phone and street address are removed; without a key (or with `TC_RESUME_READER=rules`) the built-in reader is used. Either way, every row arrives as a draft for the applicant to check.
 9. **Finding jobs (Phase 2):** nothing to set up. The `worker` service looks for jobs on each person's schedule (daily by default) and when they press *Look for jobs now*. Its only way out is the `egress-worker` gate: HTTPS to public addresses only, never to anything on your home network. It reads public job-board feeds and careers pages politely (identified, one request every 6 seconds per site, robots.txt respected) and never opens LinkedIn or Indeed. With an Anthropic key set (step 8), the requirements in each job are read by Claude from the job text alone; `TC_POSTING_READER=rules` keeps it to the built-in reader.
    Check it: `docker compose -f deploy/compose.yaml logs --tail 50 worker`
+10. **Tailored resumes (Phase 3):** nothing to set up. Drafts are made by the `worker`. With an Anthropic key (step 8) Claude may reword lines for each job; every line is checked against your profile and anything new is blocked. `TC_TAILOR_WRITER=rules` keeps drafts to your own words. Downloads are rebuilt from the approved version each time, so there is no file storage to back up.
 
 ## Backups
 

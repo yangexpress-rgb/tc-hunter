@@ -6,6 +6,7 @@ import {
   type Adjustment, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
+import { runTailor, type TailorDeps } from "./documents";
 import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
@@ -262,7 +263,7 @@ export async function watchAlerts(c: pg.PoolClient, eventIds: string[]): Promise
 // The worker's two jobs: a scan, and reading one pasted link
 // ---------------------------------------------------------------------------
 
-export interface WorkDeps { fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number }
+export interface WorkDeps { fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps }
 
 const PLAIN_REFUSAL: Record<string, string> = {
   robots: "This site asks automated readers not to look at its job pages, so we won't.",
@@ -365,7 +366,7 @@ export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload:
   });
 }
 
-export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link"; payload: Record<string, any>; attempts: number }
+export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link" | "tailor"; payload: Record<string, any>; attempts: number }
 
 /** Takes and runs one piece of queued work. Returns false when there was nothing to do. */
 export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolean> {
@@ -373,7 +374,9 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<boolea
   if (!item) return false;
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
-    const result = item.kind === "scan" ? await runScan(pool, ctx, deps) : await runIngestLink(pool, ctx, item.payload as never, deps);
+    const result = item.kind === "scan" ? await runScan(pool, ctx, deps)
+      : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
+      : await runIngestLink(pool, ctx, item.payload as never, deps);
     await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
   } catch (e) {
     await pool.query("SELECT finish_work($1, false, $2, NULL)", [item.id, String((e as Error).message ?? e).slice(0, 500)]);

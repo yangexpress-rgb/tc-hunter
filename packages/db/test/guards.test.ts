@@ -77,10 +77,17 @@ describe("truthfulness foundations (section 2.2)", () => {
   });
 
   it("every document claim must cite at least one profile fact", async () => {
+    // On a draft version (an approved one refuses any new claim outright).
+    await expect(as("system", async (c) => {
+      const draft = (await c.query(`INSERT INTO document (applicant_id, type, created_by, source_json) VALUES ($1, 'tailored_resume', 'app', '{}') RETURNING id`,
+        [yong.applicantId])).rows[0].id;
+      return c.query(`INSERT INTO document_claim (applicant_id, document_id, section, ordinal, rendered_text, claim_type, source_fact_ids, transform)
+               VALUES ($1, $2, 'skills', 9, 'Kubernetes', 'skill', '{}', 'selected')`, [yong.applicantId, draft]);
+    })).rejects.toThrow(/check constraint/);
     await expect(as("system", (c) =>
       c.query(`INSERT INTO document_claim (applicant_id, document_id, section, ordinal, rendered_text, claim_type, source_fact_ids, transform)
-               VALUES ($1, $2, 'skills', 9, 'Kubernetes', 'skill', '{}', 'selected')`, [yong.applicantId, ids.document]),
-    )).rejects.toThrow(/check constraint/);
+               VALUES ($1, $2, 'skills', 9, 'Kubernetes', 'skill', ARRAY[$3::uuid], 'selected')`, [yong.applicantId, ids.document, ids.skill]),
+    )).rejects.toThrow("TC_DOCUMENT_IMMUTABLE");
   });
 });
 

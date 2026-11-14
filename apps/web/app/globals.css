@@ -141,3 +141,29 @@ details.mini > summary { padding: 6px 4px; font-weight: 400; font-size: 14px; }
 .small-value { font-size: 15px; font-weight: 500; }
 .empty { margin: 18px 0; }
 .inline-actions + section.card { margin-top: 18px; }
+
+/* Documents (Phase 3) */
+.approve-bar { margin: 14px 0; }
+.approve-bar form { margin: 0; }
+.button.disabled { opacity: 0.45; cursor: not-allowed; }
+.doc-preview h2 { font-size: 16px; text-transform: uppercase; letter-spacing: 0.04em; border-bottom: 1px solid var(--border); padding-bottom: 4px; margin-top: 22px; }
+.doc-item { margin: 12px 0 18px; }
+.doc-role { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.doc-lines { padding-left: 18px; }
+.doc-lines li { margin: 6px 0; }
+.is-off, .is-off > span:first-child { color: var(--muted); }
+.doc-lines li.is-off > span:first-child, .doc-para.is-off p { text-decoration: line-through; }
+.line-tools { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-left: 8px; vertical-align: middle; }
+.line-tools form { margin: 0; }
+.line-tools .mini { display: inline-block; }
+ul.chips { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-button { background: transparent; color: var(--muted); border: 1px dashed var(--border); border-radius: 999px; padding: 4px 12px; font-size: 14px; }
+.chip-button.on { color: var(--text); border: 1px solid var(--accent); }
+.blocked-list li { margin: 10px 0; }
+.strike { text-decoration: line-through; color: var(--muted); }
+.diff-item { margin: 10px 0; }
+.diff-line { margin: 8px 0; }
+.diff-old { color: var(--muted); }
+.diff-new { font-weight: 500; }
+.tailor-card { margin-top: 18px; }
+.tailor-card h2 { margin-top: 0; }

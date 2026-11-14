@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getMatchByRef } from "@tc-hunter/db";
+import { getMatchByRef, getPreferences, listDocuments, tailorWork } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -8,6 +8,7 @@ import { FeedbackButtons, ScoreBadge, ago, pay, place, posted } from "@/componen
 import { TopBar } from "@/components/TopBar";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
+import { tailorAction } from "@/app/documents/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -25,8 +26,12 @@ export default async function JobPage(props: Props) {
   const session = await requireSession();
   const { ref } = await props.params;
   if (!/^[A-Za-z0-9-]{1,40}$/.test(ref)) notFound();
-  const [{ saved, error }, m] = await Promise.all([flashOf(props), getMatchByRef(app().pool, session, ref)]);
+  const { pool } = app();
+  const [{ saved, error, params }, m] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref)]);
   if (!m) notFound();
+  const [docs, work, prefs] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session)]);
+  const preparing = work && (work.status === "queued" || work.status === "running");
+  const minScore = prefs?.min_score_to_tailor ?? null;
   const back = `/jobs/${m.public_ref}`;
   const status = m.status === "saved" ? "saved" : m.status === "new" ? "new" : "passed";
   const comps = (m.components ?? []) as Array<{ key: string; label: string; weight: number; points: number; detail: string[] }>;
@@ -53,6 +58,30 @@ export default async function JobPage(props: Props) {
       {m.filtered ? <p className="muted">Your preferences rule this one out: {(m.filter_reasons as string[]).join("; ")}.</p> : null}
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
       <FeedbackButtons matchId={m.id} status={status} back={back} />
+      {preparing ? <meta httpEquiv="refresh" content="4" /> : null}
+
+      <section className="card tailor-card" aria-label="Your resume for this job">
+        <h2>Your resume for this job</h2>
+        {preparing ? <p className="status" role="status">Preparing your resume and cover letter from your profile. This page updates when they're ready.</p> : null}
+        {work?.status === "failed" ? <p className="error" role="alert">We couldn't prepare them this time. Try again.</p> : null}
+        {docs.length ? (
+          <ul className="plain">
+            {docs.sort((a, b) => b.type.localeCompare(a.type)).map((d) => (
+              <li key={d.id}><a href={`/documents/${d.public_ref}`}>{d.type === "cover_letter" ? "Cover letter" : "Resume"}, version {d.version}</a>{" "}
+                <span className={d.status === "draft" ? "warn" : "muted"}>{d.status === "draft" ? "Draft, waiting for you" : d.status === "approved" ? "Approved" : "Replaced"}</span></li>
+            ))}
+          </ul>
+        ) : null}
+        {!preparing && m.posting_status === "active" ? (
+          <form action={tailorAction}>
+            <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
+            {minScore !== null && m.score < minScore && !docs.length ? <p className="muted">This job scores below the {minScore} you set for preparing resumes.</p> : null}
+            <button className={docs.length ? "secondary" : ""}>{docs.length ? "Prepare a fresh draft" : "Prepare a resume for this job"}</button>
+            <p className="hint">Built only from rows you've checked. Nothing is sent anywhere.</p>
+          </form>
+        ) : null}
+        {params.preparing === "1" && !preparing && docs.length ? <p className="status" role="status">Ready. Open the draft to look it over.</p> : null}
+      </section>
 
       {(m.gap_skills as string[]).length ? (
         <section className="card">

@@ -11,6 +11,9 @@ export const AUDIT_ALLOWED_KEYS = {
   "mfa.enabled": [],
   "mfa.disabled": [],
   "document.approved": ["document_ref", "type", "version", "content_hash"],
+  "document.generated": ["document_ref", "type", "version", "proposer", "blocked"],
+  "document.exported": ["document_ref", "format"],
+  "skill.alias_confirmed": [],
   "packet.approved": ["application_ref", "packet_version", "packet_hash"],
   "packet.submit_approved": ["application_ref", "packet_version", "submit_hash"],
   "packet.submitted": [
