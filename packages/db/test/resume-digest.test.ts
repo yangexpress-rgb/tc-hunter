@@ -293,9 +293,45 @@ describe("Claude finds the sections itself", () => {
     const second = sent.slice(firstRun);
     expect(second.length).toBeGreaterThan(0);
     for (const m of second) expect(m).not.toContain("Ran weekly pricing reviews");
-    expect(second[0]).toContain(`"EDUCATION": education`);
+    // Only real choices go as hints: EDUCATION was left at its suggestion.
+    expect(second[0]).not.toContain(`"EDUCATION": education`);
+    expect(second[0]).toContain("State University");
     const after = (await getResumeFile(pool, kim, r.fileId)).latest!;
     expect(after.sections.find((s) => s.key === key)).toMatchObject({ target: "skip", chosen: true });
     expect(await count(kim, "experience_item")).toBe(0);
+  });
+
+  it("a section the built-in reader couldn't place isn't frozen as the person's choice, so Claude still reads it", async () => {
+    const { session: max } = await newApplicant(pool, cfg, "Max");
+    const text = [
+      "Max Ruiz", "max@example.test",
+      "", "CREDENTIALS AND LEARNING", "Project Management Professional (PMP)", "Duke University — MBA, 2006",
+      "", "EXPERIENCE", "Director — Lenovo", "Sep 2014 – Dec 2020", "• Led business transformation programs",
+    ].join("\n");
+    const r = await storeResumeFile(pool, cfg, max, { name: "max.txt", bytes: Buffer.from(text) });
+    if (!r.stored) throw new Error("expected a new file");
+    // First reading with the built-in rules: the unknown heading is suggested "Don't use".
+    await runDigest(pool, max, r.digestId, digestDeps());
+    const first = (await getResumeFile(pool, max, r.fileId)).latest!;
+    const top = first.sections.find((x) => x.heading === "CREDENTIALS AND LEARNING")!;
+    expect(top).toMatchObject({ suggested: "skip", chosen: false });
+    // The section form sends every section at its current value; none of them is a real choice.
+    await redigestResumeFile(pool, max, r.fileId, Object.fromEntries(first.sections.map((x) => [x.key, x.target])));
+    const second = (await getResumeFile(pool, max, r.fileId)).latest!;
+    const sent: string[] = [];
+    const fake = { beta: { messages: { parse: async (req: { messages: Array<{ content: string }> }) => {
+      sent.push(req.messages[0]!.content);
+      return { stop_reason: "end_turn", model: "claude-opus-5-5", parsed_output: { sections: [], experience: [], education: [], credentials: [], awards: [], skills: [] } };
+    } } } } as unknown as Anthropic;
+    await runDigest(pool, max, second.id, { cfg, reader: (names) => new ClaudeResumeParser(fake, names) });
+    expect(sent[0]).toContain("Project Management Professional (PMP)");
+    expect(sent[0]).toContain("Duke University");
+    // A section the person really moved stays their choice.
+    const now = (await getResumeFile(pool, max, r.fileId)).latest!;
+    const exp = now.sections.find((x) => x.heading === "EXPERIENCE")!;
+    await redigestResumeFile(pool, max, r.fileId, { ...Object.fromEntries(now.sections.map((x) => [x.key, x.target])), [exp.key]: "volunteer" });
+    await runDigest(pool, max, (await getResumeFile(pool, max, r.fileId)).latest!.id, digestDeps());
+    const third = (await getResumeFile(pool, max, r.fileId)).latest!;
+    expect(third.sections.filter((x) => x.chosen).map((x) => [x.heading, x.target])).toEqual([["EXPERIENCE", "volunteer"]]);
   });
 });
