@@ -3,7 +3,7 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, loadSecretStore, resumeReaderName, runNextWork, type EmailDeps } from "@tc-hunter/db";
+import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type RequirementsReader,
@@ -45,6 +45,11 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stoppi
 
 async function main() {
   log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail.readonly" : "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
+  // One worker: anything still marked running was cut off by the last restart or update.
+  try {
+    const n = await recoverInterruptedWork(pool);
+    if (n) log.info("worker.recovered", { items: n });
+  } catch (e) { log.warn("worker.recover_failed", { message: String((e as Error).message ?? e).slice(0, 200) }); }
   let lastSchedule = 0;
   while (!stopping) {
     try {

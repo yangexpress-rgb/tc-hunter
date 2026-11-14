@@ -614,6 +614,10 @@ export async function scanStatus(pool: pg.Pool, session: Session): Promise<ScanS
     if (w?.status === "queued") return { ...base, state: "waiting", startedAt: w.created_at };
     if (w?.status === "running" && r && !r.finished_at) {
       const p = r.progress ?? {};
+      // Each place updates the run; one silent for 15 minutes has stopped (the worker retries it).
+      if (Date.now() - new Date(r.updated_at).getTime() > 15 * 60_000) {
+        return { ...base, state: "failed", startedAt: r.started_at, failed: `The search stopped responding${p.step ? ` while ${String(p.step).charAt(0).toLowerCase()}${String(p.step).slice(1)}` : ""}. It starts again automatically within a few minutes.` };
+      }
       return { ...base, state: "running", step: p.step ?? "Starting", done: p.done ?? null, total: p.total ?? null, startedAt: r.started_at };
     }
     if (!r) return w?.status === "failed" ? { ...base, state: "failed", failed: "The search couldn't start. It will try again on the next scheduled search." } : base;
@@ -626,6 +630,11 @@ export async function scanStatus(pool: pg.Pool, session: Session): Promise<ScanS
 }
 
 export { normalizeEmployer };
+
+/** At worker start: work cut off by a restart is queued again, and its search run is closed with a plain reason. */
+export async function recoverInterruptedWork(pool: pg.Pool): Promise<number> {
+  return (await pool.query("SELECT recover_interrupted_work() AS n")).rows[0].n as number;
+}
 
 /** The schedule tick: queue due scans, tidy old finished work. */
 export async function enqueueDueScansAndPrune(pool: pg.Pool): Promise<number> {
