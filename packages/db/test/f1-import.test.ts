@@ -7,7 +7,7 @@ import {
   ClaudeResumeParser, detectKind, extractText, parseLinkedInExport, readResume, writeZip, type ParsedResume, type ResumeParser,
 } from "@tc-hunter/domain";
 import {
-  discardImport, getProfile, importParsedResume, verifyFact, withApplicant, type Session,
+  discardImport, getProfile, importParsedResume, verifyFact, verifyRole, withApplicant, type Session,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, testConfig } from "./helpers";
 
@@ -169,6 +169,23 @@ describe("F1 import honesty", () => {
     expect(after.education_item!.map((e) => e.id)).toEqual([keep.id]);
     expect(after.experience_item).toHaveLength(0);
     expect(after.experience_bullet).toHaveLength(0);
+  });
+
+  it("confirming a role confirms the lines under it, and only that role", async () => {
+    const parsed = await readResume(readFileSync(join(FIX, "sample-resume.txt"), "utf8"));
+    const r = await importParsedResume(pool, yong, { kind: "resume", parsed });
+    const before = await rowsOf(r.batchId);
+    const [role, other] = before.experience_item!;
+    await verifyRole(pool, yong, role!.id);
+    const p = await getProfile(pool, cfg, yong);
+    const mine = p.experience.find((e) => e.id === role!.id)!;
+    expect(mine.verification).toBe("verified");
+    expect(mine.bullets.length).toBeGreaterThan(0);
+    expect(mine.bullets.every((b) => b.verification === "verified")).toBe(true);
+    const theirs = p.experience.find((e) => e.id === other!.id)!;
+    expect(theirs.verification).toBe("draft");
+    expect(theirs.bullets.some((b) => b.verification === "draft")).toBe(true);
+    await discardImport(pool, yong, r.batchId);
   });
 
   it("LinkedIn data export: rows land as drafts, no skill levels, grounded in the export", async () => {

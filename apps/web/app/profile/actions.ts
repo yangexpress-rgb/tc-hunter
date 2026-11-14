@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
   removeEvidence, rescoreMatches, resumeReaderName, runDigest, saveAbout, saveAnswer, savePreferences, saveStory, storeResumeFile, updateFact,
-  verifyFact, type FactTable,
+  verifyFact, verifyRole, type FactTable,
 } from "@tc-hunter/db";
 import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
@@ -64,7 +64,7 @@ export async function updateFactAction(form: FormData) {
   await act(form, () => updateFact(app().pool, s, table, String(form.get("id")), fieldsFromForm(table, form)));
 }
 
-/** "Save and mark as right": an edit and a check in one go, used on the review page. */
+/** Saving an edit also confirms the row: once you have edited it, it is yours. */
 export async function updateAndVerifyAction(form: FormData) {
   const s = await requireSession();
   const table = tableOf(form);
@@ -78,6 +78,12 @@ export async function updateAndVerifyAction(form: FormData) {
 export async function verifyFactAction(form: FormData) {
   const s = await requireSession();
   await act(form, () => verifyFact(app().pool, s, tableOf(form), String(form.get("id"))));
+}
+
+/** Confirm a role together with its responsibilities and outcomes. */
+export async function verifyRoleAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => verifyRole(app().pool, s, String(form.get("id"))));
 }
 
 export async function deleteFactAction(form: FormData) {

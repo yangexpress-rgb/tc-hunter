@@ -108,7 +108,7 @@ export const showMonth = (d: Date | string | null | undefined, precision = "mont
 };
 
 export const dateRange = (start: Date | null, end: Date | null, precision = "month") =>
-  `${showMonth(start, precision)} – ${end ? showMonth(end, precision) : "now"}`;
+  `${showMonth(start, precision)} – ${end ? showMonth(end, precision) : "Present"}`;
 
 export const pct = (n: unknown) => (n === null || n === undefined ? null : `${Math.round(Number(n) * 100)}%`);
 
