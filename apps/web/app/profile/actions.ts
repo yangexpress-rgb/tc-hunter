@@ -95,12 +95,12 @@ export async function deleteFactAction(form: FormData) {
 export async function addEvidenceAction(form: FormData) {
   const s = await requireSession();
   const [kind, id] = String(form.get("target") ?? "").split(":");
-  await act(form, () => addEvidence(app().pool, s, String(form.get("skill_id")), { kind: kind as never, id: id! }), "/profile/skills");
+  await act(form, () => addEvidence(app().pool, s, String(form.get("skill_id")), { kind: kind as never, id: id! }), "/profile#skills");
 }
 
 export async function removeEvidenceAction(form: FormData) {
   const s = await requireSession();
-  await act(form, () => removeEvidence(app().pool, s, String(form.get("evidence_id"))), "/profile/skills");
+  await act(form, () => removeEvidence(app().pool, s, String(form.get("evidence_id"))), "/profile#skills");
 }
 
 export async function saveAboutAction(form: FormData) {
@@ -202,7 +202,7 @@ export async function runDigestNowAction(form: FormData) {
 /** "Remove the extra copies": unchecked rows that copy another row in the profile. */
 export async function removeDuplicatesAction(form: FormData) {
   const s = await requireSession();
-  await act(form, () => removeProfileDuplicates(app().pool, s), "/profile/experience");
+  await act(form, () => removeProfileDuplicates(app().pool, s), "/profile#experience");
 }
 
 export async function deleteResumeFileAction(form: FormData) {

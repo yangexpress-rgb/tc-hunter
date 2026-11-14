@@ -99,7 +99,7 @@ export default async function JobPage(props: Props) {
           <h2>{t("jobs.gaps.title")}</h2>
           <p className="muted">{t("jobs.gaps.hint")}</p>
           <ul>{(m.gap_skills as string[]).map((g) => <li key={g}>{g}</li>)}</ul>
-          <p><a href="/profile/skills">Add a skill you have, with proof</a></p>
+          <p><a href="/profile#skills">Add a skill you have, with proof</a></p>
         </section>
       ) : null}
 

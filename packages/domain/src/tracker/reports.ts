@@ -199,7 +199,7 @@ export function weeklyReview(i: ReportInput, week: string): WeeklyReview {
   for (const a of soon) actions.push({ text: `Get ready for your interview with ${a.employer}`, href: `/applications/${a.ref}` });
   for (const d of i.pending?.drafts ?? []) actions.push({ text: `Look over your draft for ${d.title}`, href: `/documents/${d.ref}` });
   if (i.pending?.strongNew) actions.push({ text: `${i.pending.strongNew} strong new ${i.pending.strongNew === 1 ? "match is" : "matches are"} waiting`, href: "/jobs" });
-  if (i.gaps[0]) actions.push({ text: `Show proof of ${i.gaps[0].skill}, asked for by ${i.gaps[0].jobs} ${i.gaps[0].jobs === 1 ? "job" : "jobs"}`, href: "/profile/skills" });
+  if (i.gaps[0]) actions.push({ text: `Show proof of ${i.gaps[0].skill}, asked for by ${i.gaps[0].jobs} ${i.gaps[0].jobs === 1 ? "job" : "jobs"}`, href: "/profile#skills" });
   return {
     week, weekEnd: addDays(week, 6), row,
     inProgress: i.apps.filter((a) => IN_PROGRESS.includes(a.stage)).length,

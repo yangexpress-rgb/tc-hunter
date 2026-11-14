@@ -1,27 +1,9 @@
-import { getProfile } from "@tc-hunter/db";
-import { t } from "@tc-hunter/domain";
-import { Flash, ProfileNav } from "@/components/profile/Fact";
-import { FactList } from "@/components/profile/FactList";
-import { TopBar } from "@/components/TopBar";
-import { flashOf, showMonth, type PageProps } from "@/lib/profile";
-import { app, requireSession } from "@/lib/server";
+import { redirect } from "next/navigation";
+import type { PageProps } from "@/lib/profile";
 
-export const dynamic = "force-dynamic";
-
-export default async function EducationPage(props: PageProps) {
-  const session = await requireSession();
-  const { pool, cfg } = app();
-  const [{ saved, error }, profile] = await Promise.all([flashOf(props), getProfile(pool, cfg, session)]);
-  return (
-    <>
-      <TopBar signedIn />
-      <h1>{t("profile.education.title")}</h1>
-      <ProfileNav current="/profile/education" />
-      <Flash saved={saved} error={error} />
-      <FactList table="education_item" rows={profile.education} back="/profile/education" addLabel="Add education"
-        sectionTitle="Education" editLabel="Edit education"
-        title={(r) => r.institution}
-        describe={(r) => [[r.degree, r.field].filter(Boolean).join(", "), [r.start_date ? showMonth(r.start_date) : null, r.end_date ? showMonth(r.end_date) : null].filter(Boolean).join(" – "), r.honours]} />
-    </>
-  );
+/** Education now lives as a section of the "About you" page. Old links land there. */
+export default async function Page(props: PageProps) {
+  const params = (await props.searchParams) ?? {};
+  const qs = new URLSearchParams(Object.entries(params).flatMap(([k, v]) => (Array.isArray(v) ? v : v === undefined ? [] : [v]).map((x) => [k, String(x)] as [string, string]))).toString();
+  redirect(`/profile${qs ? `?${qs}` : ""}#education`);
 }

@@ -9,7 +9,7 @@ describe("app navigation", () => {
     expect(at("/reports/weekly")).toBe("home:/reports/weekly");
     expect(at("/reports")).toBe("applications:/reports");
     expect(at("/profile")).toBe("me:/profile");
-    expect(at("/profile/experience")).toBe("me:/profile/experience");
+    expect(at("/profile/experience")).toBe("me:/profile");
     expect(at("/profile/resumes/abc")).toBe("me:/profile/import");
     expect(at("/profile/review")).toBe("me:/profile/import");
     expect(at("/jobs/J-123")).toBe("jobs:/jobs");

@@ -147,7 +147,7 @@ describe("preferences and the Evidence Coach (P1)", () => {
     expect(nudges.map((n) => n.key)).toContain("no_preferences");
     await addFact(pool, leo, "skill", { canonical_name: "Python", category: "technical" });
     const n2 = await coachNudges(pool, leo);
-    expect(n2.find((n) => n.key === "skills_no_evidence")).toMatchObject({ text: "1 skill has no proof yet — add one so it counts in matching.", href: "/profile/skills#no-proof" });
+    expect(n2.find((n) => n.key === "skills_no_evidence")).toMatchObject({ text: "1 skill has no proof yet — add one so it counts in matching.", href: "/profile#no-proof" });
     expect((await getProfile(pool, cfg, leo)).experience).toEqual(before.experience);
   });
 });
