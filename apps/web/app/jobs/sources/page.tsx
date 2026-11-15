@@ -27,7 +27,6 @@ const KIND: Record<string, string> = {
   smartrecruiters: "Company jobs page", workday: "Company jobs page (Workday)", careers_page: "Company careers page", pasted_link: "Pasted links",
 };
 
-const health = (h: string) => (h === "blocked" ? t("jobs.sources.unavailable") : h === "degraded" ? t("jobs.sources.trouble") : t("jobs.sources.ok"));
 
 /**
  * Where we look: the employers the app found for the goals (Yong, 2026-11-14: "I don't
@@ -43,24 +42,34 @@ export default async function SourcesPage(props: PageProps) {
   const isNamed = (s: (typeof sources)[number]) => namedIds.has(s.id) || (s.kind !== "pasted_link" && s.kind !== "job_search" && namedKeys.has(companyKey(s.name)));
   const namedWithSource = new Set(named.filter((n) => n.sourceId || sources.some((s) => isNamed(s) && companyKey(s.name) === n.key)).map((n) => n.key));
   const names = new Map(goals.map((g) => [g.id, goalName(g)]));
-  const found = sources.filter((s) => s.origin === "found");
-  const mine = sources.filter((s) => s.origin === "you");
   const searchRows = new Map(sources.filter((s) => s.origin === "search").map((s) => [s.url, s]));
   // Which sites are on: keys saved in Settings, or Railway variables (only whether each is set; no values read here).
   const keyState = await listAppSettings(pool);
   const sites = searchSites({ ...process.env, ...Object.fromEntries(keyState.filter((k) => k.saved).map((k) => [k.name, "set"])) }).status;
   const HOME: Record<string, string> = { adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com" };
   // One row per source for the status table: job sites (on or not), LinkedIn alerts, and every followed page.
-  type StatusRow = { key: string; name: string; kind: string; status: string; last: Date | null; jobs: number; reason: string; link?: { href: string; label: string } };
+  // Everything on this page is one table (Yong, 2026-11-15): job sites, LinkedIn alerts, companies named, found and added by you.
+  type StatusRow = { key: string; name: string; detail?: string; kind: string; status: string; last: Date | null; jobs: number; reason: string;
+    link?: { href: string; label: string }; action?: { id: string; label: string } };
+  const covers = new Map(sites.map((x) => [HOME[x.id], x.covers]));
+  const kindOf = (s: (typeof sources)[number]) => s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : s.origin === "search" ? "Job search site"
+    : isNamed(s) ? "Company you named" : s.origin === "you" ? "Added by you" : s.origin === "found" ? "Found for your goals" : KIND[s.kind] ?? "Jobs page";
   const table: StatusRow[] = [
-    ...sites.filter((x) => !x.on).map((x) => ({ key: `off-${x.id}`, name: x.name, kind: "Job search site", status: "Off", last: null, jobs: 0,
+    ...sites.filter((x) => !x.on).map((x) => ({ key: `off-${x.id}`, name: x.name, detail: x.covers, kind: "Job search site", status: "Off", last: null, jobs: 0,
       reason: `Needs ${x.needs}.`, link: { href: "/settings#job-sites", label: "Add it in Settings" } })),
+    ...sites.filter((x) => x.on && !searchRows.has(HOME[x.id])).map((x) => ({ key: `on-${x.id}`, name: x.name, detail: x.covers, kind: "Job search site", status: "Not searched yet",
+      last: null, jobs: 0, reason: "On. It's searched with the next search." })),
     ...sources.map((s) => {
       const never = !s.last_checked_at;
       const failed = !never && s.health !== "ok";
-      return { key: s.id, name: s.name, kind: s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : isNamed(s) ? "Company you named" : KIND[s.kind] ?? "Jobs page",
+      const kind = kindOf(s);
+      const detail = s.origin === "search" ? covers.get(s.url) ?? (s.url === "https://www.linkedin.com/jobs/" ? "Jobs from LinkedIn's alert emails in your Gmail" : undefined)
+        : s.origin === "found" ? [s.reason, s.goal_id && names.get(s.goal_id) ? `for ${names.get(s.goal_id)}` : null].filter(Boolean).join(" · ") || undefined
+        : KIND[s.kind] && kind !== KIND[s.kind] ? KIND[s.kind] : undefined;
+      return { key: s.id, name: s.name, detail, kind,
         status: never ? "Not searched yet" : failed ? "Failed" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
-        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : "" };
+        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : "",
+        action: { id: s.id, label: s.origin === "you" ? "Stop following" : "Don't use" } };
     }),
     ...named.filter((n) => !namedWithSource.has(n.key)).map((n) => ({ key: `named-${n.key}`, name: n.name, kind: "Company you named",
       status: n.checkedAt ? "Can't read" : "Not searched yet", last: n.checkedAt, jobs: 0,
@@ -74,6 +83,7 @@ export default async function SourcesPage(props: PageProps) {
   const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
   const fQ = (params.q ?? "").slice(0, 60);
   const COLS = [["name", "Source"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
+  const BACK = "/jobs/sources#status";
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "status") as (typeof COLS)[number][0];
   const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
   const RANK: Record<string, number> = { Failed: 0, "Can't read": 0.5, Off: 1, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
@@ -89,20 +99,6 @@ export default async function SourcesPage(props: PageProps) {
     return `/jobs/sources?${p}#status`;
   };
 
-  const Row = ({ s }: { s: (typeof sources)[number] }) => (
-    <li className="card source-row">
-      <div>
-        <strong>{s.name}</strong>
-        {s.origin === "found" ? <div className="muted">{[s.reason, s.goal_id && names.get(s.goal_id) ? `for ${names.get(s.goal_id)}` : null].filter(Boolean).join(" · ")}</div> : null}
-        <div className={s.health === "ok" ? "muted" : "warn"}>{health(s.health)}</div>
-        <div className="muted">{s.open_jobs} open {s.open_jobs === 1 ? "job" : "jobs"} · checked {ago(s.last_checked_at)}</div>
-      </div>
-      <form action={unfollowSourceAction}>
-        <input type="hidden" name="id" value={s.id} /><input type="hidden" name="back" value="/jobs/sources" />
-        <button className="small secondary">{s.origin === "found" ? "Don't watch" : "Stop following"}</button>
-      </form>
-    </li>
-  );
   return (
     <>
       <TopBar signedIn />
@@ -141,77 +137,35 @@ export default async function SourcesPage(props: PageProps) {
                 return <th key={k} scope="col" className={k === "jobs" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
                   <a href={href({ sort: k, dir: next })}>{label}{on ? (dir === "asc" ? " ▲" : " ▼") : ""}</a></th>;
               })}
+              <th scope="col"><span className="sr-only">Actions</span></th>
             </tr></thead>
             <tbody>
               {shown.map((r) => (
                 <tr key={r.key}>
-                  <td>{r.name}</td>
+                  <td className="wrap">{r.name}{r.detail ? <div className="muted small">{r.detail}</div> : null}</td>
                   <td>{r.kind}</td>
                   <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
                   <td>{r.last ? ago(r.last) : "Never"}</td>
                   <td className="num">{r.jobs}</td>
                   <td className={bad(r.status) ? "error wrap" : "muted wrap"}>{r.reason}{r.link ? <> <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a></> : null}</td>
+                  <td>{r.action ? (
+                    <form action={unfollowSourceAction}>
+                      <input type="hidden" name="id" value={r.action.id} /><input type="hidden" name="back" value={BACK} />
+                      <button className="small secondary">{r.action.label}</button>
+                    </form>) : null}</td>
                 </tr>
               ))}
-              {shown.length === 0 ? <tr><td colSpan={6} className="muted">No sources match these filters.</td></tr> : null}
+              {shown.length === 0 ? <tr><td colSpan={7} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>
       </section>
 
-      <h2>Job search sites</h2>
-      <ul className="plain source-list">
-        {sites.map((site) => {
-          const row = searchRows.get(HOME[site.id]);
-          return (
-            <li key={site.id} className="card source-row">
-              <div>
-                <strong>{site.name}</strong>
-                <div className="muted">{site.covers}</div>
-                {site.on ? (row ? <>
-                  <div className={row.health === "ok" ? "muted" : "warn"}>{row.health === "ok" ? "Searching" : `Couldn't search it last time${row.health === "blocked" ? ": it turned us down" : ""}. We'll try again.`}</div>
-                  <div className="muted">{row.open_jobs} open {row.open_jobs === 1 ? "job" : "jobs"} found · searched {ago(row.last_checked_at)}</div>
-                </> : <div className="muted">On. It's searched with your next look.</div>)
-                  : <div className="warn">Not on yet: it needs {site.needs}. <a href="/settings#job-sites">Add it in Settings</a> (<a href={site.signup} target="_blank" rel="noreferrer">get one free</a>).</div>}
-              </div>
-              {site.on && row ? (
-                <form action={unfollowSourceAction}>
-                  <input type="hidden" name="id" value={row.id} /><input type="hidden" name="back" value="/jobs/sources" />
-                  <button className="small secondary">Don't use</button>
-                </form>
-              ) : null}
-            </li>
-          );
-        })}
-        {(() => {
-          const row = searchRows.get("https://www.linkedin.com/jobs/");
-          return (
-            <li className="card source-row">
-              <div>
-                <strong>LinkedIn job alerts</strong>
-                <div className="muted">Jobs from LinkedIn's alert emails in your connected Gmail</div>
-                {row ? <div className="muted">{row.open_jobs} open {row.open_jobs === 1 ? "job" : "jobs"} found · read {ago(row.last_checked_at)}</div>
-                  : <div className="muted">Not set up yet. <a href="/profile/goals#linkedin">How to turn it on</a>.</div>}
-              </div>
-              {row ? (
-                <form action={unfollowSourceAction}>
-                  <input type="hidden" name="id" value={row.id} /><input type="hidden" name="back" value="/jobs/sources" />
-                  <button className="small secondary">Don't use</button>
-                </form>
-              ) : null}
-            </li>
-          );
-        })()}
-      </ul>
       <p className="muted small">LinkedIn and Indeed don't let other apps search them, so we never read them directly. Adzuna and Jooble bring in many of the same jobs, with a link to the original, and LinkedIn's own alert emails bring in the rest. You can also paste any job's link in <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
 
-      <h2>Employers found for your goals</h2>
-      {found.length === 0 ? <p className="muted empty">Nothing yet.</p> : <ul className="plain source-list">{found.map((s) => <Row key={s.id} s={s} />)}</ul>}
-
-      {mine.length ? (<><h2>Added by you</h2><ul className="plain source-list">{mine.map((s) => <Row key={s.id} s={s} />)}</ul></>) : null}
-
-      <div id="add" />
-      <Details summary="Add a company yourself">
+      <section className="card" id="add">
+        <h2>Add a company yourself</h2>
+        <p className="muted">Missing a company? Add its jobs page and it shows in the table above as "Added by you", searched with every search.</p>
         <form action={followSourceAction} className="stack">
           <input type="hidden" name="back" value="/jobs/sources" />
           <p>{t("jobs.sources.intro")}</p>
@@ -219,11 +173,11 @@ export default async function SourcesPage(props: PageProps) {
           <label>Company name (optional)<input name="name" maxLength={120} /></label>
           <button>Follow</button>
         </form>
-      </Details>
+      </section>
 
       <Details summary="How we find jobs">
         <p>First, we read the careers sites of the companies you named in your goals. If one can't be read, the table above says why.</p>
-        <p>Then we search the job search sites above for each goal's roles in each of its places. We only send a job title and a place, never anything about you.</p>
+        <p>Then we search the job search sites in the table for each goal's roles in each of its places. We only send a job title and a place, never anything about you.</p>
         <p>Then, when Claude is set up, it suggests other employers that hire for each goal. We check each employer's public jobs page on Greenhouse, Lever, Ashby or SmartRecruiters, or its own careers page, and only watch the ones that answer with jobs.</p>
         <p>We look again when you change a goal, when you press Refresh, and once a day (or as often as your search settings say). We follow each site's rules for automated visitors.</p>
         <p>Careers sites on Workday are read too. Ones run on Taleo, iCIMS and similar systems can't be read yet, but those employers' jobs often still come in through the job sites. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
