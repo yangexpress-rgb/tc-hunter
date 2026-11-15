@@ -19,6 +19,9 @@
     <div class="field"><label for="source">How did you hear about us?</label>
       <input id="source" role="combobox" aria-controls="source_list" autocomplete="off">
       <ul id="source_list" role="listbox" hidden></ul></div>
+    <div class="field"><label for="country">Country*</label>
+      <input id="country" name="country" role="combobox" aria-controls="country_list" autocomplete="off">
+      <ul id="country_list" role="listbox" hidden></ul></div>
     <div class="field"><label for="notice">Before submitting your application, you must agree to Contoso's Candidate Privacy Notice.*</label>
       <input id="notice" name="notice" role="combobox" aria-controls="notice_list" autocomplete="off">
       <ul id="notice_list" role="listbox" hidden></ul></div>
@@ -50,6 +53,19 @@
       li.addEventListener("click", function () { nb.value = "Acknowledge"; nl.hidden = true; });
       nl.appendChild(li); nl.hidden = false;
     });
-    document.addEventListener("keydown", function (e) { if (e.key === "Escape") { list.hidden = true; nl.hidden = true; } });
+    // A country list that only finds what starts with the typed text (so "USA" finds nothing).
+    var cb = document.getElementById("country"), cl = document.getElementById("country_list");
+    var COUNTRIES = ["Canada", "United Kingdom", "United States", "United States Minor Outlying Islands"];
+    function showC() {
+      cl.innerHTML = "";
+      COUNTRIES.filter(function (c) { return c.toLowerCase().indexOf(cb.value.toLowerCase()) === 0; }).forEach(function (c) {
+        var li = document.createElement("li"); li.setAttribute("role", "option"); li.textContent = c;
+        li.addEventListener("click", function () { cb.value = c; cl.hidden = true; });
+        cl.appendChild(li);
+      });
+      cl.hidden = false;
+    }
+    cb.addEventListener("focus", showC); cb.addEventListener("input", showC);
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") { list.hidden = true; nl.hidden = true; cl.hidden = true; } });
   </script>
 </body></html>

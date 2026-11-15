@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
-import { AGREE_CHOICE,
+import { AGREE_CHOICE, matchChoice, sameAnswer, searchTermsFor,
   formUrlFor, humanCheckIn, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type PageForm, type PageNow, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { PAGE_SCRIPT } from "./pageScript";
@@ -164,7 +164,7 @@ class PwPage implements ApplyPage {
           const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${el.id}"]`)) || el.closest("label");
           return (l?.textContent ?? el.value ?? "").replace(/\s+/g, " ").trim();
         });
-        if (norm(label) === norm(value) || norm(await r.getAttribute("value") ?? "") === norm(value)) { await r.check({ force: true }); return "filled"; }
+        if (norm(label) === norm(value) || sameAnswer(label, value) || norm(await r.getAttribute("value") ?? "") === norm(value)) { await r.check({ force: true }); return "filled"; }
       }
       return "no_match";
     }
@@ -173,7 +173,7 @@ class PwPage implements ApplyPage {
     const role = await loc.getAttribute("role");
     if (tag === "select") {
       const options = await loc.locator("option").allTextContents();
-      const match = options.find((o) => norm(o) === norm(value)) ?? options.find((o) => norm(o).startsWith(norm(value)) && norm(value).length >= 2);
+      const match = matchChoice(options.filter((o) => o.trim()), value);
       if (!match) return "no_match";
       await loc.selectOption({ label: match.trim() }).catch(async () => { await loc.selectOption({ label: match }); });
       return "filled";
@@ -192,27 +192,33 @@ class PwPage implements ApplyPage {
 
   /** Drop-downs drawn by the site (React selects, Workday's lists): open, choose the matching choice. */
   protected async pickFromList(loc: Locator, value: string, isButton: boolean): Promise<FillResult["status"]> {
-    await loc.click();
-    // Typing filters the list; for an agreement the site's wording may differ, so show the whole list.
-    if (!isButton && !AGREEING.test(value.trim())) { await loc.fill(value).catch(() => loc.pressSequentially(value)); }
-    await this.pg.waitForTimeout(700);
-    const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
-    const n = await options.count();
-    let best: Locator | null = null;
-    for (let i = 0; i < n; i++) {
-      const t = norm((await options.nth(i).textContent()) ?? "");
-      if (t === norm(value)) { best = options.nth(i); break; }
-      if (!best && t.startsWith(norm(value)) && norm(value).length >= 2) best = options.nth(i);
+    const agreeing = AGREEING.test(value.trim());
+    // Typing filters the list. Try the answer, then its other names ("USA" finds "United States");
+    // for an agreement the site's wording may differ, so look at the whole list.
+    const terms = isButton || agreeing ? [""] : [...searchTermsFor(value), ""];
+    for (const term of terms) {
+      await loc.click();
+      if (!isButton) { await loc.fill(term).catch(() => loc.pressSequentially(term)); }
+      await this.pg.waitForTimeout(700);
+      const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
+      const n = await options.count();
+      const texts: string[] = [];
+      for (let i = 0; i < n; i++) texts.push(((await options.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
+      let at = -1;
+      const match = matchChoice(texts.filter(Boolean), value);
+      if (match) at = texts.indexOf(match);
+      if (at < 0 && agreeing) at = texts.findIndex((t) => AGREE_OPTION.test(t));
+      if (at >= 0) {
+        await options.nth(at).click();
+        await this.pg.waitForTimeout(300);
+        return "filled";
+      }
+      await this.pg.keyboard.press("Escape").catch(() => {});
     }
-    if (!best && AGREEING.test(value.trim())) {
-      // A standing "I agree": the site's own agreeing choice ("Acknowledge", "Yes, I agree", ...).
-      for (let i = 0; i < n && !best; i++) if (AGREE_OPTION.test(((await options.nth(i).textContent()) ?? "").trim())) best = options.nth(i);
-    }
-    if (!best) { await this.pg.keyboard.press("Escape").catch(() => {}); return "no_match"; }
-    await best.click();
-    await this.pg.waitForTimeout(300);
-    return "filled";
+    if (!isButton) await loc.fill("").catch(() => {});
+    return "no_match";
   }
+
 
   async filledHash(): Promise<string> {
     await this.helpers();
