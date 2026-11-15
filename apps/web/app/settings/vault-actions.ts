@@ -20,7 +20,9 @@ export async function stepUpAction(form: FormData): Promise<void> {
     const [path, hash] = back.split("#");
     redirect(`${path}?${ok ? "confirmed=1" : "e=TC_STEP_UP_FAILED"}${hash ? `#${hash}` : ""}`);
   }
-  redirect(ok ? "/settings?confirmed=1" : "/settings?e=TC_STEP_UP_FAILED");
+  // From another Settings page, go back to it.
+  const page = /^\/settings(\/(email|job-sites|applying|data))?$/.test(back) ? back : "/settings";
+  redirect(ok ? `${page}?confirmed=1` : `${page}?e=TC_STEP_UP_FAILED`);
 }
 
 export type PasskeyResult = { ok: boolean; code?: string };
@@ -91,7 +93,7 @@ export async function eraseAction(form: FormData): Promise<void> {
   } catch (e) {
     const code = errorCode(e) ?? "TC_UNKNOWN";
     log.warn("privacy.erase_failed", { code });
-    redirect(`/settings?e=${code}#delete`);
+    redirect(`/settings/data?e=${code}#delete`);
   }
   await clearSessionCookie();
   redirect("/sign-in?erased=1");

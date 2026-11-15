@@ -22,7 +22,7 @@ export async function pairBrowserAction(_prev: PairState, form: FormData): Promi
 
 export async function removeBrowserAction(form: FormData): Promise<void> {
   const s = await requireSession();
-  let target = "/settings?browser=removed#browser";
-  try { await revokeDevice(app().pool, s, String(form.get("id") ?? "")); } catch (e) { target = `/settings?e=${errorCode(e) ?? "TC_UNKNOWN"}#browser`; }
+  let target = "/settings/applying?browser=removed#browser";
+  try { await revokeDevice(app().pool, s, String(form.get("id") ?? "")); } catch (e) { target = `/settings/applying?e=${errorCode(e) ?? "TC_UNKNOWN"}#browser`; }
   redirect(target);
 }

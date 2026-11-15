@@ -29,11 +29,12 @@ export const NAV: NavSection[] = [
     { href: "/documents", label: "Resumes and letters" },
   ] },
   { key: "settings", label: "Settings", icon: "⚙", tabs: [
-    { href: "/settings#security", label: "Sign-in" },
-    { href: "/settings#devices", label: "Devices" },
-    { href: "/settings#email", label: "Email" },
-    { href: "/settings#browser", label: "Browser" },
-    { href: "/settings#data", label: "Your data" },
+    // One page each (Yong, 2026-11-15: "different settings can be separated").
+    { href: "/settings", label: "Sign-in and security" },
+    { href: "/settings/email", label: "Email" },
+    { href: "/settings/job-sites", label: "Job sites" },
+    { href: "/settings/applying", label: "Applying for you" },
+    { href: "/settings/data", label: "Your data" },
   ] },
 ];
 

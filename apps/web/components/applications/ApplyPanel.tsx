@@ -80,7 +80,7 @@ export function ApplyPanel({ appRef, employer, initial, canApply }: { appRef: st
           <div className="inline-actions">
             {s.waitingFor === "weekly_limit" && canApply ? <Button appRef={appRef} label="Apply now anyway" anyway /> : null}
             {["email_link", "site_account", "cover_letter", "answers", "sign_in"].includes(s.waitingFor ?? "") && canApply ? <Button appRef={appRef} label="Continue" /> : null}
-            {s.waitingFor === "site_account" ? <a className="button secondary" href="/settings#applying">Open Settings</a> : null}
+            {s.waitingFor === "site_account" ? <a className="button secondary" href="/settings/applying">Open Settings</a> : null}
           </div>
         </>
       ) : null}

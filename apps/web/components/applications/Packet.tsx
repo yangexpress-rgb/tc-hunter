@@ -247,7 +247,7 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
       ) : null}
       {missing.length && review ? <p className="error">{missing.length === 1 ? "1 required question needs" : `${missing.length} required questions need`} your answer. Answer below and TC Hunter carries on by itself.</p> : null}
       {standing.length && p.state !== "submitted" ? (
-        <p className="warn">{standing.length === 1 ? "1 answer comes" : `${standing.length} answers come`} from your standing answers in Settings (statements, consents, signatures or personal questions you let TC Hunter answer). Check them: you are responsible for what they say. <a href="/settings#applying">Change in Settings</a></p>
+        <p className="warn">{standing.length === 1 ? "1 answer comes" : `${standing.length} answers come`} from your standing answers in Settings (statements, consents, signatures or personal questions you let TC Hunter answer). Check them: you are responsible for what they say. <a href="/settings/applying">Change in Settings</a></p>
       ) : null}
       {p.outcomeUnknown ? (
         <>
@@ -276,7 +276,7 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
               <div className="packet-q">{f.label}</div>
               {f.step ? (
                 f.required
-                  ? <div className="error small">{STEP[f.step] ?? "Always yours"}. Required, so TC Hunter can&apos;t send this form without it. Set a standing answer in <a href="/settings#applying">Settings</a>, or apply on their site yourself.{f.note ? <div>{f.note}</div> : null}</div>
+                  ? <div className="error small">{STEP[f.step] ?? "Always yours"}. Required, so TC Hunter can&apos;t send this form without it. Set a standing answer in <a href="/settings/applying">Settings</a>, or apply on their site yourself.{f.note ? <div>{f.note}</div> : null}</div>
                   : <div className="muted">{STEP[f.step] ?? "Always yours"}. Optional: TC Hunter leaves it blank.</div>
               ) : f.willFill ? (
                 <div><span className="packet-a">{f.type === "file" ? "Your PDF" : f.answer}</span> <span className={f.source === "standing_answer" ? "warn" : "muted"}>· {FROM[f.source ?? ""] ?? ""}{f.fillStatus === "filled" ? (f.type === "file" ? " · attached" : " · typed") : ""}</span>

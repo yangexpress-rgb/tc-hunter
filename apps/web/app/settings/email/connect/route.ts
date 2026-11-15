@@ -8,8 +8,8 @@ export const dynamic = "force-dynamic";
 /** Connect Gmail: after a fresh "is it you?" check, off to Google to allow read-only access. */
 export async function GET(req: Request): Promise<Response> {
   const session = await requireSession();
-  const back = (q: string) => Response.redirect(new URL(`/settings?${q}#email`, req.url), 303);
-  const client = googleClient();
+  const back = (q: string) => Response.redirect(new URL(`/settings/email?${q}`, req.url), 303);
+  const client = await googleClient();
   if (!client) return back("e=TC_EMAIL_NOT_SET_UP");
   if (!hasFreshStepUp(session, app().cfg)) return back("e=TC_STEP_UP_REQUIRED");
   const a = newOAuthAttempt();

@@ -56,7 +56,7 @@ export default async function SourcesPage(props: PageProps) {
     : isNamed(s) ? "Company you named" : s.origin === "you" ? "Added by you" : s.origin === "found" ? "Found for your goals" : KIND[s.kind] ?? "Jobs page";
   const table: StatusRow[] = [
     ...sites.filter((x) => !x.on).map((x) => ({ key: `off-${x.id}`, name: x.name, detail: x.covers, kind: "Job search site", status: "Off", last: null, jobs: 0,
-      reason: `Needs ${x.needs}.`, link: { href: "/settings#job-sites", label: "Add it in Settings" } })),
+      reason: `Needs ${x.needs}.`, link: { href: "/settings/job-sites", label: "Add it in Settings" } })),
     ...sites.filter((x) => x.on && !searchRows.has(HOME[x.id])).map((x) => ({ key: `on-${x.id}`, name: x.name, detail: x.covers, kind: "Job search site", status: "Not searched yet",
       last: null, jobs: 0, reason: "On. It's searched with the next search." })),
     ...sources.map((s) => {

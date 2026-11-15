@@ -6,7 +6,7 @@
 import { createPool, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
-  ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type RequirementsReader,
+  ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
 
@@ -22,10 +22,12 @@ const tailor = {
   letter: claudeWrites ? new ClaudeLetterProposer() : new RulesLetterProposer(),
   cfg,
 };
-// Connected Gmail (decision 13.3): only when a Google client is configured and the vault is mounted.
-const google = googleClientFrom(process.env);
-const email: EmailDeps | undefined = google && process.env.TC_VAULT_DIR
+// Connected Gmail (decision 13.3): only when a Google client is configured (in Settings › Email or on
+// Railway, read again every minute below) and the vault is mounted.
+const emailWith = (google: GoogleClient | null): EmailDeps | undefined => google && process.env.TC_VAULT_DIR
   ? { vault: loadSecretStore(), cfg, reader: (token) => new GmailReader(google, token), postings: reader } : undefined;
+let email = emailWith(googleClientFrom(process.env));
+let emailKey = JSON.stringify(googleClientFrom(process.env));
 // Resume digest (decision 13.6): Claude with contact details and the applicant's names removed, or the built-in rules.
 const digest = {
   cfg,
@@ -42,7 +44,19 @@ let search = searchSites(process.env).sites;
 let searchReadAt = 0;
 async function currentSearch() {
   if (Date.now() - searchReadAt > 60_000) {
-    try { search = searchSites(await settingsEnv(pool, cfg, process.env)).sites; searchReadAt = Date.now(); }
+    try {
+      const env = await settingsEnv(pool, cfg, process.env);
+      search = searchSites(env).sites;
+      const google = googleClientFrom(env);
+      const key = JSON.stringify(google);
+      if (key !== emailKey) {
+        email = emailWith(google);
+        emailKey = key;
+        if (apply) apply.email = email;
+        log.info("worker.email_setup_changed", { email: email ? "gmail.readonly" : "off" });
+      }
+      searchReadAt = Date.now();
+    }
     catch (e) { log.warn("worker.settings_failed", { message: String((e as Error).message ?? e).slice(0, 200) }); }
   }
   return search;
@@ -51,7 +65,7 @@ async function currentSearch() {
 // Employer-site passwords live in each applicant's vault; Gmail confirms new Workday accounts.
 const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
   browser: new ServerBrowser({ proxy: process.env.HTTPS_PROXY || undefined, executablePath: process.env.TC_CHROMIUM_PATH || undefined }),
-  cfg, vault: process.env.TC_VAULT_DIR ? loadSecretStore() : undefined, email,
+  cfg, vault: process.env.TC_VAULT_DIR ? loadSecretStore() : undefined, email: email as EmailDeps | undefined,
 };
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
@@ -69,6 +83,8 @@ async function main() {
   let lastSchedule = 0;
   while (!stopping) {
     try {
+      // Settings first: a Gmail sign-in or job-site key saved a minute ago is used from here on.
+      const search = await currentSearch();
       if (Date.now() - lastSchedule > SCHEDULE_MS) {
         const queued = await enqueueDueScansAndPrune(pool);
         const mail = email ? await enqueueDueEmailChecks(pool) : 0;
@@ -77,7 +93,7 @@ async function main() {
         if (queued || mail || applies) log.info("worker.scheduled", { scans: queued, email_checks: mail, applies });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search: await currentSearch(), apply });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search, apply });
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
       // Counts and timings only, never names or content, so a stuck or failed search can be traced.
       else log[did.ok ? "info" : "warn"]("work.finished", { kind: did.kind, ok: did.ok, seconds: Math.round(did.ms / 1000), attempt: did.attempt, ...(did.result ?? {}), ...(did.error ? { error: did.error } : {}) });

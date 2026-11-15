@@ -19,10 +19,14 @@ describe("app navigation", () => {
     expect(at("/applications/A-1")).toBe("applications:/applications");
     expect(at("/documents/D-1")).toBe("documents:/documents");
   });
-  it("follows the #hash on the settings page", () => {
-    expect(at("/settings")).toBe("settings:/settings#security");
-    expect(at("/settings", "#email")).toBe("settings:/settings#email");
-    expect(at("/settings", "#nope")).toBe("settings:/settings#security");
+  it("gives each kind of setting its own page, Email among them", () => {
+    expect(NAV.find((s) => s.key === "settings")!.tabs.map((t) => t.label)).toEqual(["Sign-in and security", "Email", "Job sites", "Applying for you", "Your data"]);
+    expect(at("/settings")).toBe("settings:/settings");
+    expect(at("/settings/email")).toBe("settings:/settings/email");
+    expect(at("/settings/email/connect")).toBe("settings:/settings/email");
+    expect(at("/settings/job-sites")).toBe("settings:/settings/job-sites");
+    expect(at("/settings/applying")).toBe("settings:/settings/applying");
+    expect(at("/settings/data")).toBe("settings:/settings/data");
   });
   it("names the Me tabs as Yong asked: Goals and Initial Input", () => {
     expect(NAV.find((s) => s.key === "me")!.tabs.map((t) => t.label)).toEqual(["About you", "Stories", "Saved answers", "Goals", "Initial Input"]);
