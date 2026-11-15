@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
   removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
-  verifyFact, verifyRole, requestScan, type FactTable,
+  verifyAll, verifyFact, verifyRole, requestScan, type FactTable,
 } from "@tc-hunter/db";
 import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
@@ -226,6 +226,13 @@ export async function deleteResumeFileAction(form: FormData) {
   const id = fileIdOf(form);
   try { await deleteResumeFile(app().pool, s, id); } catch (e) { redirect(`/profile/resumes/${id}?e=${errorCode(e) ?? "TC_UNKNOWN"}`); }
   redirect("/profile/import?saved=1");
+}
+
+/** Confirm every waiting row (in one import, or all of them) in one go. */
+export async function verifyAllAction(form: FormData) {
+  const s = await requireSession();
+  const b = String(form.get("batch_id") ?? "");
+  await act(form, () => verifyAll(app().pool, s, /^[0-9a-f-]{36}$/.test(b) ? b : null), "/profile/review");
 }
 
 export async function discardImportAction(form: FormData) {

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getMatchByRef, getPreferences, listApplications, listDocuments, tailorWork } from "@tc-hunter/db";
+import { getMatchByRef, getPreferences, listApplications, listDocuments, tailorReadiness, tailorWork } from "@tc-hunter/db";
 import { STAGE_LABEL, t, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -30,7 +30,8 @@ export default async function JobPage(props: Props) {
   const { pool } = app();
   const [{ saved, error, params }, m] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref)]);
   if (!m) notFound();
-  const [docs, work, prefs, apps] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session)]);
+  const [docs, work, prefs, apps, ready] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session)]);
+  const lastResult = (work?.status === "done" ? work.result ?? {} : {}) as { empty?: boolean };
   const tracked = apps.find((a) => a.job_ref === m.public_ref);
   const preparing = work && (work.status === "queued" || work.status === "running");
   const minScore = prefs?.min_score_to_tailor ?? null;
@@ -71,15 +72,24 @@ export default async function JobPage(props: Props) {
         </form>
       )}
 
-      <section className="card tailor-card" aria-label="Your resume for this job">
-        <h2>Your resume for this job</h2>
+      <section className="card tailor-card" aria-label="Your documents for this job" id="documents">
+        <h2>Your documents for this job</h2>
+        {ready.roles === 0 && !preparing ? (
+          <p className="error" role="alert">{lastResult.empty ? "Nothing was prepared: " : "A resume can't be prepared yet: "}
+            none of your work history is confirmed{ready.waiting ? ` (${ready.waiting} ${ready.waiting === 1 ? "row is" : "rows are"} waiting)` : ""}. Only rows you've confirmed are used.{" "}
+            <a href="/profile/review">Confirm your profile rows</a>, then come back and prepare it.</p>
+        ) : ready.waiting && !preparing ? (
+          <p className="warn">{ready.waiting} profile {ready.waiting === 1 ? "row isn't" : "rows aren't"} confirmed yet, so {ready.waiting === 1 ? "it's" : "they're"} left out. <a href="/profile/review">Confirm them</a> to use them.</p>
+        ) : null}
         {preparing ? <p className="status" role="status">Preparing your resume and cover letter from your profile. This page updates when they're ready.</p> : null}
         {work?.status === "failed" ? <p className="error" role="alert">We couldn't prepare them this time. Try again.</p> : null}
         {docs.length ? (
           <ul className="plain">
             {docs.sort((a, b) => b.type.localeCompare(a.type)).map((d) => (
               <li key={d.id}><a href={`/documents/${d.public_ref}`}>{d.type === "cover_letter" ? "Cover letter" : "Resume"}, version {d.version}</a>{" "}
-                <span className={d.status === "draft" ? "warn" : "muted"}>{d.status === "draft" ? "Draft, waiting for you" : d.status === "approved" ? "Approved" : "Replaced"}</span></li>
+                <span className={d.status === "draft" ? "warn" : "muted"}>{d.status === "draft" ? "Draft, waiting for you" : d.status === "approved" ? "Approved" : "Replaced"}</span>{" "}
+                {d.status === "approved" ? <span className="small"><a href={`/documents/${d.public_ref}/pdf`}>PDF</a> · <a href={`/documents/${d.public_ref}/docx`}>Word</a></span>
+                  : <a className="small" href={`/documents/${d.public_ref}`}>Open to look it over</a>}</li>
             ))}
           </ul>
         ) : null}
@@ -88,7 +98,7 @@ export default async function JobPage(props: Props) {
             <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
             {minScore !== null && m.score < minScore && !docs.length ? <p className="muted">This job scores below the {minScore} you set for preparing resumes.</p> : null}
             <button className={docs.length ? "secondary" : ""}>{docs.length ? "Prepare a fresh draft" : "Prepare a resume for this job"}</button>
-            <p className="hint">Built only from rows you've checked. Nothing is sent anywhere.</p>
+            <p className="hint">Makes a resume and a cover letter, built only from rows you've confirmed. Nothing is sent anywhere.</p>
           </form>
         ) : null}
         {params.preparing === "1" && !preparing && docs.length ? <p className="status" role="status">Ready. Open the draft to look it over.</p> : null}

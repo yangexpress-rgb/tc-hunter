@@ -230,6 +230,35 @@ export async function verifyRole(pool: pg.Pool, session: Session, id: string): P
   });
 }
 
+const CHECKABLE = ["experience_item", "experience_bullet", "education_item", "skill", "credential", "honor_award"] as const;
+
+/**
+ * "Confirm all": the applicant checks every waiting row at once, from one import or all of them
+ * (Yong, 2026-11-15: an unchecked profile left his tailored resume empty). Returns how many rows.
+ */
+export async function verifyAll(pool: pg.Pool, session: Session, batchId: string | null = null): Promise<number> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    let n = 0;
+    for (const t of CHECKABLE) {
+      const r = await c.query(`UPDATE ${t} SET verification = 'verified' WHERE verification = 'draft' AND ($1::uuid IS NULL OR import_batch_id = $1)`, [batchId]);
+      n += r.rowCount ?? 0;
+    }
+    return n;
+  });
+}
+
+/** What a tailored resume can draw on: checked roles and lines, and how many rows still wait to be checked. */
+export async function tailorReadiness(pool: pg.Pool, session: Session): Promise<{ roles: number; lines: number; waiting: number }> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const r = (await c.query(`SELECT
+        (SELECT count(*) FROM experience_item WHERE verification = 'verified')::int AS roles,
+        (SELECT count(*) FROM experience_bullet b JOIN experience_item e ON e.id = b.experience_item_id
+          WHERE b.verification = 'verified' AND e.verification = 'verified')::int AS lines,
+        (${CHECKABLE.map((t) => `(SELECT count(*) FROM ${t} WHERE verification = 'draft')`).join(" + ")})::int AS waiting`)).rows[0];
+    return { roles: r.roles, lines: r.lines, waiting: r.waiting };
+  });
+}
+
 export async function deleteFact(pool: pg.Pool, session: Session, table: FactTable, id: string): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
     const r = await c.query(`DELETE FROM ${table} WHERE id = $1`, [id]);

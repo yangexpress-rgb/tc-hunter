@@ -132,6 +132,10 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
   const shown = s.experience.reduce((n, i) => n + i.lines.filter((l) => l.included).length, 0);
   return (
     <section className="doc-preview" aria-label="This version">
+      {s.experience.length === 0 ? (
+        <p className="error" role="alert">This resume has no experience in it, because none of your roles are confirmed yet. Only rows you've confirmed are used.{" "}
+          <a href="/profile/review">Confirm your profile rows</a>, then go back to the job and press "Prepare a fresh draft".</p>
+      ) : null}
       <p className="muted">Showing {shown} of your {total} lines, to fit about {s.targetPages} {s.targetPages === 1 ? "page" : "pages"}. Names, dates and numbers come straight from your profile.</p>
       <h2>Experience</h2>
       {s.experience.map((it, ii) => (

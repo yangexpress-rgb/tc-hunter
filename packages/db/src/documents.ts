@@ -149,6 +149,11 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
     const posting = await postingForMatch(c, payload.match_id);
     const pages = (await c.query("SELECT tailor_target_pages FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.tailor_target_pages ?? 2;
     const made: Array<{ kind: DocKind; ref: string; version: number; blocked: number }> = [];
+    // Only checked rows can be used. With no checked role, a resume or letter would be empty: say so instead of making one.
+    if (!profile.experience.some((e) => e.verified)) {
+      const waiting = profile.experience.filter((e) => !e.verified).length + profile.experience.reduce((n, e) => n + e.bullets.filter((b) => !b.verified).length, 0);
+      return { jobRef: posting.ref, documents: made, empty: true, waiting };
+    }
     for (const kind of payload.kinds?.length ? payload.kinds : (["resume", "letter"] as DocKind[])) {
       if (kind === "resume") {
         const { proposal, meta } = await deps.resume.propose(profile, posting);
