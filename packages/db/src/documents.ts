@@ -161,8 +161,11 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
     const revised = from ? { feedback: payload.feedback, revised_from: from.public_ref } : {};
     const pages = (await c.query("SELECT tailor_target_pages FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.tailor_target_pages ?? 2;
     const made: Array<{ kind: DocKind; ref: string; version: number; blocked: number }> = [];
+    // Counts only (never content), so the worker log shows what the profile gave the writer.
+    const counts = { roles: profile.experience.length, lines: profile.experience.reduce((n, e) => n + e.bullets.length, 0), skills: profile.skills.length,
+      education: profile.education.length, credentials: profile.credentials.length };
     // With no work history at all, a resume or letter would be empty: say so instead of making one.
-    if (!profile.experience.length) return { jobRef: posting.ref, documents: made, empty: true };
+    if (!profile.experience.length) return { jobRef: posting.ref, documents: made, empty: true, ...counts };
     for (const kind of payload.kinds?.length ? payload.kinds : (["resume", "letter"] as DocKind[])) {
       if (kind === "resume") {
         const { proposal, meta } = await deps.resume.propose(profile, posting, opts);
@@ -178,7 +181,7 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: d.blocked.length } });
       }
     }
-    return { jobRef: posting.ref, documents: made };
+    return { jobRef: posting.ref, documents: made, ...counts };
   });
 }
 
@@ -192,6 +195,19 @@ export async function requestTailor(pool: pg.Pool, session: Session, jobRef: str
       `INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING RETURNING id`,
       [JSON.stringify({ match_id: m.id, kinds })]);
     return r.rows[0]?.id ?? (await c.query("SELECT id FROM work_item WHERE kind = 'tailor' AND payload->>'match_id' = $1 AND status IN ('queued','running')", [m.id])).rows[0].id;
+  });
+}
+
+/**
+ * Make one document again from the profile as it is now, keeping the old draft in the history.
+ * Used when a draft was made from an empty profile that has since filled in (Yong, 2026-11-15).
+ */
+export async function remakeDocument(pool: pg.Pool, session: Session, docId: string): Promise<void> {
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const d = (await c.query("SELECT id, match_id, type FROM document WHERE id = $1", [docId])).rows[0];
+    if (!d || !d.match_id) throw new DomainError("TC_NOT_FOUND");
+    await c.query(`INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING`,
+      [JSON.stringify({ match_id: d.match_id, kinds: [kindOf(d.type)], from_doc: d.id })]);
   });
 }
 

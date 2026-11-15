@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getDocument, markDiffViewed, tailorWork, type DocumentView } from "@tc-hunter/db";
+import { getDocument, markDiffViewed, remakeDocument, tailorReadiness, tailorWork, type DocumentView } from "@tc-hunter/db";
 import { formatMetric, monthYear, type LetterSource, type ResumeSource } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -48,6 +48,13 @@ export default async function DocumentPage(props: Props) {
   const here = `/documents/${d.ref}${pane === "doc" ? "" : `?pane=${pane}`}`;
   const draft = d.status === "draft";
   const latest = d.versions[0];
+  // A resume drafted while the profile had no work history: once the profile has roles, make it again by itself
+  // (Yong, 2026-11-15: "just take all the latest information available"). The empty draft stays in the history.
+  if (d.source.kind === "resume" && draft && d.source.experience.length === 0 && params.revising !== "1" && d.ref === latest?.ref
+      && (await tailorReadiness(pool, session)).roles > 0) {
+    await remakeDocument(pool, session, d.id);
+    redirect(`/documents/${d.ref}?revising=1`);
+  }
   // After "Revise with feedback": wait here, then move to the new version once it's made.
   const work = params.revising === "1" ? await tailorWork(pool, session, d.job.ref) : null;
   const revising = !!work && (work.status === "queued" || work.status === "running");
@@ -62,7 +69,9 @@ export default async function DocumentPage(props: Props) {
       <p className="job-meta">{d.job.employer} · Version {d.version} · {STATUS_LABEL[d.status]}</p>
       <Flash saved={saved || params.approved === "1"} error={error} />
       {params.approved === "1" ? <p className="status" role="status">Approved. You can download it below.</p> : null}
-      {revising ? <><meta httpEquiv="refresh" content="4" /><p className="status" role="status">Claude is making the next version from your feedback. This page moves to it when it's ready.</p></> : null}
+      {revising ? <><meta httpEquiv="refresh" content="4" /><p className="status" role="status">{d.source.kind === "resume" && d.source.experience.length === 0
+        ? "This draft was made before your work history was in it. Claude is writing it again from your whole profile now. This page moves to it when it's ready."
+        : "Claude is making the next version from your feedback. This page moves to it when it's ready."}</p></> : null}
       {revisionFailed ? <p className="error" role="alert">The new version couldn't be made this time. Your feedback wasn't lost: send it again below.</p> : null}
       {d.meta.feedback ? (
         <p className="muted">Made from your feedback{d.meta.revised_from ? ` on the previous version` : ""}: “{String(d.meta.feedback)}”
@@ -160,7 +169,7 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
   const shown = s.experience.reduce((n, i) => n + i.lines.filter((l) => l.included).length, 0);
   return (
     <section className="doc-preview" aria-label="This version">
-      {s.experience.length === 0 ? (
+      {s.experience.length === 0 && d.status === "draft" && d.ref !== d.versions[0]?.ref ? null : s.experience.length === 0 ? (
         <p className="error" role="alert">This resume has no experience in it, because your profile had no work history when it was made.{" "}
           <a href="/profile/import">Add your resume</a> or <a href="/profile/experience">a role</a>, then go back to the job and press "Prepare a fresh draft".</p>
       ) : null}
