@@ -1,4 +1,4 @@
-import { employmentKind, goalLevelLabel, goalName, goalTypeLabel, timeFrameLabel, type Goal } from "@tc-hunter/domain";
+import { employmentKind, goalLevelIndex, goalLevelLabel, jobLevelKey, jobLevelLabel, goalName, goalTypeLabel, timeFrameLabel, type Goal } from "@tc-hunter/domain";
 import { ScoreBadge, pay, place } from "@/components/jobs/JobBits";
 
 /**
@@ -6,11 +6,11 @@ import { ScoreBadge, pay, place } from "@/components/jobs/JobBits";
  * side, sortable by any column. Each job sits under the goal it fits best.
  */
 
-export const GOAL_SORTS = ["score", "company", "role", "location", "type", "pay", "posted", "status"] as const;
+export const GOAL_SORTS = ["score", "company", "role", "level", "location", "type", "pay", "posted", "status"] as const;
 export type GoalSort = (typeof GOAL_SORTS)[number];
 
 const COLS: Array<[GoalSort, string]> = [
-  ["score", "Match"], ["role", "Role"], ["company", "Company"], ["location", "Location"], ["type", "Type"], ["pay", "Pay"], ["posted", "Posted"], ["status", "Status"],
+  ["score", "Match"], ["role", "Role"], ["level", "Level"], ["company", "Company"], ["location", "Location"], ["type", "Type"], ["pay", "Pay"], ["posted", "Posted"], ["status", "Status"],
 ];
 const PER_YEAR: Record<string, number> = { year: 1, month: 12, hour: 2080 };
 
@@ -25,7 +25,7 @@ const shortDate = (d: Date | string | null) => (d ? new Date(d).toLocaleDateStri
 
 function sortRows(rows: Array<Record<string, any>>, by: GoalSort, dir: "asc" | "desc") {
   const key = (r: Record<string, any>): string | number | null => ({
-    score: r.score, company: String(r.employer_canonical ?? "").toLowerCase(), role: String(r.title ?? "").toLowerCase(),
+    score: r.score, level: ((k) => (k === "none" ? null : goalLevelIndex(k as never)))(jobLevelKey(r.title ?? "")), company: String(r.employer_canonical ?? "").toLowerCase(), role: String(r.title ?? "").toLowerCase(),
     location: place(r).toLowerCase(), type: kindOf(r), pay: yearlyPay(r), posted: r.posted_at ? new Date(r.posted_at).getTime() : null, status: statusOf(r),
   })[by];
   const sign = dir === "asc" ? 1 : -1;
@@ -68,6 +68,7 @@ function GoalTable({ title, sub, rows, by, dir, sortHref }: {
                 <tr key={r.id} className={r.filtered ? "is-filtered" : r.seen_at ? "" : "is-unseen"}>
                   <td><ScoreBadge score={r.score} filtered={r.filtered} /></td>
                   <td className="wrap"><a href={`/jobs/${r.public_ref}`}>{r.title}</a>{r.ladder_label ? <div className="muted small">{r.ladder_label}</div> : null}</td>
+                  <td>{((k) => k === "none" ? <span className="muted">Not stated</span> : jobLevelLabel(k))(jobLevelKey(r.title ?? ""))}</td>
                   <td>{r.employer_canonical}</td>
                   <td className="wrap">{place(r)}</td>
                   <td>{kindOf(r)}</td>

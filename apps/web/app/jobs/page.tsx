@@ -1,6 +1,6 @@
 import { jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork, scanStatus } from "@tc-hunter/db";
 import { LookAgainButton, ScanStatusBox } from "@/components/jobs/ScanStatus";
-import { t } from "@tc-hunter/domain";
+import { JOB_LEVEL_FILTERS, jobLevelKey, jobLevelLabel, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -34,11 +34,16 @@ export default async function JobsPage(props: PageProps) {
     listAlerts(pool, session), listAdjustments(pool, session), jobsSummary(pool, session), listGoals(pool, session), scanStatus(pool, session),
   ]);
   const source = sources.some((s) => s.id === params.source) ? params.source : undefined;
-  const { rows, counts } = await listMatches(pool, session, { status, sort, ladder, source, showFiltered });
+  // Level filter (Yong, 2026-11-15): any number of levels, read from the job title.
+  const rawLevels = (await props.searchParams).level;
+  const levels = [...new Set((Array.isArray(rawLevels) ? rawLevels : rawLevels ? rawLevels.split(",") : []).filter((l) => JOB_LEVEL_FILTERS.some(([k]) => k === l)))];
+  const matched = await listMatches(pool, session, { status, sort, ladder, source, showFiltered });
+  const { counts } = matched;
+  const rows = levels.length ? matched.rows.filter((r) => levels.includes(jobLevelKey(r.title ?? ""))) : matched.rows;
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
     const all = { tab: status, sort, ladder, source, filtered: showFiltered ? "1" : undefined, view: view === "list" ? "list" : undefined,
-      gsort: gsort === "score" ? undefined : gsort, gdir: params.gdir, ...over };
+      gsort: gsort === "score" ? undefined : gsort, gdir: params.gdir, level: levels.length ? levels.join(",") : undefined, ...over };
     for (const [k, v] of Object.entries(all)) if (v && !(k === "tab" && v === "new") && !(k === "sort" && v === "score") && !(k === "view" && v === "goals")) p.set(k, v);
     const s = p.toString();
     return s ? `/jobs?${s}` : "/jobs";
@@ -100,6 +105,9 @@ export default async function JobsPage(props: PageProps) {
           {view === "goals" ? null : <input type="hidden" name="view" value="list" />}
           {view === "list" ? <label>Sort by<select name="sort" defaultValue={sort}>{SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label> : null}
           <label>Career step<select name="ladder" defaultValue={ladder ?? ""}>{LADDER.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
+          <fieldset className="level-filter"><legend>Level</legend>
+            {JOB_LEVEL_FILTERS.map(([k, l]) => <label key={k} className="check"><input type="checkbox" name="level" value={k} defaultChecked={levels.includes(k)} /> {l}</label>)}
+          </fieldset>
           {sources.length > 1 ? (
             <label>Found at<select name="source" defaultValue={source ?? ""}><option value="">Anywhere</option>{sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
           ) : null}
@@ -107,6 +115,8 @@ export default async function JobsPage(props: PageProps) {
           <button className="small">Apply</button>
         </form>
       </Details>
+
+      {levels.length ? <p className="muted">Showing {levels.map(jobLevelLabel).join(", ")} jobs only ({rows.length} of {matched.rows.length}). <a href={q({ level: undefined })}>Show every level</a></p> : null}
 
       {view === "goals" && (rows.length || goals.some((g) => g.active)) ? (
         <>
@@ -122,7 +132,7 @@ export default async function JobsPage(props: PageProps) {
               <ScoreBadge score={r.score} filtered={r.filtered} />
               <div className="job-main">
                 <a className="job-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>
-                <div className="job-meta">{r.employer_canonical} · {place(r)}{pay(r) ? ` · ${pay(r)}` : ""} · {posted(r.posted_at)}</div>
+                <div className="job-meta">{jobLevelKey(r.title ?? "") !== "none" ? `${jobLevelLabel(jobLevelKey(r.title ?? ""))} · ` : ""}{r.employer_canonical} · {place(r)}{pay(r) ? ` · ${pay(r)}` : ""} · {posted(r.posted_at)}</div>
                 <div className="reason">{r.reason_line}</div>
                 {r.filtered ? <div className="muted">Ruled out: {(r.filter_reasons as string[]).join("; ")}</div> : null}
                 {r.ladder_label ? <span className={`chip ladder-${r.ladder_tag}`}>{r.ladder_label}</span> : null}
