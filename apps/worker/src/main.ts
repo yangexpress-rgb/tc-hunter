@@ -3,7 +3,7 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, type EmailDeps } from "@tc-hunter/db";
+import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type RequirementsReader,
@@ -35,8 +35,17 @@ const digest = {
 // Finding places to look (Yong, 2026-11-14): Claude suggests employers for each goal when set up;
 // otherwise only the companies the person named are looked up. Every board is checked before it's followed.
 const discover = { proposer: resumeReaderName() === "claude" && process.env.TC_COMPANY_FINDER !== "rules" ? new ClaudeCompanyProposer() : new NamedCompaniesOnly() };
-// Job-search sites (Yong, 2026-11-14): searched first for every goal; each turns on when its free key is set.
-const search = searchSites(process.env).sites;
+// Job-search sites (Yong, 2026-11-14): searched first for every goal; each turns on when its free key is set,
+// in Settings (read again every minute, so a new key works without a restart) or as a Railway variable.
+let search = searchSites(process.env).sites;
+let searchReadAt = 0;
+async function currentSearch() {
+  if (Date.now() - searchReadAt > 60_000) {
+    try { search = searchSites(await settingsEnv(pool, cfg, process.env)).sites; searchReadAt = Date.now(); }
+    catch (e) { log.warn("worker.settings_failed", { message: String((e as Error).message ?? e).slice(0, 200) }); }
+  }
+  return search;
+}
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
@@ -60,7 +69,7 @@ async function main() {
         if (queued || mail) log.info("worker.scheduled", { scans: queued, email_checks: mail });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search: await currentSearch() });
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
       // Counts and timings only, never names or content, so a stuck or failed search can be traced.
       else log[did.ok ? "info" : "warn"]("work.finished", { kind: did.kind, ok: did.ok, seconds: Math.round(did.ms / 1000), attempt: did.attempt, ...(did.result ?? {}), ...(did.error ? { error: did.error } : {}) });

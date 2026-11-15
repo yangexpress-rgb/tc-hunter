@@ -343,3 +343,9 @@ table.jobs-matrix tr.is-filtered td { color: var(--muted); }
 table.jobs-matrix tr.is-unseen td:nth-child(2) a { font-weight: 600; }
 .scan-status progress { width: 100%; height: 8px; accent-color: var(--accent, currentColor); }
 .scan-status .error.small { font-weight: 500; }
+/* Job-site keys in Settings */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ok { color: var(--accent); font-weight: 600; }
+#job-sites fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; }
+#job-sites label { display: block; margin: 8px 0; }
+#job-sites input[type="password"], #job-sites input[type="email"] { display: block; width: 100%; max-width: 420px; }
