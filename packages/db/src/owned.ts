@@ -13,6 +13,7 @@ export const APPLICANT_OWNED_TABLES = [
   "application_packet", "packet_field", "packet_state_event", "submission_attempt", "site_account",
   "audit_event", "request_key", "import_batch", "applicant_job_source", "posting_alert", "work_item", "score_calibration", "email_connection", "email_signal", "extension_device",
   "resume_file", "resume_digest", "honor_award", "reader_prompt", "hunt_goal", "discovery_run",
+  "apply_setting", "standing_answer", "apply_run", "apply_shot",
 ] as const;
 export type OwnedTable = (typeof APPLICANT_OWNED_TABLES)[number];
 

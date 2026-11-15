@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { budgetNow, getApplication, hasFreshStepUp, getPacket, listDevices, listEmailSignals, trackerSummary } from "@tc-hunter/db";
+import { applyStatus, budgetNow, getApplication, hasFreshStepUp, getPacket, listDevices, listEmailSignals, trackerSummary } from "@tc-hunter/db";
 import { APPLICATION_STAGES, CLOSED, OUTCOME_LABEL, STAGE_LABEL, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -7,6 +7,7 @@ import { Flash } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
 import { BudgetLine, dateInput, day, localInput, when } from "@/components/applications/AppBits";
 import { EmailSuggestions } from "@/components/applications/EmailSuggestions";
+import { ApplyPanel } from "@/components/applications/ApplyPanel";
 import { PacketCard } from "@/components/applications/Packet";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
@@ -40,6 +41,7 @@ export default async function ApplicationPage(props: Props) {
   const { pool, cfg } = app();
   const [{ saved, error, params }, a, sum, signals, packet, devices] = await Promise.all([flashOf(props), getApplication(pool, cfg, session, ref),
     trackerSummary(pool, session), listEmailSignals(pool, session, ref), getPacket(pool, cfg, session, ref), listDevices(pool, session)]);
+  const applying = await applyStatus(pool, session, ref);
   if (!a) notFound();
   const tz = sum.timeZone;
   const back = `/applications/${a.public_ref}`;
@@ -49,6 +51,9 @@ export default async function ApplicationPage(props: Props) {
   const letter = (a.docs as Array<{ public_ref: string; type: string; version: number; status: string }>).find((d) => d.type === "cover_letter");
   const budget = stage === "ready_to_apply" || stage === "tailoring" || stage === "interested" ? await budgetNow(pool, session) : null;
   const packetActive = !!packet && (["approved_to_apply", "filling", "waiting_for_applicant", "ready_to_submit"].includes(packet.state) || packet.outcomeUnknown);
+  const serverPacket = !!packet && !!applying.packetId && applying.packetId === packet.id;
+  const open = stage === "ready_to_apply" || stage === "tailoring" || stage === "interested";
+  const canApply = open && resume?.status === "approved" && !["queued", "running"].includes(applying.status);
   const confirmation = typeof params.confirmation === "string" && /^[A-Za-z0-9#:/._ -]{1,100}$/.test(params.confirmation) ? params.confirmation : "";
 
   return (
@@ -78,14 +83,16 @@ export default async function ApplicationPage(props: Props) {
       {params.send_approved === "1" ? <p className="status" role="status">Approved. Go back to their form and choose Send it.</p> : null}
       {params.not_sent === "1" ? <p className="status" role="status">Noted. Check your answers below and approve again when you&apos;re ready.</p> : null}
       {params.confirmed === "1" ? <p className="status" role="status">Thanks, that&apos;s confirmed.</p> : null}
+      {params.applying === "1" ? <p className="status" role="status">On it. TC Hunter is opening the employer&apos;s form now.</p> : null}
+      {open || applying.status !== "none" ? <ApplyPanel appRef={a.public_ref} employer={a.employer_canonical} initial={applying} canApply={canApply} /> : null}
       {packet ? (
-        <PacketCard p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} />
+        <PacketCard server={serverPacket} p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} />
       ) : null}
 
       {(stage === "ready_to_apply" || stage === "tailoring" || stage === "interested") && !packetActive ? (
         <section className="card" aria-label="I applied">
           <h2>Applied already?</h2>
-          <p className="muted">TC Hunter never sends anything for you. Apply on the employer's site, then tell us here.
+          <p className="muted">If you applied on the employer's site yourself, tell us here.
             {a.apply_url ? <> <a href={a.apply_url} rel="noopener noreferrer" target="_blank">Open the employer's page</a></> : null}</p>
           {resume?.status === "approved" ? <p className="muted">Your files: <a href={`/documents/${resume.public_ref}/pdf`}>resume (PDF)</a>{letter?.status === "approved" ? <>, <a href={`/documents/${letter.public_ref}/pdf`}>cover letter (PDF)</a></> : null}</p> : null}
           {budget && !packet ? <BudgetLine budget={budget} /> : null}

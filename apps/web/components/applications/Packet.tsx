@@ -3,13 +3,14 @@ import type { getPacket } from "@tc-hunter/db";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Details } from "@/components/Layers";
 import { BudgetLine, day } from "@/components/applications/AppBits";
-import { packetAnswerAction, packetApproveAction, resolveOutcomeAction, sendApproveAction, submittedAction } from "@/app/applications/actions";
+import { packetAnswerAction, packetApproveAction, resolveOutcomeAction, sendApproveAction, serverSendApproveAction, submittedAction } from "@/app/applications/actions";
 import { stepUpAction } from "@/app/settings/vault-actions";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 
 const FROM: Record<string, string> = {
   master_profile: "From your profile", answer_bank: "Your saved answer", tailored_doc: "Your approved document for this job", applicant_typed: "You typed it",
+  standing_answer: "Your standing answer in Settings",
 };
 const STEP: Record<string, string> = {
   attestation: "A statement you confirm yourself", work_auth: "Your right to work", eeo: "A personal question: always your choice",
@@ -40,9 +41,12 @@ function SubmittedForm({ p, back, confirmation }: { p: Packet; back: string; con
  * each answer comes from, and which questions are always the applicant's own.
  * TC Hunter never presses Submit; the applicant does, on the employer's site.
  */
-export function PacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa }: {
+export function PacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa, server = false }: {
   p: Packet; back: string; timeZone: string; budget: { cap: number | null; used: number } | null; confirmation: string; fresh: boolean; mfa: boolean;
+  /** Filled by TC Hunter's own browser (hands-free applying), not the browser extension. */
+  server?: boolean;
 }) {
+  if (server) return <ServerPacketCard p={p} back={back} timeZone={timeZone} budget={budget} confirmation={confirmation} fresh={fresh} mfa={mfa} />;
   const yours = p.fields.filter((f) => !f.willFill);
   const review = p.state === "packet_ready_for_review";
   const toApprove = p.state === "ready_to_submit" && p.guided.guided && !p.submitApproved;
@@ -194,6 +198,146 @@ export function PacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa
         <AdvancedRow label="Resume" value={p.resume} />
         <AdvancedRow label="Cover letter" value={p.letter ?? "-"} />
         {p.fields.map((f, i) => <AdvancedRow key={f.id} label={`Field ${i + 1}`} value={`${f.type} · ${f.step ?? f.source ?? "none"} · confidence ${f.confidence.toFixed(2)} · ${f.fillStatus}`} />)}
+        {(p.events as Array<{ from_state: string | null; to_state: string; actor: string; created_at: Date }>).map((e, i) => (
+          <AdvancedRow key={i} label={`Event ${i + 1}`} value={`${e.from_state ?? "-"} → ${e.to_state} (${e.actor}) ${new Date(e.created_at).toISOString()}`} />
+        ))}
+      </Advanced>
+    </section>
+  );
+}
+
+function AnswerForm({ p, f, back, label }: { p: Packet; f: Packet["fields"][number]; back: string; label: string }) {
+  return (
+    <form action={packetAnswerAction} className="inline-form">
+      <Hidden appRef={p.appRef} back={back} />
+      <input type="hidden" name="field" value={f.id} />
+      <input type="hidden" name="question" value={f.label} />
+      {f.options?.length ? (
+        <label className="sr-label">Your answer<select name="answer" defaultValue={f.answer ?? ""}><option value="">Leave for me</option>{f.options.map((o) => <option key={o}>{o}</option>)}</select></label>
+      ) : (
+        <label className="sr-label">Your answer{f.type === "textarea" ? <textarea name="answer" rows={3} maxLength={10000} defaultValue={f.answer ?? ""} /> : <input name="answer" maxLength={1000} defaultValue={f.answer ?? ""} />}</label>
+      )}
+      <label className="small"><input type="checkbox" name="remember" value="1" defaultChecked /> Use this answer for other applications too</label>
+      <button className="secondary">{label}</button>
+    </form>
+  );
+}
+
+/**
+ * The answers TC Hunter's own browser put (or will put) into the employer's form. Layer 1:
+ * each answer and where it came from, the questions it needs from the applicant (required
+ * ones first, in red), and any answer taken from a standing answer in Settings, flagged.
+ */
+function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa }: {
+  p: Packet; back: string; timeZone: string; budget: { cap: number | null; used: number } | null; confirmation: string; fresh: boolean; mfa: boolean;
+}) {
+  const review = p.state === "packet_ready_for_review";
+  const missing = p.fields.filter((f) => f.required && !f.willFill);
+  const standing = p.fields.filter((f) => f.source === "standing_answer");
+  const toApprove = p.state === "ready_to_submit" && !p.submitApproved && !p.submitStarted && !!p.filledHash;
+  return (
+    <section className="card packet" id="packet" aria-label="Your answers for this application">
+      <h2>{p.state === "submitted" ? "Sent" : review ? `Your answers for ${p.employer}` : `Answers going to ${p.employer}`}</h2>
+      {p.state === "submitted" ? (
+        <>
+          <p className="status">Sent on {p.submittedAt ? day(p.submittedAt, timeZone) : "their site"}.
+            {p.confirmationRef ? <> Their confirmation number: <strong>{p.confirmationRef}</strong>.</> : " They didn't show a confirmation number."}</p>
+          <p><a href={`/applications/${p.appRef}/receipt`}>Download your receipt (PDF)</a></p>
+        </>
+      ) : null}
+      {missing.length && review ? <p className="error">{missing.length === 1 ? "1 required question needs" : `${missing.length} required questions need`} your answer. Answer below and TC Hunter carries on by itself.</p> : null}
+      {standing.length && p.state !== "submitted" ? (
+        <p className="warn">{standing.length === 1 ? "1 answer comes" : `${standing.length} answers come`} from your standing answers in Settings (statements, consents, signatures or personal questions you let TC Hunter answer). Check them: you are responsible for what they say. <a href="/settings#applying">Change in Settings</a></p>
+      ) : null}
+      {p.outcomeUnknown ? (
+        <>
+          <h3>Did it go through?</h3>
+          <div className="inline-actions">
+            <form action={resolveOutcomeAction} className="inline-form">
+              <Hidden appRef={p.appRef} back={back} />
+              <input type="hidden" name="went" value="1" /><input type="hidden" name="rk" value={randomUUID()} />
+              <label>Confirmation number, if you have one<input name="confirmation" maxLength={41} pattern="[A-Za-z0-9\-]{4,41}" defaultValue={confirmation} /></label>
+              <button>It went through</button>
+            </form>
+            <form action={resolveOutcomeAction}>
+              <Hidden appRef={p.appRef} back={back} />
+              <input type="hidden" name="went" value="0" /><input type="hidden" name="rk" value={randomUUID()} />
+              <button className="secondary">It didn&apos;t</button>
+            </form>
+          </div>
+          <p className="muted">Not sure? Look in your email or on {p.employer}&apos;s site first. If their confirmation email arrives, it shows up here.</p>
+        </>
+      ) : null}
+
+      {p.state !== "submitted" && !p.outcomeUnknown ? (
+        <ul className="plain packet-fields">
+          {p.fields.map((f) => (
+            <li key={f.id} className={f.required && !f.willFill ? "packet-field yours" : "packet-field"}>
+              <div className="packet-q">{f.label}</div>
+              {f.step ? (
+                f.required
+                  ? <div className="error small">{STEP[f.step] ?? "Always yours"}. Required, so TC Hunter can&apos;t send this form without it. Set a standing answer in <a href="/settings#applying">Settings</a>, or apply on their site yourself.{f.note ? <div>{f.note}</div> : null}</div>
+                  : <div className="muted">{STEP[f.step] ?? "Always yours"}. Optional: TC Hunter leaves it blank.</div>
+              ) : f.willFill ? (
+                <div><span className="packet-a">{f.type === "file" ? "Your PDF" : f.answer}</span> <span className={f.source === "standing_answer" ? "warn" : "muted"}>· {FROM[f.source ?? ""] ?? ""}{f.fillStatus === "filled" ? (f.type === "file" ? " · attached" : " · typed") : ""}</span>
+                  {review && f.type !== "file" ? <Details summary="Change"><AnswerForm p={p} f={f} back={back} label="Save" /></Details> : null}
+                </div>
+              ) : (
+                <div>
+                  {f.note ? <div className={f.required ? "error small" : "muted"}>{f.note}{f.required ? " Required." : " Optional: left blank unless you answer."}</div> : null}
+                  {review && f.type !== "file" ? <AnswerForm p={p} f={f} back={back} label="Use this answer" /> : null}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {review && !missing.length ? (
+        <>
+          {budget ? <BudgetLine budget={budget} /> : null}
+          <form action={packetApproveAction}>
+            <Hidden appRef={p.appRef} back={back} />
+            <input type="hidden" name="packet" value={p.id} />
+            <input type="hidden" name="hash" value={p.hash} />
+            <input type="hidden" name="rk" value={randomUUID()} />
+            <button>Approve these answers</button>
+          </form>
+          <p className="muted">TC Hunter then fills in their form and sends it{p.letter ? " with your resume and cover letter" : " with your resume"}.</p>
+        </>
+      ) : null}
+
+      {toApprove ? (
+        fresh ? (
+          <form action={serverSendApproveAction}>
+            <Hidden appRef={p.appRef} back={back} />
+            <input type="hidden" name="filled" value={p.filledHash ?? ""} />
+            <input type="hidden" name="rk" value={randomUUID()} />
+            <button>Approve sending this application</button>
+          </form>
+        ) : (
+          <form action={stepUpAction} className="stack">
+            <input type="hidden" name="back" value={back} />
+            <p className="muted">To approve sending, first confirm it&apos;s you.</p>
+            <label>Password<input name="password" type="password" autoComplete="current-password" /></label>
+            {mfa ? <label>Or the 6-digit code from your authenticator app<input name="code" inputMode="numeric" pattern="[0-9]{6}" autoComplete="one-time-code" /></label> : null}
+            <button className="secondary">Confirm it&apos;s me</button>
+          </form>
+        )
+      ) : null}
+
+      {p.state !== "submitted" && !p.outcomeUnknown && !p.submitStarted ? (
+        <Details summary="Applied on their site yourself?"><SubmittedForm p={p} back={back} confirmation={confirmation} /></Details>
+      ) : null}
+
+      <Advanced>
+        <AdvancedRow label="Packet" value={`v${p.version} · ${p.state}`} />
+        <AdvancedRow label="Packet hash" value={p.hash} />
+        <AdvancedRow label="Form site" value={`${p.formHost ?? "-"} (${p.ats ?? "unknown"})`} />
+        <AdvancedRow label="Filled form hash" value={p.filledHash ?? "-"} />
+        <AdvancedRow label="Resume" value={p.resume} />
+        <AdvancedRow label="Cover letter" value={p.letter ?? "-"} />
+        {p.fields.map((f, i) => <AdvancedRow key={f.id} label={`Field ${i + 1}`} value={`${f.type}${f.required ? " · required" : ""} · ${f.step ?? f.source ?? "none"}${f.standingKind ? ` (${f.standingKind})` : ""} · confidence ${f.confidence.toFixed(2)} · ${f.fillStatus}`} />)}
         {(p.events as Array<{ from_state: string | null; to_state: string; actor: string; created_at: Date }>).map((e, i) => (
           <AdvancedRow key={i} label={`Event ${i + 1}`} value={`${e.from_state ?? "-"} → ${e.to_state} (${e.actor}) ${new Date(e.created_at).toISOString()}`} />
         ))}

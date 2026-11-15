@@ -1,4 +1,4 @@
-import { listApplications, listEmailSignals, trackerSummary } from "@tc-hunter/db";
+import { applyStatuses, listApplications, listEmailSignals, trackerSummary } from "@tc-hunter/db";
 import { CLOSED, STAGE_LABEL, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { TopBar } from "@/components/TopBar";
@@ -17,14 +17,27 @@ const GROUPS: Array<{ title: string; stages: ApplicationStage[] }> = [
 ];
 
 type AppRow = Awaited<ReturnType<typeof listApplications>>[number];
+type Applying = { status: string; step: string | null; problem: string | null };
 
-function Row({ a, today }: { a: AppRow; today: string }) {
+/** One line about TC Hunter's browser on this application; problems in red. */
+function ApplyLine({ s }: { s?: Applying }) {
+  if (!s) return null;
+  if (s.status === "queued") return <div className="status small">Applying for you: starting soon</div>;
+  if (s.status === "running") return <div className="status small">Applying for you now: {s.step}</div>;
+  if (s.status === "sent") return <div className="ok small">Sent by TC Hunter</div>;
+  if (s.status === "waiting") return <div className={s.problem ? "error small" : "warn small"}>Needs you: {s.problem ?? s.step}</div>;
+  if (s.status === "failed" || s.status === "unclear" || s.status === "stopped") return <div className="error small">{s.problem ?? s.step}</div>;
+  return null;
+}
+
+function Row({ a, today, applying }: { a: AppRow; today: string; applying?: Applying }) {
   const due = a.next_step_due ? (a.next_step_due instanceof Date ? a.next_step_due : new Date(a.next_step_due)) : null;
   return (
     <li className="card app-row">
       <div className="job-main">
         <a className="job-title" href={`/applications/${a.public_ref}`}>{a.title}</a>
         <div className="job-meta">{a.employer_canonical} · {STAGE_LABEL[a.stage as ApplicationStage]}</div>
+        <ApplyLine s={applying} />
         {a.next_step ? <div className={due && dueText(due, today).late ? "warn" : "muted"}>{a.next_step}{due ? `, ${dueText(due, today).text}` : ""}</div> : null}
       </div>
     </li>
@@ -36,6 +49,7 @@ export default async function ApplicationsPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
   const [{ error, params }, rows, sum, signals] = await Promise.all([flashOf(props), listApplications(pool, session), trackerSummary(pool, session), listEmailSignals(pool, session)]);
+  const applying = await applyStatuses(pool, session);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: sum.timeZone }).format(new Date());
   const closed = rows.filter((r) => CLOSED.includes(r.stage));
   return (
@@ -64,13 +78,13 @@ export default async function ApplicationsPage(props: PageProps) {
         return list.length ? (
           <section key={g.title}>
             <h2>{g.title} <span className="count muted">{list.length}</span></h2>
-            <ul className="plain job-list">{list.map((a) => <Row key={a.id} a={a} today={today} />)}</ul>
+            <ul className="plain job-list">{list.map((a) => <Row key={a.id} a={a} today={today} applying={applying[a.public_ref]} />)}</ul>
           </section>
         ) : null;
       })}
       {closed.length ? (
         <Details summary={`Closed (${closed.length})`}>
-          <ul className="plain job-list">{closed.map((a) => <Row key={a.id} a={a} today={today} />)}</ul>
+          <ul className="plain job-list">{closed.map((a) => <Row key={a.id} a={a} today={today} applying={applying[a.public_ref]} />)}</ul>
         </Details>
       ) : null}
       <p><a href="/reports">See your reports</a> · <a href="/reports/weekly">Weekly look back</a></p>

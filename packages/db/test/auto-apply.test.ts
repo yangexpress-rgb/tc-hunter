@@ -1,0 +1,328 @@
+import { createHash } from "node:crypto";
+import type pg from "pg";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  MemorySecretStore, RulesLetterProposer, RulesRequirementsReader, RulesResumeProposer, SecretValue, SourceRefusedError,
+  type ApplyBrowser, type ApplyPage, type FillItem, type Fetcher, type FormField, type MailReader, type PageForm, type WorkdayPage,
+} from "@tc-hunter/domain";
+import {
+  addEvidence, addFact, answerPacketField, applyStatus, applyStatuses, applyShot, approveDocument, approvePacket, approveServerSend, connectEmail, continueAfterAnswers,
+  getApplication, getApplySettings, getPacket, listDocuments, listMatches, markDiffViewed, requestApply, requestLink, requestTailor, runNextWork,
+  saveAbout, saveAnswer, saveApplyMode, savePreferences, setStandingAnswer, trackJob, withApplicant,
+  type AppConfig, type ApplyDeps, type Session, type WorkDeps,
+} from "../src";
+import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
+
+/**
+ * Hands-free applying (Yong, 2026-11-15) with a stand-in for TC Hunter's own browser:
+ * the database steps, the approvals each Settings choice allows, the hard limits and the
+ * one press of Submit. The real browser runs against local pages in apps/worker/test.
+ */
+
+interface FakeSpec { url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[] }
+
+class FakePage implements ApplyPage {
+  values = new Map<string, string>();
+  clicks = 0;
+  fills: FillItem[][] = [];
+  constructor(public spec: FakeSpec) {}
+  url() { return this.spec.url; }
+  async openForm() { return this.readForm(); }
+  async readForm(): Promise<PageForm> {
+    // "more" questions appear once the first answers are in (a form that grows as you answer).
+    const fields = this.fills.length && this.spec.more ? [...this.spec.fields, ...this.spec.more] : this.spec.fields;
+    return { url: this.spec.url, fields, captcha: !!this.spec.captcha, humanCheck: false };
+  }
+  async fill(items: FillItem[]) {
+    this.fills.push(items);
+    for (const i of items) this.values.set(i.key, i.file ? `file:${i.file.name}:${i.file.bytes.length}` : String(i.value));
+    return items.map((i) => ({ key: i.key, status: "filled" as const }));
+  }
+  async filledHash() { return createHash("sha256").update(JSON.stringify([...this.values].sort())).digest("hex"); }
+  async submit() { this.clicks++; return true; }
+  async now() {
+    if (!this.clicks) return { url: this.spec.url, text: "", errors: [], humanCheck: false };
+    if (this.spec.after === "thanks") return { url: `${this.spec.url}/confirmation`, text: "Thank you for applying! Your confirmation number: GH-77120", errors: [], humanCheck: false };
+    if (this.spec.after === "errors") return { url: this.spec.url, text: "Please fix the errors", errors: ["Phone is required"], humanCheck: false };
+    return { url: this.spec.url, text: "Loading", errors: [], humanCheck: false };
+  }
+  async screenshot() { return new Uint8Array([0xff, 0xd8, 0xff, 1, 2, 3]); }
+  async close() { /* nothing to close */ }
+}
+
+class FakeBrowser implements ApplyBrowser {
+  pages: FakePage[] = [];
+  constructor(public spec: () => FakeSpec, public workday?: () => WorkdayPage) {}
+  async open() { const p = new FakePage(this.spec()); this.pages.push(p); return p; }
+  get openWorkday() { return this.workday ? async () => this.workday!() : undefined; }
+  get clicks() { return this.pages.reduce((n, p) => n + p.clicks, 0); }
+}
+
+const GH = (n: number) => `https://boards.greenhouse.io/contoso/jobs/${n}`;
+const BASE: FormField[] = [
+  { key: "#first_name", label: "First Name *", type: "text", required: true },
+  { key: "#last_name", label: "Last Name *", type: "text", required: true },
+  { key: "#email", label: "Email *", type: "email", required: true },
+  { key: "#resume", label: "Resume/CV *", type: "file", required: true },
+  { key: "#work_auth", label: "Are you legally authorised to work in this country? *", type: "select", options: ["Yes", "No"], required: true },
+  { key: "#gender", label: "Gender", type: "select", options: ["Male", "Female", "Decline to self-identify"] },
+];
+
+let pool: pg.Pool;
+let cfg: AppConfig;
+let yong: Session, leo: Session;
+const apps: string[] = [];
+const noFetch: Fetcher = { async get() { throw new SourceRefusedError("refused", "test"); } };
+let browser: FakeBrowser;
+let applyDeps: ApplyDeps;
+const deps = (): WorkDeps => ({ fetcher: noFetch, reader: new RulesRequirementsReader(), tailor: { resume: new RulesResumeProposer(), letter: new RulesLetterProposer(), cfg }, apply: applyDeps });
+const drain = async () => { while (await runNextWork(pool, deps())) { /* keep going */ } };
+const runNow = async () => { await ownerQuery("UPDATE work_item SET run_after = now() WHERE kind = 'apply' AND status = 'queued'"); await drain(); };
+
+beforeAll(async () => {
+  await freshDatabase();
+  pool = appPool();
+  cfg = testConfig();
+  yong = (await newApplicant(pool, cfg, "Yong")).session;
+  leo = (await newApplicant(pool, cfg, "Leo")).session;
+  await saveAbout(pool, cfg, yong, { preferredName: "Yong", legalName: "Yong Example", email: "yong@example.test", timezone: "America/Toronto" });
+  const job = await addFact(pool, yong, "experience_item", { employment_type: "full_time", title: "Operations Analyst", employer_name: "Northwind", start_date: "2021-01-01", end_date: null });
+  const b = await addFact(pool, yong, "experience_bullet", { experience_item_id: job, text: "Built SQL and Excel reports for planners" });
+  for (const name of ["SQL", "Excel"]) await addEvidence(pool, yong, await addFact(pool, yong, "skill", { canonical_name: name, category: "technical" }), { kind: "experience_bullet", id: b });
+  await savePreferences(pool, yong, { target_titles: ["Operations Analyst"], workplace_types: [], locations: [] });
+  await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
+  browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
+  applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co"];
+  for (const emp of employers) {
+    await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
+  }
+  await drain();
+  for (const emp of employers) {
+    const ref = (await listMatches(pool, yong, { status: "all" })).rows.find((r: { employer_canonical: string }) => r.employer_canonical === emp).public_ref;
+    await requestTailor(pool, yong, ref, ["resume"]);
+    await drain();
+    apps.push(await trackJob(pool, yong, ref));
+  }
+});
+afterAll(async () => { await pool.end(); });
+
+async function approveResume(appRef: string) {
+  const a = (await getApplication(pool, cfg, yong, appRef))!;
+  const d = (await listDocuments(pool, yong, a.job_ref)).find((x) => x.type === "tailored_resume")!;
+  await markDiffViewed(pool, yong, d.id);
+  await approveDocument(pool, cfg, yong, d.id);
+}
+
+describe("hands-free by default", () => {
+  it("the default is hands-free, and approving the resume queues the application by itself", async () => {
+    expect(await getApplySettings(pool, cfg, yong)).toMatchObject({ mode: "hands_free", chosen: false, standing: [] });
+    await approveResume(apps[0]!);
+    expect((await applyStatus(pool, yong, apps[0]!)).status).toBe("queued");
+  });
+
+  it("fills the form, attaches the resume, presses Submit once and records the confirmation, with pictures", async () => {
+    await runNow();
+    expect(browser.clicks).toBe(1);
+    const page = browser.pages.at(-1)!;
+    expect(page.values.get("#first_name")).toBe("Yong");
+    expect(page.values.get("#work_auth")).toBe("Yes");
+    expect(page.values.get("#resume")).toMatch(/^file:.+\.pdf:\d+$/);
+    expect(page.values.has("#gender")).toBe(false);  // a personal question with no standing answer: never touched
+    const s = await applyStatus(pool, yong, apps[0]!);
+    expect(s).toMatchObject({ status: "sent", problem: null });
+    expect(s.steps.at(-1)!.text).toMatch(/GH-77120/);
+    expect(s.shots.map((x) => x.kind)).toEqual(["form_filled", "after_submit"]);
+    expect(Buffer.from((await applyShot(pool, cfg, yong, s.shots[0]!.id))!)).toEqual(Buffer.from([0xff, 0xd8, 0xff, 1, 2, 3]));
+    expect(await applyShot(pool, cfg, leo, s.shots[0]!.id)).toBeNull();
+    const p = (await getPacket(pool, cfg, yong, apps[0]!))!;
+    expect(p).toMatchObject({ state: "submitted", confirmationRef: "GH-77120" });
+    expect(p.receiptRef).toBeTruthy();
+    expect((await getApplication(pool, cfg, yong, apps[0]!))!.stage).toBe("applied");
+    const audit = (await ownerQuery("SELECT action, payload_summary AS payload FROM audit_event WHERE action IN ('packet.approved','packet.submit_approved') ORDER BY at")).rows;
+    expect(audit.map((a) => a.payload.by)).toEqual(["standing_setting", "standing_setting"]);
+    // Running it again does nothing.
+    await requestApply(pool, yong, apps[0]!).catch(() => {});
+    await runNow();
+    expect(browser.clicks).toBe(1);
+  });
+
+  it("Leo sees nothing of Yong's runs", async () => {
+    expect((await applyStatus(pool, leo, apps[0]!)).status).toBe("none");
+    expect(await applyStatuses(pool, leo)).toEqual({});
+  });
+});
+
+describe("the hard limits", () => {
+  it("a required question with no answer stops before anything is typed; the applicant answers once and it carries on", async () => {
+    browser.spec = () => ({ url: GH(2), fields: [...BASE, { key: "#notice", label: "Notice period *", type: "text", required: true }], after: "thanks" });
+    await approveResume(apps[1]!);
+    await runNow();
+    let s = await applyStatus(pool, yong, apps[1]!);
+    expect(s).toMatchObject({ status: "waiting", waitingFor: "answers" });
+    expect(s.problem).toMatch(/1 question needs your answer.*"Notice period \*"/);
+    expect(browser.clicks).toBe(1);
+    const p = (await getPacket(pool, cfg, yong, apps[1]!))!;
+    await answerPacketField(pool, cfg, yong, p.fields.find((f) => f.label.startsWith("Notice"))!.id, "Two weeks");
+    await requestApply(pool, yong, apps[1]!);
+    await runNow();
+    s = await applyStatus(pool, yong, apps[1]!);
+    expect(s.status).toBe("sent");
+    expect(browser.pages.at(-1)!.values.get("#notice")).toBe("Two weeks");
+    expect(browser.clicks).toBe(2);
+  });
+
+  it("a required consent is never ticked without a standing answer; with one, it is, and it's marked as such", async () => {
+    const consent: FormField = { key: "#privacy", label: "I agree to the privacy notice *", type: "checkbox", required: true };
+    browser.spec = () => ({ url: GH(3), fields: [...BASE, consent], after: "thanks" });
+    await approveResume(apps[2]!);
+    await runNow();
+    expect(await applyStatus(pool, yong, apps[2]!)).toMatchObject({ status: "waiting", waitingFor: "answers" });
+    expect(browser.pages.at(-1)!.values.has("#privacy")).toBe(false);
+    await expect(setStandingAnswer(pool, cfg, { ...yong, reauthAt: new Date(0) } as Session, "consent", "I agree")).rejects.toThrow("TC_STEP_UP_REQUIRED");
+    await setStandingAnswer(pool, cfg, yong, "consent", "I agree");
+    await setStandingAnswer(pool, cfg, yong, "eeo", "I don't wish to answer");
+    await requestApply(pool, yong, apps[2]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[2]!)).status).toBe("sent");
+    const page = browser.pages.at(-1)!;
+    expect(page.values.get("#privacy")).toBe("Yes");
+    expect(page.values.get("#gender")).toBe("Decline to self-identify");
+    const p = (await getPacket(pool, cfg, yong, apps[2]!))!;
+    expect(p.fields.find((f) => f.label.startsWith("I agree"))).toMatchObject({ source: "standing_answer", standingKind: "consent", step: null });
+  });
+
+  it("a 'you're a person' check stops it: nothing is typed or sent, and the cause shows", async () => {
+    browser.spec = () => ({ url: GH(4), fields: BASE, captcha: true, after: "thanks" });
+    const clicks = browser.clicks;
+    await approveResume(apps[3]!);
+    await runNow();
+    const s = await applyStatus(pool, yong, apps[3]!);
+    expect(s.status).toBe("failed");
+    expect(s.problem).toMatch(/prove it's a person.*never gets past/);
+    expect(browser.pages.at(-1)!.fills).toHaveLength(0);
+    expect(browser.clicks).toBe(clicks);
+  });
+
+  it("no thank-you page after the click: it stops, never presses again, and waits for the applicant", async () => {
+    browser.spec = () => ({ url: GH(5), fields: BASE, after: "errors" });
+    const clicks = browser.clicks;
+    await approveResume(apps[4]!);
+    await runNow();
+    const s = await applyStatus(pool, yong, apps[4]!);
+    expect(s.status).toBe("unclear");
+    expect(s.problem).toMatch(/"Phone is required".*Nothing will be sent again/);
+    expect(browser.clicks).toBe(clicks + 1);
+    expect((await getPacket(pool, cfg, yong, apps[4]!))!.outcomeUnknown).toBe(true);
+    await expect(requestApply(pool, yong, apps[4]!)).rejects.toThrow("TC_ALREADY_SUBMITTED_OR_UNKNOWN");
+    await ownerQuery(`INSERT INTO work_item (applicant_id, kind, payload) SELECT applicant_id, 'apply', jsonb_build_object('application_id', id::text) FROM application WHERE public_ref = $1`, [apps[4]]);
+    await runNow();
+    expect(browser.clicks).toBe(clicks + 1);
+  });
+
+  it("LinkedIn is never applied on, and an unknown hiring site is named in red", async () => {
+    browser.spec = () => ({ url: "https://www.linkedin.com/jobs/view/1", fields: BASE });
+    await approveResume(apps[5]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[5]!)).problem).toMatch(/never applies on LinkedIn/);
+    browser.spec = () => ({ url: "https://careers.example.org/apply/9", fields: BASE });
+    await requestApply(pool, yong, apps[5]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[5]!)).problem).toMatch(/careers\.example\.org isn't a hiring site TC Hunter can apply on/);
+  });
+});
+
+describe("Approve every send", () => {
+  it("automation can't approve anything; the applicant approves the answers, then the send after confirming it's them", async () => {
+    await saveApplyMode(pool, cfg, yong, "approve_each");
+    browser.spec = () => ({ url: GH(7), fields: BASE, after: "thanks" });
+    await approveResume(apps[6]!);
+    expect((await applyStatus(pool, yong, apps[6]!)).status).toBe("none");  // not hands-free: nothing starts by itself
+    await requestApply(pool, yong, apps[6]!);
+    await runNow();
+    expect(await applyStatus(pool, yong, apps[6]!)).toMatchObject({ status: "waiting", waitingFor: "approve_answers" });
+    // The database refuses an approval by automation under this setting.
+    const p = (await getPacket(pool, cfg, yong, apps[6]!))!;
+    await expect(withApplicant(pool, { userAccountId: yong.userAccountId, applicantId: yong.applicantId, actor: "automation" },
+      (c) => c.query("UPDATE application_packet SET approved_hash = packet_hash, state = 'approved_to_apply' WHERE id = $1", [p.id]))).rejects.toThrow("TC_APPROVAL_NOT_APPLICANT");
+    await approvePacket(pool, yong, p.id, p.hash, "rk-ae-1");
+    await continueAfterAnswers(pool, yong, apps[6]!);
+    const clicks = browser.clicks;
+    await runNow();
+    expect(await applyStatus(pool, yong, apps[6]!)).toMatchObject({ status: "waiting", waitingFor: "approve_send" });
+    expect(browser.clicks).toBe(clicks);
+    const filled = (await ownerQuery("SELECT filled_hash FROM application_packet WHERE id = $1", [p.id])).rows[0].filled_hash;
+    await approveServerSend(pool, cfg, yong, apps[6]!, filled, "rk-ae-2");
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[6]!)).status).toBe("sent");
+    expect(browser.clicks).toBe(clicks + 1);
+    await saveApplyMode(pool, cfg, yong, "hands_free");
+  });
+});
+
+class FakeWorkday extends FakePage implements WorkdayPage {
+  step = 0;
+  account: { email: string; password: string; verified: boolean } | null = null;
+  constructor(private store: { account: FakeWorkday["account"] }) {
+    super({ url: "https://wingtip.wd5.myworkdayjobs.com/en-US/External/job/Remote/Analyst_R1", fields: [], after: "nothing" });
+    this.account = store.account;
+  }
+  async start() { return "sign_in" as const; }
+  async signIn(email: string, password: string) {
+    if (!this.account || this.account.password !== password || this.account.email !== email) return "wrong" as const;
+    return this.account.verified ? "ok" as const : "unverified" as const;
+  }
+  async createAccount(email: string, password: string) { this.store.account = this.account = { email, password, verified: false }; return "verify_email" as const; }
+  async openLink(url: string) { if (url.includes("verify") && this.account) this.account.verified = true; return true; }
+  async page() {
+    const pages = [
+      { title: "My Information", fields: [{ key: "legalNameSection_firstName", label: "First Name *", type: "text", required: true }, { key: "phone-number", label: "Phone Number", type: "tel" }] },
+      { title: "My Experience", fields: [{ key: "file-upload-input-ref", label: "Resume/CV", type: "file", required: true }] },
+    ] as Array<{ title: string; fields: FormField[] }>;
+    if (this.step >= pages.length) return { title: "Review", review: true, form: { url: this.url(), fields: [], captcha: false, humanCheck: false } };
+    return { title: pages[this.step]!.title, review: false, form: { url: this.url(), fields: pages[this.step]!.fields, captcha: false, humanCheck: false } };
+  }
+  async next() { this.step++; return { moved: true, errors: [] }; }
+  async now() {
+    return this.clicks ? { url: this.url(), text: "Application Submitted. Thanks for applying!", errors: [], humanCheck: false } : { url: this.url(), text: "Review", errors: [], humanCheck: false };
+  }
+}
+
+describe("Workday", () => {
+  const store: { account: FakeWorkday["account"] } = { account: null };
+  const reader: MailReader = {
+    async address() { return "yong@example.test"; }, async search() { return []; },
+    async accountLink(host: string) { return store.account ? `https://${host}/en-US/External/activate?verify=abc` : null; },
+  };
+
+  it("without the standing answer for site accounts, it stops and says how to go on", async () => {
+    browser.workday = () => new FakeWorkday(store);
+    browser.spec = () => ({ url: "https://wingtip.wd5.myworkdayjobs.com/en-US/External/job/Remote/Analyst_R1", fields: [] });
+    await approveResume(apps[7]!);
+    await runNow();
+    const s = await applyStatus(pool, yong, apps[7]!);
+    expect(s).toMatchObject({ status: "waiting", waitingFor: "site_account" });
+    expect(s.problem).toMatch(/Create accounts on employer hiring sites for me/);
+  });
+
+  it("with it, creates the account, keeps the password only in the vault, confirms it from Gmail, fills each page and sends", async () => {
+    const vault = applyDeps.vault as MemorySecretStore;
+    await connectEmail(pool, yong, vault, new SecretValue("refresh-token"));
+    applyDeps.email = { vault, cfg, reader: () => reader };
+    await setStandingAnswer(pool, cfg, yong, "site_account", "I agree");
+    await requestApply(pool, yong, apps[7]!);
+    await runNow();
+    const s = await applyStatus(pool, yong, apps[7]!);
+    expect(s.status).toBe("sent");
+    expect(s.steps.map((x) => x.text).join(" | ")).toMatch(/Creating your account.*Gmail.*Confirming the account.*Signing in.*Workday page 1: My Information.*Workday page 2: My Experience.*Pressing Submit/);
+    const acct = (await ownerQuery("SELECT * FROM site_account WHERE site_host = 'wingtip.wd5.myworkdayjobs.com'")).rows[0];
+    expect(acct).toMatchObject({ created_by: "automation" });
+    expect(acct.verified_at).toBeTruthy();
+    expect(JSON.stringify(acct)).not.toContain(store.account!.password);
+    expect((await vault.get(yong.applicantId, acct.vault_ref))!.reveal()).toBe(store.account!.password);
+    expect(store.account!.password).toMatch(/^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{20}$/);
+    const p = (await getPacket(pool, cfg, yong, apps[7]!))!;
+    expect(p.state).toBe("submitted");
+    expect(p.fields.map((f) => f.label)).toEqual(["First Name *", "Phone Number", "Resume/CV"]);
+  });
+});

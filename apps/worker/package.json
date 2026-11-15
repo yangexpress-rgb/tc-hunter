@@ -10,6 +10,7 @@
   "dependencies": {
     "@tc-hunter/db": "*",
     "@tc-hunter/domain": "*",
+    "playwright-core": "1.63.0",
     "tsx": "^4.19.2"
   }
 }

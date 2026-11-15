@@ -162,11 +162,19 @@ describe("approvals bind to exact content (Risk 4, point 2)", () => {
     await as("applicant", (c) => c.query("UPDATE application_packet SET state = 'packet_ready_for_review' WHERE id = $1", [ids.application_packet]));
     await expect(approvePacket(pool, yong, ids.application_packet!, "some-older-hash", "x1")).rejects.toThrow("TC_APPROVAL_STALE");
   });
-  it("only the applicant can approve, even straight in the database", async () => {
+  it("only the applicant can approve, even straight in the database, unless their own setting is hands-free", async () => {
     await as("applicant", (c) => c.query("UPDATE application_packet SET state = 'packet_ready_for_review' WHERE id = $1", [ids.application_packet]));
-    await expect(as("automation", (c) =>
-      c.query("UPDATE application_packet SET approved_hash = packet_hash, state = 'approved_to_apply' WHERE id = $1", [ids.application_packet]),
-    )).rejects.toThrow("TC_APPROVAL_NOT_APPLICANT");
+    for (const mode of ["check_answers", "approve_each"]) {
+      await as("applicant", (c) => c.query(`INSERT INTO apply_setting (applicant_id, mode) VALUES (app_applicant_id(), $1)
+        ON CONFLICT (applicant_id) DO UPDATE SET mode = EXCLUDED.mode`, [mode]));
+      await expect(as("automation", (c) =>
+        c.query("UPDATE application_packet SET approved_hash = packet_hash, state = 'approved_to_apply' WHERE id = $1", [ids.application_packet]),
+      )).rejects.toThrow("TC_APPROVAL_NOT_APPLICANT");
+    }
+    // The setting itself can only be changed by the applicant.
+    await expect(as("automation", (c) => c.query("UPDATE apply_setting SET mode = 'hands_free'"))).rejects.toThrow("TC_APPROVAL_NOT_APPLICANT");
+    await expect(as("automation", (c) => c.query("INSERT INTO standing_answer (applicant_id, kind, answer_enc) VALUES (app_applicant_id(), 'attestation', '\\x00')"))).rejects.toThrow("TC_APPROVAL_NOT_APPLICANT");
+    await as("applicant", (c) => c.query("DELETE FROM apply_setting"));
   });
   it("editing an answer after approval sends the packet back to review", async () => {
     await toReadyToSubmit();

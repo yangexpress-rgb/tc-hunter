@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Analyst - Wingtip Careers</title></head>
+<body>
+<!-- A sandbox shaped like a Workday careers site, with Workday's data-automation-id names (local test only). -->
+<div id="app"></div>
+<script>
+  var S = JSON.parse(localStorage.getItem("wd") || "{}");
+  function save() { localStorage.setItem("wd", JSON.stringify(S)); }
+  var app = document.getElementById("app");
+  function h(html) { app.innerHTML = html; }
+  function on(id, fn) { var el = document.querySelector('[data-automation-id="' + id + '"]'); if (el) el.addEventListener("click", fn); }
+  function val(id) { return document.querySelector('[data-automation-id="' + id + '"]').value; }
+  function jobPage() {
+    h('<h2>Analyst</h2><p>Wingtip is hiring.</p><a href="#" data-automation-id="adventureButton">Apply</a>');
+    on("adventureButton", function (e) { e.preventDefault();
+      h('<div role="dialog"><a href="#" data-automation-id="autofillWithResume">Autofill with Resume</a> <a href="#" data-automation-id="applyManually">Apply Manually</a></div>');
+      on("applyManually", function (e) { e.preventDefault(); signInPage(); });
+    });
+  }
+  function signInPage() {
+    h('<div data-automation-id="signInContent"><h2>Sign In</h2><label for="e">Email Address</label><input id="e" data-automation-id="email">' +
+      '<label for="p">Password</label><input id="p" type="password" data-automation-id="password">' +
+      '<button data-automation-id="signInSubmitButton">Sign In</button> <a href="#" data-automation-id="createAccountLink">Create Account</a><p id="msg"></p></div>');
+    on("createAccountLink", function (e) { e.preventDefault(); createPage(); });
+    on("signInSubmitButton", function () {
+      var a = S.account;
+      if (!a || a.email !== val("email") || a.password !== val("password")) { document.getElementById("msg").textContent = "Wrong email or password."; return; }
+      if (!a.verified) { document.getElementById("msg").textContent = "Please verify your account. We sent you an email."; return; }
+      S.step = S.step || 1; save(); formPage();
+    });
+  }
+  function createPage() {
+    h('<h2>Create Account</h2><label for="ce">Email Address</label><input id="ce" data-automation-id="email">' +
+      '<label for="cp">Password</label><input id="cp" type="password" data-automation-id="password">' +
+      '<label for="cv">Verify New Password</label><input id="cv" type="password" data-automation-id="verifyPassword">' +
+      '<label><input type="checkbox" data-automation-id="createAccountCheckbox"> I agree to the terms and conditions</label>' +
+      '<button data-automation-id="createAccountSubmitButton">Create Account</button>');
+    on("createAccountSubmitButton", function () {
+      if (!document.querySelector('[data-automation-id="createAccountCheckbox"]').checked) return;
+      if (val("password") !== val("verifyPassword")) return;
+      S.account = { email: val("email"), password: val("password"), verified: false }; save();
+      h("<p>We sent a verification email to you. Please check your email to activate your account.</p>");
+    });
+  }
+  function bar(n, title) {
+    return '<div data-automation-id="progressBar"><span data-automation-id="progressBarActiveStep">current step ' + n + ' of 3 ' + title + '</span></div>';
+  }
+  function formPage() {
+    if (S.step === 1) {
+      h(bar(1, "My Information") + '<div data-automation-id="formField-source"><label id="src-l">How Did You Hear About Us? *</label>' +
+        '<button aria-haspopup="listbox" aria-labelledby="src-l" id="src" data-automation-id="sourceDropdown">Select One</button><ul role="listbox" id="src-list" hidden>' +
+        '<li role="option">Job Board</li><li role="option">Company Website</li></ul></div>' +
+        '<div data-automation-id="formField-legalNameSection_firstName"><label for="fn">Given Name(s) *</label><input id="fn" data-automation-id="legalNameSection_firstName" aria-required="true"></div>' +
+        '<div data-automation-id="formField-legalNameSection_lastName"><label for="ln">Family Name *</label><input id="ln" data-automation-id="legalNameSection_lastName" aria-required="true" value="Prefilled"></div>' +
+        '<p data-automation-id="errorMessage" id="err" hidden></p>' +
+        '<button data-automation-id="pageFooterNextButton">Save and Continue</button>');
+      var btn = document.getElementById("src"), list = document.getElementById("src-list");
+      btn.addEventListener("click", function () { list.hidden = false; });
+      list.querySelectorAll("li").forEach(function (li) { li.addEventListener("click", function () { btn.textContent = li.textContent; list.hidden = true; }); });
+      on("pageFooterNextButton", function () {
+        if (btn.textContent === "Select One" || !document.getElementById("fn").value) { var e = document.getElementById("err"); e.hidden = false; e.textContent = "Errors found: How Did You Hear About Us? is required"; return; }
+        S.step = 2; save(); formPage();
+      });
+    } else if (S.step === 2) {
+      h(bar(2, "My Experience") + '<div data-automation-id="formField-resume"><h3>Resume/CV</h3><input type="file" data-automation-id="file-upload-input-ref" id="up"></div>' +
+        '<button data-automation-id="pageFooterNextButton">Save and Continue</button>');
+      on("pageFooterNextButton", function () { if (!document.getElementById("up").files.length) return; S.step = 3; save(); formPage(); });
+    } else if (S.step === 3) {
+      h(bar(3, "Review") + '<main><p>Given Name(s): Yong</p><p>Resume: attached</p></main><button data-automation-id="pageFooterNextButton">Submit</button>');
+      on("pageFooterNextButton", function () { S.step = 4; S.submitted = (S.submitted || 0) + 1; save(); h("<h2>Application Submitted</h2><p>Thanks for applying!</p>"); });
+    }
+  }
+  if (location.pathname.indexOf("/verify") >= 0) { if (S.account) { S.account.verified = true; save(); } h("<p>Your account is verified.</p>"); }
+  else jobPage();
+</script>
+</body></html>

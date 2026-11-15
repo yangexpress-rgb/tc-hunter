@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Operations Analyst at Contoso</title></head>
+<body>
+  <!-- A sandbox employer form shaped like a Greenhouse job board page (local test only). -->
+  <h1>Operations Analyst</h1>
+  <p>Contoso is hiring.</p>
+  <form id="application_form" action="/gh/jobs/1/confirmation" method="get">
+    <div class="field"><label for="first_name">First Name *</label><input id="first_name" name="first_name" required></div>
+    <div class="field"><label for="last_name">Last Name *</label><input id="last_name" name="last_name" required></div>
+    <div class="field"><label for="email">Email *</label><input id="email" name="email" type="email" required></div>
+    <div class="field"><label for="phone">Phone</label><input id="phone" name="phone" type="tel"></div>
+    <div class="field"><label for="resume">Resume/CV *</label><input id="resume" name="resume" type="file" required></div>
+    <div class="field"><label for="work_auth">Are you legally authorised to work in this country? *</label>
+      <select id="work_auth" name="work_auth" required><option value="">Select…</option><option value="1">Yes</option><option value="0">No</option></select></div>
+    <fieldset><legend>Are you willing to relocate?</legend>
+      <label><input type="radio" name="relocate" value="y" id="relocate_y"> Yes</label>
+      <label><input type="radio" name="relocate" value="n" id="relocate_n"> No</label>
+    </fieldset>
+    <div class="field"><label for="source">How did you hear about us?</label>
+      <input id="source" role="combobox" aria-controls="source_list" autocomplete="off">
+      <ul id="source_list" role="listbox" hidden></ul></div>
+    <div class="field"><label><input type="checkbox" id="privacy" name="privacy" required> I agree to the privacy notice *</label></div>
+    <div class="field"><label><input type="checkbox" id="newsletter" name="newsletter"> Send me job alerts</label></div>
+    <input type="password" id="secret" name="secret" aria-label="Password">
+    <input type="hidden" name="token" value="x">
+    <button type="submit" id="submit_app">Submit Application</button>
+  </form>
+  <script>
+    // A drop-down drawn by the page, like the newer Greenhouse boards.
+    var box = document.getElementById("source"), list = document.getElementById("source_list");
+    var CHOICES = ["LinkedIn", "Company website", "Job board", "Referral"];
+    function show() {
+      list.innerHTML = "";
+      CHOICES.filter(function (c) { return c.toLowerCase().indexOf(box.value.toLowerCase()) === 0; }).forEach(function (c) {
+        var li = document.createElement("li"); li.setAttribute("role", "option"); li.textContent = c;
+        li.addEventListener("click", function () { box.value = c; list.hidden = true; });
+        list.appendChild(li);
+      });
+      list.hidden = false;
+    }
+    box.addEventListener("focus", show); box.addEventListener("input", show);
+  </script>
+</body></html>

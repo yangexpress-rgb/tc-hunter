@@ -3,11 +3,12 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { createPool, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, type EmailDeps } from "@tc-hunter/db";
+import { createPool, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type RequirementsReader,
 } from "@tc-hunter/domain";
+import { ServerBrowser } from "./apply/browser";
 
 const log = createLogger();
 const cfg = loadConfig();
@@ -46,6 +47,12 @@ async function currentSearch() {
   }
   return search;
 }
+// Hands-free applying (Yong, 2026-11-15): TC Hunter's own browser, through the same outbound gate.
+// Employer-site passwords live in each applicant's vault; Gmail confirms new Workday accounts.
+const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
+  browser: new ServerBrowser({ proxy: process.env.HTTPS_PROXY || undefined, executablePath: process.env.TC_CHROMIUM_PATH || undefined }),
+  cfg, vault: process.env.TC_VAULT_DIR ? loadSecretStore() : undefined, email,
+};
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
@@ -53,7 +60,7 @@ let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
 async function main() {
-  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail.readonly" : "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
+  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail.readonly" : "off", apply: apply ? "browser" : "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
   // One worker: anything still marked running was cut off by the last restart or update.
   try {
     const n = await recoverInterruptedWork(pool);
@@ -65,11 +72,12 @@ async function main() {
       if (Date.now() - lastSchedule > SCHEDULE_MS) {
         const queued = await enqueueDueScansAndPrune(pool);
         const mail = email ? await enqueueDueEmailChecks(pool) : 0;
+        const applies = apply ? await enqueueDueApplies(pool) : 0;
         lastSchedule = Date.now();
-        if (queued || mail) log.info("worker.scheduled", { scans: queued, email_checks: mail });
+        if (queued || mail || applies) log.info("worker.scheduled", { scans: queued, email_checks: mail, applies });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search: await currentSearch() });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search: await currentSearch(), apply });
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
       // Counts and timings only, never names or content, so a stuck or failed search can be traced.
       else log[did.ok ? "info" : "warn"]("work.finished", { kind: did.kind, ok: did.ok, seconds: Math.round(did.ms / 1000), attempt: did.attempt, ...(did.result ?? {}), ...(did.error ? { error: did.error } : {}) });

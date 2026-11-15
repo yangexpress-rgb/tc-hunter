@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, looksConfirmed, packetHash, proposeField, receiptPdf, willFill,
-  type Ats, type FormField, type PacketProfile, type ProposedField, type StepKind,
+  type Ats, type FormField, type PacketProfile, type ProposedField, type StandingKind, type StepKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
@@ -95,7 +95,7 @@ export async function readyApplications(pool: pg.Pool, session: Session, pageUrl
 
 const FIELD_TYPES = new Set(["text", "email", "tel", "url", "number", "date", "textarea", "select", "radio", "checkbox", "file"]);
 
-function cleanForm(fields: unknown): FormField[] {
+export function cleanForm(fields: unknown): FormField[] {
   if (!Array.isArray(fields)) throw new DomainError("TC_BAD_INPUT");
   const out: FormField[] = [];
   const seen = new Set<string>();
@@ -110,7 +110,7 @@ function cleanForm(fields: unknown): FormField[] {
   return out;
 }
 
-async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantId: string, matchId: string) {
+export async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantId: string, matchId: string) {
   const dk = await dataKeyFor(c, cfg, applicantId);
   const a = (await c.query("SELECT * FROM applicant WHERE id = $1", [applicantId])).rows[0];
   const dec = (col: string, v: Buffer | null) => (v ? decryptField(dk, col, v) : null);
@@ -127,11 +127,14 @@ async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantId: stri
   const doc = async (type: string) => (await c.query(
     "SELECT id, public_ref, version, source_json FROM document WHERE match_id = $1 AND type = $2 AND status = 'approved' ORDER BY version DESC LIMIT 1", [matchId, type])).rows[0];
   const resume = await doc("tailored_resume"), letter = await doc("cover_letter");
+  // Standing answers the applicant set in Settings (hands-free applying, Yong 2026-11-15).
+  const standing = (await c.query("SELECT kind, answer_enc FROM standing_answer")).rows
+    .map((x) => ({ kind: x.kind as StandingKind, text: decryptField(dk, "standing_answer.answer", x.answer_enc) }));
   const profile: PacketProfile = {
     firstName: parts[0] ?? "", lastName: parts.length > 1 ? parts[parts.length - 1]! : "", fullName: full, preferredName: a.preferred_name,
     email: dec("applicant.email", a.email_enc), phone: dec("applicant.phone", a.phone_enc), city: a.city, region: a.region, country: a.country,
     links: { linkedin: linkOf(/linkedin/i), github: linkOf(/github/i), website: linkOf(/^(website|portfolio|site|web)$/i) },
-    answers, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null,
+    answers, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing,
   };
   return { profile, dk, resume, letter };
 }
@@ -142,43 +145,69 @@ const docLabel = (d: { public_ref: string; version: number } | undefined) => (d 
 export async function buildPacket(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string, form: { url: string; fields: unknown }) {
   const fields = cleanForm(form.fields);
   if (!fields.length) throw new DomainError("TC_PACKET_NO_FIELDS");
-  let host: string | null = null;
-  try { host = new URL(form.url).hostname.toLowerCase(); } catch { /* keep null */ }
   return withApplicant(pool, automation(session), async (c) => {
     const app = (await c.query(
       "SELECT a.id, a.public_ref, a.match_id, a.stage, p.public_ref AS job_ref FROM application a JOIN job_posting p ON p.id = a.job_posting_id WHERE a.public_ref = $1", [appRef])).rows[0];
     if (!app) throw new DomainError("TC_NOT_FOUND");
-    if ((await c.query("SELECT 1 FROM application_packet WHERE application_id = $1 AND state = 'submitted'", [app.id])).rowCount) throw new DomainError("TC_PACKET_CLOSED");
-    const { profile, dk, resume, letter } = await packetProfile(c, cfg, session.applicantId, app.match_id);
-    if (!resume) throw new DomainError("TC_PACKET_DOCUMENT_NOT_APPROVED");
-    await c.query("UPDATE application_packet SET state = 'abandoned' WHERE application_id = $1 AND state NOT IN ('submitted','abandoned','failed')", [app.id]);
-    const version = (await c.query("SELECT coalesce(max(version), 0) + 1 AS v FROM application_packet WHERE application_id = $1", [app.id])).rows[0].v as number;
-    const k = (await c.query(
-      `INSERT INTO application_packet (applicant_id, application_id, version, tailored_resume_document_id, cover_letter_document_id, form_host, ats, form_fingerprint)
-       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [app.id, version, resume.id, letter?.id ?? null, host, detectAts(form.url), formFingerprint(fields)])).rows[0];
-    const proposed = fields.map((f) => proposeField(f, profile));
-    for (const [i, f] of proposed.entries()) await insertField(c, dk, k.id, i, f);
-    const hash = packetHash(dk, { jobRef: app.job_ref, resume: docLabel(resume)!, letter: docLabel(letter), fields: proposed });
-    await c.query("UPDATE application_packet SET packet_hash = $2, state = 'packet_ready_for_review' WHERE id = $1", [k.id, hash]);
-    const left = proposed.filter((f) => !willFill(f)).length;
-    await recordAudit(c, "packet.built", { objectType: "application_packet", objectId: k.id,
-      payload: { application_ref: app.public_ref, packet_version: version, fields: proposed.length, left_for_applicant: left } });
-    return { packetId: k.id as string, appRef: app.public_ref as string, fields: proposed.length, leftForApplicant: left };
+    return createPacket(c, cfg, session.applicantId, app, form.url, fields);
   });
+}
+
+/**
+ * A fresh packet for this form, replacing any not yet sent. Answers the applicant typed into
+ * an earlier packet for the same question are kept (the server's browser reads a form again
+ * after they answer, and on Workday page by page).
+ */
+export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId: string,
+  app: { id: string; public_ref: string; match_id: string; job_ref: string }, url: string, fields: FormField[], opts: { keepTyped?: boolean; ats?: Ats } = {}) {
+  let host: string | null = null;
+  try { host = new URL(url).hostname.toLowerCase(); } catch { /* keep null */ }
+  if ((await c.query("SELECT 1 FROM application_packet WHERE application_id = $1 AND state = 'submitted'", [app.id])).rowCount) throw new DomainError("TC_PACKET_CLOSED");
+  const { profile, dk, resume, letter } = await packetProfile(c, cfg, applicantId, app.match_id);
+  if (!resume) throw new DomainError("TC_PACKET_DOCUMENT_NOT_APPROVED");
+  // What the applicant typed before, by question, so they never answer the same question twice.
+  const typed = new Map<string, string>();
+  if (opts.keepTyped) {
+    const prev = (await c.query(
+      `SELECT f.field_key, f.question_as_shown, f.answer_value_enc FROM packet_field f JOIN application_packet k ON k.id = f.packet_id
+        WHERE k.application_id = $1 AND f.source = 'applicant_typed' AND f.answer_value_enc IS NOT NULL ORDER BY k.version`, [app.id])).rows;
+    for (const f of prev) typed.set(`${f.field_key}|${f.question_as_shown}`, decryptField(dk, "packet_field.answer_value", f.answer_value_enc));
+  }
+  await c.query("UPDATE application_packet SET state = 'abandoned' WHERE application_id = $1 AND state NOT IN ('submitted','abandoned','failed')", [app.id]);
+  const version = (await c.query("SELECT coalesce(max(version), 0) + 1 AS v FROM application_packet WHERE application_id = $1", [app.id])).rows[0].v as number;
+  const k = (await c.query(
+    `INSERT INTO application_packet (applicant_id, application_id, version, tailored_resume_document_id, cover_letter_document_id, form_host, ats, form_fingerprint)
+     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [app.id, version, resume.id, letter?.id ?? null, host, opts.ats ?? detectAts(url), formFingerprint(fields)])).rows[0];
+  const proposed = fields.map((f) => {
+    const p = proposeField(f, profile);
+    const t = typed.get(`${f.key}|${f.label}`);
+    if (t !== undefined && !p.step && !willFill(p) && (!f.options?.length || f.options.includes(t))) {
+      return { ...p, answer: t, source: "applicant_typed" as const, sourceRefId: null, confidence: 1, note: null };
+    }
+    return p;
+  });
+  for (const [i, f] of proposed.entries()) await insertField(c, dk, k.id, i, f);
+  const hash = packetHash(dk, { jobRef: app.job_ref, resume: docLabel(resume)!, letter: docLabel(letter), fields: proposed });
+  await c.query("UPDATE application_packet SET packet_hash = $2, state = 'packet_ready_for_review' WHERE id = $1", [k.id, hash]);
+  const left = proposed.filter((f) => !willFill(f)).length;
+  await recordAudit(c, "packet.built", { objectType: "application_packet", objectId: k.id,
+    payload: { application_ref: app.public_ref, packet_version: version, fields: proposed.length, left_for_applicant: left } });
+  return { packetId: k.id as string, appRef: app.public_ref as string, fields: proposed.length, leftForApplicant: left, proposed, hash };
 }
 
 async function insertField(c: pg.PoolClient, dk: Buffer, packetId: string, i: number, f: ProposedField) {
   const answer = f.step ? null : f.answer;
   await c.query(
     `INSERT INTO packet_field (applicant_id, packet_id, ordinal, question_as_shown, answer_value_enc, source, source_ref_id, confidence,
-       requires_applicant_step, step_kind, fill_status, field_key, field_type, options, note)
-     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+       requires_applicant_step, step_kind, fill_status, field_key, field_type, options, note, required, standing_kind)
+     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
     [packetId, i, f.label, answer === null ? null : encryptField(dk, "packet_field.answer_value", answer), f.step ? null : f.source, f.step ? null : f.sourceRefId,
-      f.confidence, !!f.step, f.step, f.step ? "left_for_applicant" : "pending", f.key, f.type, f.options ? JSON.stringify(f.options) : null, f.note]);
+      f.confidence, !!f.step, f.step, f.step ? "left_for_applicant" : "pending", f.key, f.type, f.options ? JSON.stringify(f.options) : null, f.note,
+      !!f.required, f.step ? null : f.standingKind ?? null]);
 }
 
-async function rehash(c: pg.PoolClient, dk: Buffer, packetId: string): Promise<string> {
+export async function rehash(c: pg.PoolClient, dk: Buffer, packetId: string): Promise<string> {
   const k = (await c.query(
     `SELECT k.id, p.public_ref AS job_ref, r.public_ref AS r_ref, r.version AS r_v, l.public_ref AS l_ref, l.version AS l_v
        FROM application_packet k JOIN application a ON a.id = k.application_id JOIN job_posting p ON p.id = a.job_posting_id
@@ -197,6 +226,7 @@ async function rehash(c: pg.PoolClient, dk: Buffer, packetId: string): Promise<s
 export interface PacketFieldView {
   id: string; label: string; type: string; options: string[] | null; answer: string | null; source: string | null;
   confidence: number; step: StepKind | null; note: string | null; fillStatus: string; willFill: boolean;
+  required: boolean; standingKind: StandingKind | null;
 }
 
 export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string) {
@@ -215,7 +245,7 @@ export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session,
       const answer = f.answer_value_enc ? decryptField(dk, "packet_field.answer_value", f.answer_value_enc) : null;
       const v = { step: f.step_kind, answer, confidence: Number(f.confidence ?? 0), source: f.source };
       return { id: f.id, label: f.question_as_shown, type: f.field_type ?? "text", options: f.options, answer, source: f.source, confidence: v.confidence,
-        step: f.step_kind, note: f.note, fillStatus: f.fill_status, willFill: willFill(v) };
+        step: f.step_kind, note: f.note, fillStatus: f.fill_status, willFill: willFill(v), required: !!f.required, standingKind: f.standing_kind ?? null };
     });
     const events = (await c.query("SELECT from_state, to_state, reason, actor, created_at FROM packet_state_event WHERE packet_id = $1 ORDER BY created_at, id", [k.id])).rows;
     return {
@@ -419,7 +449,7 @@ export async function startSubmit(pool: pg.Pool, owner: DeviceOwner, packetId: s
   });
 }
 
-async function attachReceipt(c: pg.PoolClient, k: { id: string; application_id: string }) {
+export async function attachReceipt(c: pg.PoolClient, k: { id: string; application_id: string }) {
   const receipt = (await c.query(
     `INSERT INTO document (applicant_id, type, version, job_posting_id, match_id, created_by, source_json, generation_meta)
      SELECT app_applicant_id(), 'receipt', 1, a.job_posting_id, a.match_id, 'app', jsonb_build_object('packet_id', $1::text), '{}'::jsonb
@@ -478,7 +508,7 @@ export async function extStatus(pool: pg.Pool, owner: DeviceOwner, appRef: strin
 }
 
 /** No clear result after the click: stop, look in Gmail if it's connected, and ask the applicant. Never retried. */
-async function settleUnclear(c: pg.PoolClient, k: { id: string; app_ref: string; version: number }) {
+export async function settleUnclear(c: pg.PoolClient, k: { id: string; app_ref: string; version: number }) {
   await markOutcomeUnknown(c, k.id);
   await c.query("UPDATE submission_attempt SET outcome = 'unknown', updated_at = now() WHERE packet_id = $1 AND outcome = 'in_progress'", [k.id]);
   await recordAudit(c, "packet.outcome_unknown", { objectType: "application_packet", objectId: k.id, payload: { application_ref: k.app_ref, packet_version: k.version } });

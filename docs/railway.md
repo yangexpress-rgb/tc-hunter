@@ -169,6 +169,9 @@ the database's public address from Railway and a one-off copy of the vault onto 
   recovery codes at the end. If both
   the phone and the codes are gone, the person who runs the server can clear two-step
   sign-in for that account in the database (ask Claude for the exact command).
+- **Applying for you:** the worker runs its own headless browser (installed in the image).
+  Set `TC_APPLY_BROWSER=off` on the service to stop it at once; applications then wait.
+  Workday sign-ups need the applicant's Gmail connected so the "verify your email" link can be opened.
 - **Health check:** `https://<your-railway-domain>/api/health` answers `ok`.
 
 ## What stays protected

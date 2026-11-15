@@ -34,6 +34,11 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/packages ./packages
 COPY --from=build --chown=node:node /app/apps/worker ./apps/worker
+# TC Hunter's own browser for applying (apps/worker/src/apply): Chromium's headless shell and
+# the system libraries it needs, at the version playwright-core expects.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium \
+ && rm -rf /var/lib/apt/lists/* && chmod -R a+rX /ms-playwright
 COPY --from=build --chown=node:node /app/apps/web/.next/standalone ./web
 COPY --from=build --chown=node:node /app/package.json /app/tsconfig.base.json ./
 COPY --chown=node:node deploy/egress-proxy ./deploy/egress-proxy

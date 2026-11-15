@@ -87,6 +87,7 @@ export const ANSWER_PRESETS = [
   { key: "start_date", label: "Earliest start date", patterns: ["start date", "available to start"], applicantStep: false },
   { key: "relocate", label: "Willing to relocate?", patterns: ["relocat"], applicantStep: false },
   { key: "travel", label: "Willing to travel?", patterns: ["travel"], applicantStep: false },
+  { key: "heard_about", label: "How did you hear about this job?", patterns: ["how did you (hear|learn|find out) about", "where did you (hear|find|see)", "^source\\b"], applicantStep: false },
   { key: "work_auth", label: "Are you authorised to work in this country?", patterns: ["authori[sz]ed to work", "legally (able|eligible) to work"], applicantStep: true },
   { key: "sponsorship", label: "Will you now or in the future require sponsorship?", patterns: ["sponsorship", "visa"], applicantStep: true },
 ] as const;

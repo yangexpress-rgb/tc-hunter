@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { SecretValue } from "../secretStore";
 import type { MailMessage } from "./classify";
+import { verificationLinkIn } from "../apply";
 
 /**
  * Gmail, read-only (decision 13.3). The only permission asked for is gmail.readonly:
@@ -68,6 +69,11 @@ export interface MailReader {
   search(query: string, max: number): Promise<MailMessage[]>;
   /** Full text, used only for LinkedIn's job alert emails (query: LINKEDIN_ALERT_QUERY). Read in memory, never stored. */
   alertBodies?(query: string, max: number): Promise<Array<{ id: string; receivedAt: Date; text: string; isHtml: boolean }>>;
+  /**
+   * The "verify your account" link an employer's Workday site emailed, for that site only
+   * (hands-free applying, Yong 2026-11-15). Read in memory; only the link is used, nothing is kept.
+   */
+  accountLink?(tenantHost: string, since: Date): Promise<string | null>;
 }
 
 const b64url = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
@@ -129,6 +135,20 @@ export class GmailReader implements MailReader {
       if (b) out.push({ id: String(m.id), receivedAt: new Date(Number(m.internalDate)), ...b });
     }
     return out;
+  }
+  /** Workday's "verify your account" email for this employer's site: only the link is used, nothing is kept. */
+  async accountLink(tenantHost: string, since: Date): Promise<string | null> {
+    const after = Math.floor(since.getTime() / 1000) - 60;
+    const list = await this.get(`/messages?${new URLSearchParams({ q: `from:(myworkday.com OR myworkdayjobs.com OR workday.com) after:${after}`, maxResults: "10" })}`);
+    for (const { id } of (list.messages ?? []) as Array<{ id: string }>) {
+      const m = await this.get(`/messages/${encodeURIComponent(id)}?format=full`);
+      const from = String((m.payload?.headers ?? []).find((x: { name: string }) => x.name.toLowerCase() === "from")?.value ?? "");
+      if (!/@([a-z0-9-]+\.)*(myworkday|myworkdayjobs|workday)\.com>?$/i.test(from.trim())) continue;  // only Workday's own mail
+      const b = bodyOf(m.payload);
+      const link = b ? verificationLinkIn(b.text, tenantHost) : null;
+      if (link) return link;
+    }
+    return null;
   }
 }
 

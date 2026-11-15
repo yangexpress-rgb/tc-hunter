@@ -1,7 +1,8 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, markSubmitted, resolveOutcome, dismissEmailSignal, resetCalibration, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, markSubmitted, requestApply,
+  resolveOutcome, dismissEmailSignal, resetCalibration, saveAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -88,19 +89,47 @@ export async function emailSignalAction(form: FormData) {
   await act(form, () => (form.get("do") === "dismiss" ? dismissEmailSignal(pool, s, id) : acceptEmailSignal(pool, s, id, app().cfg)), "/applications", form.get("do") === "dismiss" ? "dismissed" : "moved");
 }
 
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 export async function packetAnswerAction(form: FormData) {
   const s = await requireSession();
   const ref = String(form.get("app") ?? "");
   const { pool, cfg } = app();
-  await act(form, () => answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), String(form.get("answer") ?? "")), `/applications/${ref}#packet`);
+  const answer = String(form.get("answer") ?? "");
+  const question = String(form.get("question") ?? "").replace(/\s+/g, " ").replace(/[\s*]+$/, "").trim().slice(0, 200);
+  await act(form, async () => {
+    await answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), answer);
+    // "Use this answer next time too": saved (approved) so the same question never stops TC Hunter again.
+    if (form.get("remember") === "1" && answer.trim() && question.length >= 3) {
+      await saveAnswer(pool, cfg, s, { questionKey: `custom:${question.slice(0, 80)}`, patterns: [`^${escapeRe(question)}`], answer, approve: true });
+    }
+    await continueIfAnswered(pool, s, ref);
+  }, `/applications/${ref}#packet`);
 }
 
-/** "Approve these answers": bound to the exact packet the applicant was shown (its hash). */
+/** "Approve these answers": bound to the exact packet the applicant was shown (its hash). TC Hunter's browser then carries on. */
 export async function packetApproveAction(form: FormData) {
   const s = await requireSession();
   const ref = String(form.get("app") ?? "");
-  await act(form, () => approvePacket(app().pool, s, String(form.get("packet") ?? ""), String(form.get("hash") ?? ""), String(form.get("rk") ?? "")),
-    `/applications/${ref}#packet`, "approved");
+  await act(form, async () => {
+    await approvePacket(app().pool, s, String(form.get("packet") ?? ""), String(form.get("hash") ?? ""), String(form.get("rk") ?? ""));
+    await continueAfterAnswers(app().pool, s, ref);
+  }, `/applications/${ref}#packet`, "approved");
+}
+
+/** "Apply for me now", "Continue", "Try again" and "Apply now anyway". */
+export async function applyNowAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  await act(form, () => requestApply(app().pool, s, ref, { anyway: form.get("anyway") === "1" }), `/applications/${ref}#applying`, "applying");
+}
+
+/** "Approve sending": TC Hunter's browser holds the filled form; this approves exactly that one, with a fresh "confirm it's you". */
+export async function serverSendApproveAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const { pool, cfg } = app();
+  await act(form, () => approveServerSend(pool, cfg, s, ref, String(form.get("filled") ?? ""), String(form.get("rk") ?? "")), `/applications/${ref}#applying`, "applying");
 }
 
 /** "I submitted it": the applicant pressed Submit on the employer's site themselves. */

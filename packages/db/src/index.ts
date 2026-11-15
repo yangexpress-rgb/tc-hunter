@@ -19,3 +19,4 @@ export * from "./tracker";
 export * from "./email";
 export * from "./assist";
 export * from "./resumes";
+export * from "./autoApply";

@@ -14,6 +14,7 @@ import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { goalFromRow } from "./profile";
 import { discoveryDue, namedSourceIds, runDiscovery, type DiscoverDeps } from "./discover";
+import { runApply, type ApplyDeps } from "./autoApply";
 
 /**
  * Module B and C on the server (design 5.2, 5.3). The catalogue (sources,
@@ -289,6 +290,8 @@ export interface WorkDeps {
   fetcher: Fetcher; reader: RequirementsReader; now?: () => Date; freshMinutes?: number; tailor?: TailorDeps; email?: EmailDeps; digest?: DigestDeps; discover?: DiscoverDeps;
   /** Job-search sites searched first, for every goal in use (those whose keys are set). */
   search?: SearchSite[];
+  /** TC Hunter's own browser, for hands-free applying. */
+  apply?: ApplyDeps;
 }
 
 const PLAIN_REFUSAL: Record<string, string> = {
@@ -480,7 +483,7 @@ export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload:
   });
 }
 
-export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link" | "tailor" | "email_check" | "resume_digest"; payload: Record<string, any>; attempts: number }
+export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link" | "tailor" | "email_check" | "resume_digest" | "apply"; payload: Record<string, any>; attempts: number }
 
 const SEARCH_HOME: Record<SearchSiteId, string> = {
   adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com",
@@ -501,6 +504,7 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
       : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))
       : item.kind === "resume_digest" ? { status: await (deps.digest ? runDigest(pool, ctx, String((item.payload as { digest_id?: string }).digest_id), deps.digest) : Promise.reject(new Error("resume reading not set up"))) }
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
+      : item.kind === "apply" ? await (deps.apply ? runApply(pool, ctx, item.payload as never, deps.apply) : Promise.reject(new Error("the application browser isn't set up")))
       : await runIngestLink(pool, ctx, item.payload as never, deps);
     await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
     const counts = Object.fromEntries(Object.entries((result ?? {}) as Record<string, unknown>).filter(([, v]) => typeof v === "number"));

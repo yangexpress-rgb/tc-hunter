@@ -29,6 +29,7 @@ export async function exportMyData(pool: pg.Pool, cfg: AppConfig, session: Sessi
       for (const [k, v] of Object.entries(row)) {
         if (NEVER_EXPORT.test(k) || k === "applicant_id") continue;
         if (table === "resume_file" && k === "content_enc") continue;  // the original file goes in resumes/, as it is
+        if (table === "apply_shot" && k === "image_enc") continue;     // pictures of employer pages stay viewable in the app
         if (k.endsWith("_enc")) {
           const name = k.replace(/_enc$/, "");
           if (!v) { out[name] = null; continue; }

@@ -36,6 +36,8 @@ jobs:
           sudo apt-get install -y postgresql-client-16
           echo "/usr/lib/postgresql/16/bin" >> "$GITHUB_PATH"
       - run: npm ci
+      - name: Install Chromium for the apply browser tests
+        run: node node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
       - name: Type check
         run: npm run typecheck
       - name: Tests (schema, isolation F6/F6b, guard rails, audit, sign-in, canary, F8 backup/restore, Layer 1 language, brand)
@@ -55,6 +57,9 @@ jobs:
       - name: Image has the backup tools and starts as expected
         run: |
           docker run --rm --entrypoint sh tc-hunter-railway -c 'pg_dump --version && age --version && rclone version | head -1 && test -f web/apps/web/server.js && test -f /usr/local/bin/backup.sh'
+      - name: Image's apply browser starts
+        run: |
+          docker run --rm --user node -w /app --entrypoint node tc-hunter-railway -e "require('playwright-core').chromium.launch({ chromiumSandbox: false }).then((b) => b.close()).then(() => console.log('chromium ok'))"
 
   secrets:
     runs-on: ubuntu-latest
