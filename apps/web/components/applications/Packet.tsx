@@ -3,8 +3,9 @@ import type { getPacket } from "@tc-hunter/db";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Details } from "@/components/Layers";
 import { BudgetLine, day } from "@/components/applications/AppBits";
-import { packetAnswerAction, packetApproveAction, workAuthAnswerAction, resolveOutcomeAction, sendApproveAction, serverSendApproveAction, submittedAction } from "@/app/applications/actions";
+import { packetAnswerAction, packetApproveAction, standingFromAppAction, workAuthAnswerAction, resolveOutcomeAction, sendApproveAction, serverSendApproveAction, submittedAction } from "@/app/applications/actions";
 import { stepUpAction } from "@/app/settings/vault-actions";
+import { STANDING_ANSWERS, standingKindFor, type StepKind } from "@tc-hunter/domain";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 
@@ -224,6 +225,39 @@ function AnswerForm({ p, f, back, label }: { p: Packet; f: Packet["fields"][numb
 }
 
 /**
+ * A statement, consent, signature or personal question the form requires: answered right here,
+ * as a standing answer (with what the applicant takes on), so no later form asks again.
+ */
+function StandingAsk({ p, f, back, fresh, mfa }: { p: Packet; f: Packet["fields"][number]; back: string; fresh: boolean; mfa: boolean }) {
+  const kind = f.step ? standingKindFor(f.step as StepKind, f.label) : null;
+  const def = kind ? STANDING_ANSWERS.find((x) => x.kind === kind) : undefined;
+  if (!kind || !def) return <p className="small">Apply on their site yourself for this one.</p>;
+  if (!fresh) {
+    return (
+      <form action={stepUpAction} className="stack">
+        <input type="hidden" name="back" value={back} />
+        <p className="small">To let TC Hunter answer this for you, first confirm it&apos;s you.</p>
+        <label>Password<input name="password" type="password" autoComplete="current-password" /></label>
+        {mfa ? <label>Or the 6-digit code from your authenticator app<input name="code" inputMode="numeric" pattern="[0-9]{6}" autoComplete="one-time-code" /></label> : null}
+        <button className="secondary">Confirm it&apos;s me</button>
+      </form>
+    );
+  }
+  return (
+    <form action={standingFromAppAction} className="stack">
+      <Hidden appRef={p.appRef} back={back} />
+      <input type="hidden" name="kind" value={kind} />
+      <p className="small"><strong>{def.title}.</strong> {def.does}</p>
+      <p className="warn small"><strong>What you take on:</strong> {def.risk}</p>
+      {kind === "signature" ? <label className="small">Your signature (full legal name)<input name="text" maxLength={300} required /></label>
+        : <input type="hidden" name="text" value={def.defaultText({ legalName: "" })} />}
+      <button>I agree. Answer this for me, now and on every form</button>
+      <span className="small muted">You can turn it off in <a href="/settings/applying">Settings</a>.</span>
+    </form>
+  );
+}
+
+/**
  * The answers TC Hunter's own browser put (or will put) into the employer's form. Layer 1:
  * each answer and where it came from, the questions it needs from the applicant (required
  * ones first, in red), and any answer taken from a standing answer in Settings, flagged.
@@ -291,7 +325,10 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
                 </div>
               ) : f.step ? (
                 f.required
-                  ? <div className="error small">{STEP[f.step] ?? "Always yours"}. Required, so TC Hunter can&apos;t send this form without it. Set a standing answer in <a href="/settings/applying">Settings</a>, or apply on their site yourself.{f.note ? <div>{f.note}</div> : null}</div>
+                  ? <div>
+                      <div className="error small">{STEP[f.step] ?? "Always yours"}. Required, so TC Hunter can&apos;t send this form without it.{f.note ? <div>{f.note}</div> : null}</div>
+                      {review ? <StandingAsk p={p} f={f} back={back} fresh={fresh} mfa={mfa} /> : null}
+                    </div>
                   : <div className="muted">{STEP[f.step] ?? "Always yours"}. Optional: TC Hunter leaves it blank.</div>
               ) : f.willFill ? (
                 <div><span className="packet-a">{f.type === "file" ? "Your PDF" : f.answer}</span> <span className={f.source === "standing_answer" ? "warn" : "muted"}>· {FROM[f.source ?? ""] ?? ""}{f.fillStatus === "filled" ? (f.type === "file" ? " · attached" : " · typed") : ""}</span>

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
-import {
+import { AGREE_CHOICE,
   formUrlFor, humanCheckIn, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type PageForm, type PageNow, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { PAGE_SCRIPT } from "./pageScript";
@@ -24,6 +24,9 @@ export interface BrowserOptions {
 }
 
 const ANSWER_YES = /^(yes|true|on|checked|i agree|agree|i accept|accept)$/i;
+/** A standing "I agree" answer, and a site's own agreeing choice. */
+const AGREEING = /^(yes|i agree|agree|i accept|accept|i consent|i acknowledge|acknowledge)$/i;
+const AGREE_OPTION = AGREE_CHOICE;
 
 export class ServerBrowser implements ApplyBrowser {
   constructor(private opts: BrowserOptions = {}) {}
@@ -96,7 +99,22 @@ class PwPage implements ApplyPage {
     await this.helpers();
     const r = await this.pg.evaluate(() => (window as any).__tcApply.readForm()) as { url: string; fields: PageForm["fields"]; captcha: boolean };
     const text = await this.pg.evaluate(() => document.body?.innerText ?? "").catch(() => "");
+    // Drop-downs drawn by the site (React selects) only show their choices once opened:
+    // open each one, read its choices, close it again. Nothing is chosen.
+    for (const f of r.fields) if (f.type === "select" && !f.options?.length) f.options = await this.listChoices(f.key).catch(() => undefined);
     return { ...r, humanCheck: humanCheckIn(text) };
+  }
+
+  protected async listChoices(key: string): Promise<string[] | undefined> {
+    const loc = locate(this.pg, key);
+    if (!(await loc.count())) return undefined;
+    await loc.click({ timeout: 3000 });
+    await this.pg.waitForTimeout(400);
+    const texts = (await this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible").allTextContents())
+      .map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t && !/^(no options|loading)/i.test(t));
+    await this.pg.keyboard.press("Escape").catch(() => {});
+    await loc.blur().catch(() => {});
+    return texts.length && texts.length <= 200 ? [...new Set(texts)] : undefined;
   }
 
   async openForm(ats: Ats): Promise<PageForm> {
@@ -175,7 +193,8 @@ class PwPage implements ApplyPage {
   /** Drop-downs drawn by the site (React selects, Workday's lists): open, choose the matching choice. */
   protected async pickFromList(loc: Locator, value: string, isButton: boolean): Promise<FillResult["status"]> {
     await loc.click();
-    if (!isButton) { await loc.fill(value).catch(() => loc.pressSequentially(value)); }
+    // Typing filters the list; for an agreement the site's wording may differ, so show the whole list.
+    if (!isButton && !AGREEING.test(value.trim())) { await loc.fill(value).catch(() => loc.pressSequentially(value)); }
     await this.pg.waitForTimeout(700);
     const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
     const n = await options.count();
@@ -184,6 +203,10 @@ class PwPage implements ApplyPage {
       const t = norm((await options.nth(i).textContent()) ?? "");
       if (t === norm(value)) { best = options.nth(i); break; }
       if (!best && t.startsWith(norm(value)) && norm(value).length >= 2) best = options.nth(i);
+    }
+    if (!best && AGREEING.test(value.trim())) {
+      // A standing "I agree": the site's own agreeing choice ("Acknowledge", "Yes, I agree", ...).
+      for (let i = 0; i < n && !best; i++) if (AGREE_OPTION.test(((await options.nth(i).textContent()) ?? "").trim())) best = options.nth(i);
     }
     if (!best) { await this.pg.keyboard.press("Escape").catch(() => {}); return "no_match"; }
     await best.click();

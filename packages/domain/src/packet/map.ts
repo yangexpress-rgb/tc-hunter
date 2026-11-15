@@ -140,7 +140,9 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   return { ...base, note: "New question. Type your answer." };
 }
 
-const AGREE = /^(yes\b|i (agree|accept|consent|certify|confirm|acknowledge|understand|authori[sz]e)|agree|accept|confirm|acknowledged?|i have read)/i;
+/** A form's own "I agree" choice ("Yes", "I agree", "Acknowledge", "I have read and accept", ...). */
+export const AGREE_CHOICE = /^(yes\b|i (agree|accept|consent|certify|confirm|acknowledge|understand|authori[sz]e|have read)|agree|accept|confirm|acknowledge|consent|understood)/i;
+const AGREE = AGREE_CHOICE;
 const DECLINE = /(decline|prefer not|do ?n[o']t (wish|want) to|not (wish|want) to (answer|say|disclose|identify|self)|choose not to|rather not|not to (say|answer|disclose))/i;
 const BACKGROUND = /\b(background (check|screen|investigation)|criminal|credit (check|report)|reference check|consumer report|drug (test|screen))/i;
 
@@ -172,7 +174,11 @@ function standingAnswerFor(f: FormField, step: StepKind, standing: NonNullable<P
   }
   if (f.type === "checkbox") return { ...from, answer: "Yes" };
   if (f.type === "select" || f.type === "radio") {
-    const opt = f.options?.find((o) => AGREE.test(o.trim()));
+    const real = (f.options ?? []).filter((o) => o.trim() && !/^(select|choose|please select)\b/i.test(o.trim()));
+    // The agreeing choice; or the only choice a required consent offers; or, when the site hides its
+    // choices until opened, the standing answer itself (the browser then picks the agreeing choice).
+    const opt = real.find((o) => AGREE.test(o.trim())) ?? (real.length === 1 && kind !== "signature" ? real[0] : undefined)
+      ?? (!real.length && kind !== "signature" ? (s.text.trim() || "I agree") : undefined);
     return opt ? { ...from, answer: opt } : null;
   }
   if (f.type === "file") return null;

@@ -97,3 +97,18 @@ describe("packet fingerprint and receipt", () => {
     expect(Buffer.from(pdf).subarray(0, 4).toString()).toBe("%PDF");
   });
 });
+
+describe("standing answers on drop-downs the site draws itself (Spaulding Ridge, 2026-11-15)", () => {
+  const label = "Before submitting your application, you must agree to Spaulding Ridge's Candidate Privacy Notice.*";
+  const consent = profile({ standing: [{ kind: "consent", text: "I agree" }] });
+  it("answers a consent whose choices aren't known yet with the standing answer", () => {
+    expect(proposeField({ key: "q", label, type: "select", required: true }, consent)).toMatchObject({ answer: "I agree", source: "standing_answer", standingKind: "consent", step: null });
+  });
+  it("picks the form's own agreeing choice, or the only one", () => {
+    expect(proposeField({ key: "q", label, type: "select", options: ["Acknowledge"] }, consent)).toMatchObject({ answer: "Acknowledge", source: "standing_answer" });
+    expect(proposeField({ key: "q", label, type: "select", options: ["Select...", "I have read and agree"] }, consent)).toMatchObject({ answer: "I have read and agree" });
+  });
+  it("without the standing answer it stays the applicant's", () => {
+    expect(proposeField({ key: "q", label, type: "select", required: true }, profile())).toMatchObject({ answer: null, step: "consent" });
+  });
+});

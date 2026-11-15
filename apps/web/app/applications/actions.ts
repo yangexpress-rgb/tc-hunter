@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, markSubmitted, requestApply,
-  resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -99,6 +99,17 @@ export async function packetAnswerAction(form: FormData) {
     await answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), String(form.get("answer") ?? ""));
     await continueIfAnswered(pool, s, ref);
   }, `/applications/${ref}#packet`);
+}
+
+/** "Answer this kind of question for me from now on", from the application: a standing answer (fresh "confirm it's you"), then TC Hunter carries on. */
+export async function standingFromAppAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const { pool, cfg } = app();
+  await act(form, async () => {
+    await setStandingAnswer(pool, cfg, s, String(form.get("kind") ?? ""), String(form.get("text") ?? ""));
+    await requestApply(pool, s, ref).catch(() => { /* already queued by the standing answer */ });
+  }, `/applications/${ref}#applying`, "applying");
 }
 
 /** A right-to-work or sponsorship question answered on the application: saved as the approved saved answer, then TC Hunter carries on. */

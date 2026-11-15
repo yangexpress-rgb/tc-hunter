@@ -75,6 +75,14 @@ export async function setStandingAnswer(pool: pg.Pool, cfg: AppConfig, session: 
         [kind, encryptField(dk, "standing_answer.answer", t)]);
     }
     await recordAudit(c, "apply.standing_set", { payload: { kind, on: t !== null } });
+    // Applications waiting on a question like this one carry on by themselves.
+    if (t !== null) {
+      const waiting = (await c.query(
+        `SELECT r.application_id FROM apply_run r
+          WHERE r.status = 'waiting' AND r.waiting_for IN ('answers','site_account')
+            AND NOT EXISTS (SELECT 1 FROM apply_run n WHERE n.application_id = r.application_id AND n.created_at > r.created_at)`)).rows;
+      for (const w of waiting) await queueApply(c, w.application_id, { asked: true });
+    }
   });
 }
 

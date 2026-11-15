@@ -19,6 +19,9 @@
     <div class="field"><label for="source">How did you hear about us?</label>
       <input id="source" role="combobox" aria-controls="source_list" autocomplete="off">
       <ul id="source_list" role="listbox" hidden></ul></div>
+    <div class="field"><label for="notice">Before submitting your application, you must agree to Contoso's Candidate Privacy Notice.*</label>
+      <input id="notice" name="notice" role="combobox" aria-controls="notice_list" autocomplete="off">
+      <ul id="notice_list" role="listbox" hidden></ul></div>
     <div class="field"><label><input type="checkbox" id="privacy" name="privacy" required> I agree to the privacy notice *</label></div>
     <div class="field"><label><input type="checkbox" id="newsletter" name="newsletter"> Send me job alerts</label></div>
     <input type="password" id="secret" name="secret" aria-label="Password">
@@ -39,5 +42,14 @@
       list.hidden = false;
     }
     box.addEventListener("focus", show); box.addEventListener("input", show);
+    // A consent drawn the same way, whose only choice is "Acknowledge" (as on some Greenhouse boards).
+    var nb = document.getElementById("notice"), nl = document.getElementById("notice_list");
+    nb.addEventListener("click", function () {
+      nl.innerHTML = "";
+      var li = document.createElement("li"); li.setAttribute("role", "option"); li.textContent = "Acknowledge";
+      li.addEventListener("click", function () { nb.value = "Acknowledge"; nl.hidden = true; });
+      nl.appendChild(li); nl.hidden = false;
+    });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") { list.hidden = true; nl.hidden = true; } });
   </script>
 </body></html>
