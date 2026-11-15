@@ -246,6 +246,8 @@ export const L1 = {
   "error.prompt_too_long": "The instructions are too long. Keep them under 40,000 characters.",
   "error.linkedin_url": "That doesn't look like a LinkedIn profile address. It should look like linkedin.com/in/your-name.",
   "error.digest_busy": "We're still reading this file. Wait for it to finish, then try again.",
+  "error.tailor_busy": "Documents for this job are being prepared right now. Wait for them to finish, then send your feedback again.",
+  "error.feedback_empty": "Write what you'd like changed first.",
   "error.resume_unchangeable": "Your original file is kept exactly as you uploaded it and can't be changed. Upload a new one instead.",
   "error.erase_confirm": "That email doesn't match your account, so nothing was deleted.",
 } as const;
@@ -309,6 +311,8 @@ export const ERROR_MESSAGES: Record<string, L1Key> = {
   TC_PROMPT_TOO_LONG: "error.prompt_too_long",
   TC_LINKEDIN_URL: "error.linkedin_url",
   TC_DIGEST_BUSY: "error.digest_busy",
+  TC_TAILOR_BUSY: "error.tailor_busy",
+  TC_FEEDBACK_EMPTY: "error.feedback_empty",
   TC_RESUME_FILE_UNCHANGEABLE: "error.resume_unchangeable",
   TC_STEP_UP_REQUIRED: "stepup.needed",
   TC_VERIFIED_FACT_LOCKED: "error.fact_locked",

@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { approveDocument, confirmAlias, editDocument, newVersion, requestTailor, type DocKind, type EditOp } from "@tc-hunter/db";
+import { approveDocument, confirmAlias, editDocument, newVersion, requestTailor, reviseDocument, type DocKind, type EditOp } from "@tc-hunter/db";
 import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -73,4 +73,12 @@ export async function newVersionAction(form: FormData) {
 export async function confirmAliasAction(form: FormData) {
   const s = await requireSession();
   await act(form, () => confirmAlias(app().pool, s, String(form.get("blocked"))), "/documents");
+}
+
+/** "Revise with feedback": Claude makes the next version from what the applicant wrote; the page waits for it. */
+export async function reviseAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("ref") ?? "");
+  const back = /^D-\d+$/.test(ref) ? `/documents/${ref}` : "/documents";
+  await act(form, () => reviseDocument(app().pool, s, String(form.get("doc")), String(form.get("feedback") ?? "")), back, "revising");
 }

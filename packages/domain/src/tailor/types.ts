@@ -48,18 +48,23 @@ export interface ResumeProposal {
   /** Skills to list, most relevant first (ids from the profile). */
   skill_ids?: string[];
   aliases?: AliasProposal[];
+  /** Roles, lines or skills (by id) to leave out, when the applicant's feedback asks for it. Leaving out is always safe. */
+  leave_out?: string[];
 }
 export interface LetterProposal { paragraphs: ProposedLine[] }
 
-export interface GenerationMeta { proposer: string; model?: string; prompt_version?: string }
+export interface GenerationMeta { proposer: string; model?: string; prompt_version?: string; /** False when feedback was given but this proposer can't follow free text. */ feedback_applied?: boolean }
+
+/** The applicant's feedback on the last version (Yong, 2026-11-15: "Revise with feedback"), and that version's text. */
+export interface ProposeOptions { feedback?: string; previous?: string }
 
 export interface ResumeProposer {
   readonly version: string;
-  propose(profile: TailorProfile, posting: TailorPosting): Promise<{ proposal: ResumeProposal; meta: GenerationMeta }>;
+  propose(profile: TailorProfile, posting: TailorPosting, opts?: ProposeOptions): Promise<{ proposal: ResumeProposal; meta: GenerationMeta }>;
 }
 export interface LetterProposer {
   readonly version: string;
-  propose(profile: TailorProfile, posting: TailorPosting): Promise<{ proposal: LetterProposal; meta: GenerationMeta }>;
+  propose(profile: TailorProfile, posting: TailorPosting, opts?: ProposeOptions): Promise<{ proposal: LetterProposal; meta: GenerationMeta }>;
 }
 
 export type BlockReason = "no_source_fact" | "gap_skill" | "number_mismatch" | "date_mismatch" | "new_name" | "proficiency_raise" | "unverified_fact" | "unconfirmed_alias";

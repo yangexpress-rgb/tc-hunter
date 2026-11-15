@@ -4,11 +4,11 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   extractText, RulesLetterProposer, RulesRequirementsReader, RulesResumeProposer, SourceRefusedError,
-  type Fetcher, type ResumeProposer, type TailorPosting, type TailorProfile,
+  type Fetcher, type ProposeOptions, type ResumeProposer, type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, approveDocument, confirmAlias, editDocument, exportDocument, getDocument, listDocuments, markDiffViewed,
-  newVersion, requestLink, requestTailor, runNextWork, savePreferences, tailorReadiness, tailorWork, listMatches, verifyAll,
+  newVersion, requestLink, requestTailor, reviseDocument, runNextWork, savePreferences, tailorReadiness, tailorWork, listMatches, verifyAll,
   type AppConfig, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -213,5 +213,67 @@ describe("documents use the latest profile, confirmed or not (Yong, 2026-11-15)"
     expect(await verifyAll(pool, yong)).toBe(0);
     expect(await verifyAll(pool, leo)).toBe(2);
     expect(await tailorReadiness(pool, leo)).toEqual({ roles: 1, lines: 1, waiting: 0 });
+  });
+});
+
+describe("Revise with feedback (Yong, 2026-11-15)", () => {
+  /** Stands in for Claude: drops the role the feedback names, and remembers what it was told. */
+  class FeedbackProposer implements ResumeProposer {
+    readonly version = "feedback-test";
+    seen: ProposeOptions[] = [];
+    async propose(p: TailorProfile, _j: TailorPosting, opts: ProposeOptions = {}) {
+      this.seen.push(opts);
+      const drop = opts.feedback?.includes("Contoso") ? p.experience.filter((e) => e.employer === "Contoso").map((e) => e.id) : [];
+      return { proposal: { lines: [], leave_out: drop }, meta: { proposer: this.version } };
+    }
+  }
+
+  it("makes the next version from the feedback, keeps the draft it replaced, and needs a fresh approval", async () => {
+    const leoJob = (await listMatches(pool, leo, { status: "all" })).rows[0].public_ref;
+    const before = (await listDocuments(pool, leo, leoJob)).find((d) => d.type === "tailored_resume")!;
+    const old = (await getDocument(pool, cfg, leo, before.public_ref))!;
+    expect(old.status).toBe("draft");
+    await expect(reviseDocument(pool, leo, old.id, "   ")).rejects.toThrow("TC_FEEDBACK_EMPTY");
+
+    const proposer = new FeedbackProposer();
+    await reviseDocument(pool, leo, old.id, "Please drop the Contoso role");
+    await expect(reviseDocument(pool, leo, old.id, "again")).rejects.toThrow("TC_TAILOR_BUSY");  // one at a time
+    await drain(deps(proposer));
+    expect(proposer.seen).toHaveLength(1);
+    expect(proposer.seen[0]!.feedback).toBe("Please drop the Contoso role");
+    expect(proposer.seen[0]!.previous).toContain("Built weekly reports");
+
+    const docs = await listDocuments(pool, leo, leoJob);
+    expect(docs.map((d) => d.type).sort()).toEqual(["cover_letter", "tailored_resume"]);  // only the resume was remade
+    const next = (await getDocument(pool, cfg, leo, docs.find((d) => d.type === "tailored_resume")!.public_ref))!;
+    expect(next.version).toBe(old.version + 1);
+    expect(next.status).toBe("draft");
+    expect(next.meta).toMatchObject({ feedback: "Please drop the Contoso role", revised_from: old.ref });
+    const src = next.source as { experience: Array<{ employer: string; included: boolean }> };
+    expect(src.experience.find((e) => e.employer === "Contoso")!.included).toBe(false);
+    expect(next.versions.map((v) => [v.version, v.status])).toEqual([[old.version + 1, "draft"], [old.version, "superseded"]]);
+    const parent = await ownerQuery("SELECT parent_document_id FROM document WHERE id = $1", [next.id]);
+    expect(parent.rows[0].parent_document_id).toBe(old.id);
+
+    // The replaced draft is frozen, and was never approved, so it can't be downloaded.
+    await expect(exportDocument(pool, cfg, leo, old.ref, "pdf")).rejects.toThrow("TC_DOCUMENT_NOT_APPROVED");
+    await expect(ownerQuery("UPDATE document SET source_json = '{}' WHERE id = $1", [old.id])).rejects.toThrow("TC_DOCUMENT_IMMUTABLE");
+  });
+
+  it("without Claude, says the feedback couldn't be followed", async () => {
+    const leoJob = (await listMatches(pool, leo, { status: "all" })).rows[0].public_ref;
+    const letter = (await listDocuments(pool, leo, leoJob)).find((d) => d.type === "cover_letter")!;
+    const before = (await getDocument(pool, cfg, leo, letter.public_ref))!;
+    await reviseDocument(pool, leo, before.id, "Make it warmer");
+    await drain();
+    const now = (await listDocuments(pool, leo, leoJob)).find((d) => d.type === "cover_letter")!;
+    const d = (await getDocument(pool, cfg, leo, now.public_ref))!;
+    expect(d.version).toBe(before.version + 1);
+    expect(d.meta).toMatchObject({ feedback: "Make it warmer", feedback_applied: false });
+  });
+
+  it("only the applicant's own documents can be revised", async () => {
+    const yongDoc = (await listDocuments(pool, yong, jobRef))[0]!;
+    await expect(reviseDocument(pool, leo, yongDoc.id, "change it")).rejects.toThrow("TC_NOT_FOUND");
   });
 });
