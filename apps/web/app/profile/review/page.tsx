@@ -70,7 +70,7 @@ export default async function ReviewPage(props: PageProps) {
 
       {total === 0 ? <p className="status">{t("profile.review.empty")} <a href="/profile">Back to your profile</a></p> : (
         <>
-          <p className="muted">{total} {total === 1 ? "row is" : "rows are"} waiting. Nothing here goes into a resume or cover letter until you confirm it. Levels are only ever what your file says; you can change them yourself.</p>
+          <p className="muted">{total} {total === 1 ? "row is" : "rows are"} waiting. Resumes and cover letters already use these rows; confirming marks them as checked by you. Levels are only ever what your file says; you can change them yourself.</p>
           <form action={verifyAllAction} className="inline-actions">
             <input type="hidden" name="back" value={back} />
             {batchId ? <input type="hidden" name="batch_id" value={batchId} /> : null}

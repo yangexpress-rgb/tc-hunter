@@ -178,28 +178,40 @@ describe("F4 through the app: draft, block, approve, export", () => {
   });
 });
 
-describe("an unconfirmed profile (Yong, 2026-11-15: an empty resume)", () => {
-  it("makes no empty documents, says why, and Confirm all makes the rows usable", async () => {
-    // Leo's work history came from a file and isn't confirmed yet.
-    const item = (await ownerQuery(`INSERT INTO experience_item (applicant_id, employment_type, title, employer_name, start_date, verification, source)
-      VALUES ($1, 'full_time', 'Analyst', 'Contoso', '2022-01-01', 'draft', 'import_resume') RETURNING id`, [leo.applicantId])).rows[0].id;
-    await ownerQuery(`INSERT INTO experience_bullet (applicant_id, experience_item_id, text, verification, source) VALUES ($1, $2, 'Built weekly reports', 'draft', 'import_resume')`, [leo.applicantId, item]);
+describe("documents use the latest profile, confirmed or not (Yong, 2026-11-15)", () => {
+  it("with no work history, makes nothing and says why", async () => {
     await requestLink(pool, leo, { url: "https://www.linkedin.com/jobs/view/4242", title: post.title, employer: post.employer, location: "Remote", text: "Lead enterprise solutions." });
     await drain();
     const leoJob = (await listMatches(pool, leo, { status: "all" })).rows[0].public_ref;
-    expect(await tailorReadiness(pool, leo)).toEqual({ roles: 0, lines: 0, waiting: 2 });
+    expect(await tailorReadiness(pool, leo)).toMatchObject({ roles: 0, lines: 0 });
     await requestTailor(pool, leo, leoJob);
     await drain();
     const w = await tailorWork(pool, leo, leoJob);
     expect(w.status).toBe("done");
-    expect(w.result).toMatchObject({ empty: true, waiting: 2, documents: [] });
+    expect(w.result).toMatchObject({ empty: true, documents: [] });
     expect(await listDocuments(pool, leo, leoJob)).toEqual([]);
+  });
 
-    expect(await verifyAll(pool, yong)).toBe(0);  // Yong's call can't touch Leo's rows
-    expect(await verifyAll(pool, leo)).toBe(2);
-    expect(await tailorReadiness(pool, leo)).toEqual({ roles: 1, lines: 1, waiting: 0 });
+  it("uses rows from a resume that aren't confirmed yet, word for word", async () => {
+    // Leo's work history came from a file and isn't confirmed.
+    const item = (await ownerQuery(`INSERT INTO experience_item (applicant_id, employment_type, title, employer_name, start_date, verification, source)
+      VALUES ($1, 'full_time', 'Analyst', 'Contoso', '2022-01-01', 'draft', 'import_resume') RETURNING id`, [leo.applicantId])).rows[0].id;
+    await ownerQuery(`INSERT INTO experience_bullet (applicant_id, experience_item_id, text, verification, source) VALUES ($1, $2, 'Built weekly reports', 'draft', 'import_resume')`, [leo.applicantId, item]);
+    const leoJob = (await listMatches(pool, leo, { status: "all" })).rows[0].public_ref;
+    expect(await tailorReadiness(pool, leo)).toEqual({ roles: 1, lines: 1, waiting: 2 });
     await requestTailor(pool, leo, leoJob);
     await drain();
-    expect((await listDocuments(pool, leo, leoJob)).map((d) => d.type).sort()).toEqual(["cover_letter", "tailored_resume"]);
+    const docs = await listDocuments(pool, leo, leoJob);
+    expect(docs.map((d) => d.type).sort()).toEqual(["cover_letter", "tailored_resume"]);
+    const resume = (await getDocument(pool, cfg, leo, docs.find((d) => d.type === "tailored_resume")!.public_ref))!;
+    const src = resume.source as { experience: Array<{ employer: string; lines: Array<{ text: string }> }> };
+    expect(src.experience.map((e) => e.employer)).toEqual(["Contoso"]);
+    expect(src.experience[0]!.lines.map((l) => l.text)).toEqual(["Built weekly reports"]);
+  });
+
+  it("Confirm all marks only the applicant's own waiting rows", async () => {
+    expect(await verifyAll(pool, yong)).toBe(0);
+    expect(await verifyAll(pool, leo)).toBe(2);
+    expect(await tailorReadiness(pool, leo)).toEqual({ roles: 1, lines: 1, waiting: 0 });
   });
 });
