@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getDocument, markDiffViewed, type DocumentView } from "@tc-hunter/db";
+import { getDocument, markDiffViewed, tailorWork, type DocumentView } from "@tc-hunter/db";
 import { formatMetric, monthYear, type LetterSource, type ResumeSource } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -7,7 +7,8 @@ import { Flash } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { approveAction, confirmAliasAction, editAction, newVersionAction } from "../actions";
+import { approveAction, confirmAliasAction, editAction, newVersionAction, reviseAction } from "../actions";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,11 @@ export default async function DocumentPage(props: Props) {
   const here = `/documents/${d.ref}${pane === "doc" ? "" : `?pane=${pane}`}`;
   const draft = d.status === "draft";
   const latest = d.versions[0];
+  // After "Revise with feedback": wait here, then move to the new version once it's made.
+  const work = params.revising === "1" ? await tailorWork(pool, session, d.job.ref) : null;
+  const revising = !!work && (work.status === "queued" || work.status === "running");
+  if (params.revising === "1" && !revising && latest && latest.ref !== d.ref) redirect(`/documents/${latest.ref}?revised=1`);
+  const revisionFailed = params.revising === "1" && work?.status === "failed";
 
   return (
     <>
@@ -56,6 +62,12 @@ export default async function DocumentPage(props: Props) {
       <p className="job-meta">{d.job.employer} · Version {d.version} · {STATUS_LABEL[d.status]}</p>
       <Flash saved={saved || params.approved === "1"} error={error} />
       {params.approved === "1" ? <p className="status" role="status">Approved. You can download it below.</p> : null}
+      {revising ? <><meta httpEquiv="refresh" content="4" /><p className="status" role="status">Claude is making the next version from your feedback. This page moves to it when it's ready.</p></> : null}
+      {revisionFailed ? <p className="error" role="alert">The new version couldn't be made this time. Your feedback wasn't lost: send it again below.</p> : null}
+      {d.meta.feedback ? (
+        <p className="muted">Made from your feedback{d.meta.revised_from ? ` on the previous version` : ""}: “{String(d.meta.feedback)}”
+          {d.meta.feedback_applied === false ? <span className="warn"> Claude isn't set up, so only the usual rules were applied and your feedback couldn't be followed.</span> : null}</p>
+      ) : null}
 
       <nav className="tabs" aria-label="Views">
         <a href={`/documents/${d.ref}`} aria-current={pane === "doc" ? "page" : undefined}>This version</a>
@@ -66,6 +78,7 @@ export default async function DocumentPage(props: Props) {
       </nav>
 
       <ApproveBar d={d} here={here} />
+      {!revising && (d.status === "draft" || d.status === "approved") && d.ref === latest?.ref ? <ReviseBox d={d} /> : null}
       {d.status === "superseded" && latest ? <p className="muted">A newer version exists: <a href={`/documents/${latest.ref}`}>version {latest.version}</a>.</p> : null}
 
       {pane === "doc" ? (d.source.kind === "resume" ? <ResumePane d={d} s={d.source} here={here} editable={draft} /> : <LetterPane d={d} s={d.source} here={here} editable={draft} name={session.preferredName} />) : null}
@@ -88,6 +101,21 @@ export default async function DocumentPage(props: Props) {
         <AdvancedRow label="Blocked by rule" value={d.blocked.map((b) => `${b.reason}[${b.terms.join("|")}]`).join(", ") || "none"} />
       </Advanced>
     </>
+  );
+}
+
+/** The other choice next to Approve (Yong, 2026-11-15): tell Claude what to change, and get the next version. */
+function ReviseBox({ d }: { d: DocumentView }) {
+  return (
+    <Details summary="Revise with feedback" open={d.status === "draft"}>
+      <form action={reviseAction} className="stack">
+        <input type="hidden" name="doc" value={d.id} /><input type="hidden" name="ref" value={d.ref} />
+        <label>What should change?
+          <textarea name="feedback" rows={4} maxLength={2000} required placeholder="e.g. Lead with my transformation work, keep it to one page, drop the oldest role" /></label>
+        <p className="hint">Claude makes version {d.version + 1} from your feedback, still only from your profile's own facts. This version stays in the history.</p>
+        <button className="secondary">Make a new version</button>
+      </form>
+    </Details>
   );
 }
 

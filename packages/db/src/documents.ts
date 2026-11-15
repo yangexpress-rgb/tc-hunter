@@ -146,26 +146,34 @@ async function insertDocument(c: pg.PoolClient, kind: DocKind, posting: { id: st
 }
 
 /** Background work: draft the tailored resume (and cover letter) for one saved job. */
-export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { match_id: string; kinds?: DocKind[] }, deps: TailorDeps) {
+export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { match_id: string; kinds?: DocKind[]; feedback?: string; from_doc?: string }, deps: TailorDeps) {
   return withApplicant(pool, ctx, async (c) => {
     const dk = await dataKeyFor(c, deps.cfg, ctx.applicantId);
     const profile = await loadTailorProfile(c, dk);
     const posting = await postingForMatch(c, payload.match_id);
+    // "Revise with feedback": the version the feedback is about is kept (a draft is frozen as replaced) and becomes the parent.
+    const from = payload.from_doc ? (await c.query("SELECT id, public_ref, type, status, source_json FROM document WHERE id = $1 AND match_id = $2", [payload.from_doc, payload.match_id])).rows[0] ?? null : null;
+    if (from) {
+      payload = { ...payload, kinds: [kindOf(from.type)] };
+      if (from.status === "draft") await c.query("UPDATE document SET status = 'superseded' WHERE id = $1", [from.id]);
+    }
+    const opts = from && payload.feedback ? { feedback: payload.feedback, previous: documentText(from.source_json) } : {};
+    const revised = from ? { feedback: payload.feedback, revised_from: from.public_ref } : {};
     const pages = (await c.query("SELECT tailor_target_pages FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.tailor_target_pages ?? 2;
     const made: Array<{ kind: DocKind; ref: string; version: number; blocked: number }> = [];
     // With no work history at all, a resume or letter would be empty: say so instead of making one.
     if (!profile.experience.length) return { jobRef: posting.ref, documents: made, empty: true };
     for (const kind of payload.kinds?.length ? payload.kinds : (["resume", "letter"] as DocKind[])) {
       if (kind === "resume") {
-        const { proposal, meta } = await deps.resume.propose(profile, posting);
+        const { proposal, meta } = await deps.resume.propose(profile, posting, opts);
         const d = buildResume(profile, posting, proposal, pages);
-        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, generated_at: new Date().toISOString() }, d.blocked, d.gaps, null);
+        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, ...revised, generated_at: new Date().toISOString() }, d.blocked, d.gaps, from?.id ?? null);
         made.push({ kind, ref: doc.ref, version: doc.version, blocked: d.blocked.length });
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: d.blocked.length } });
       } else {
-        const { proposal, meta } = await deps.letter.propose(profile, posting);
+        const { proposal, meta } = await deps.letter.propose(profile, posting, opts);
         const d = buildLetter(profile, posting, proposal);
-        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, notes: d.notes, generated_at: new Date().toISOString() }, d.blocked, [], null);
+        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, ...revised, notes: d.notes, generated_at: new Date().toISOString() }, d.blocked, [], from?.id ?? null);
         made.push({ kind, ref: doc.ref, version: doc.version, blocked: d.blocked.length });
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: d.blocked.length } });
       }
@@ -184,6 +192,21 @@ export async function requestTailor(pool: pg.Pool, session: Session, jobRef: str
       `INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING RETURNING id`,
       [JSON.stringify({ match_id: m.id, kinds })]);
     return r.rows[0]?.id ?? (await c.query("SELECT id FROM work_item WHERE kind = 'tailor' AND payload->>'match_id' = $1 AND status IN ('queued','running')", [m.id])).rows[0].id;
+  });
+}
+
+/** "Revise with feedback" (Yong, 2026-11-15): Claude makes the next version of one document from the applicant's own words. */
+export async function reviseDocument(pool: pg.Pool, session: Session, docId: string, feedback: string): Promise<string> {
+  const text = feedback.trim().slice(0, 2000);
+  if (!text) throw new DomainError("TC_FEEDBACK_EMPTY");
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const d = (await c.query("SELECT id, match_id, type FROM document WHERE id = $1", [docId])).rows[0];
+    if (!d || !d.match_id) throw new DomainError("TC_NOT_FOUND");
+    const r = await c.query(
+      `INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING RETURNING id`,
+      [JSON.stringify({ match_id: d.match_id, kinds: [kindOf(d.type)], feedback: text, from_doc: d.id })]);
+    if (!r.rows[0]) throw new DomainError("TC_TAILOR_BUSY");
+    return r.rows[0].id as string;
   });
 }
 
@@ -401,7 +424,7 @@ export async function exportDocument(pool: pg.Pool, cfg: AppConfig, session: Ses
   return withApplicant(pool, asApplicant(session), async (c) => {
     const d = (await c.query("SELECT * FROM document WHERE public_ref = $1", [ref])).rows[0];
     if (!d) throw new DomainError("TC_NOT_FOUND");
-    if (d.status === "draft") throw new DomainError("TC_DOCUMENT_NOT_APPROVED");
+    if (d.status === "draft" || !d.approved_at) throw new DomainError("TC_DOCUMENT_NOT_APPROVED");
     const when = d.generation_meta?.rendered_at ? new Date(d.generation_meta.rendered_at) : new Date(d.approved_at);
     const r = await renderChecked(c, cfg, session.applicantId, d.id, d.source_json, when);
     await recordAudit(c, "document.exported", { objectType: "document", objectId: d.id, payload: { document_ref: d.public_ref, format } });

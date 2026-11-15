@@ -90,11 +90,19 @@ export function buildResume(profile: TailorProfile, posting: TailorPosting, prop
     .map((e) => ({ id: e.id, institution: e.institution, degree: e.degree, field: e.field, end: e.end, honours: e.honours }));
   const credentials = profile.credentials.filter((c) => c.verified).map((c) => ({ id: c.id, name: c.name, issuer: c.issuer, issuedOn: c.issuedOn }));
 
+  // What the applicant's feedback asked to leave out (roles, lines, skills): never shown.
+  const out = new Set(proposal.leave_out ?? []);
+  for (const it of items) if (out.has(it.itemId)) it.included = false;
+  const leftOut = (l: ResumeLine) => l.factIds.some((f) => out.has(f));
+  for (const sk of skills) if (out.has(sk.skillId)) sk.included = false;
+
   // Fit the target length by selection: every role keeps its best line, then the most relevant lines until the pages are full.
-  let budget = targetPages * LINES_PER_PAGE - 6 - 4 - (education.length ? 3 + education.length * 2 : 0) - (credentials.length ? 3 + credentials.length : 0) - items.length * 3;
+  const shownItems = items.filter((it) => it.included);
+  let budget = targetPages * LINES_PER_PAGE - 6 - 4 - (education.length ? 3 + education.length * 2 : 0) - (credentials.length ? 3 + credentials.length : 0) - shownItems.length * 3;
   for (const it of items) for (const l of it.lines) l.included = false;
-  for (const it of items) { const first = it.lines[0]; if (first && budget > 0) { first.included = true; budget -= lineCost(first.text); } }
-  const rest = items.flatMap((it) => it.lines.slice(1)).map((l) => ({ l, score: relevance(l.text, posting) })).sort((a, b) => b.score - a.score);
+  // Lines the feedback left out stay in the list, switched off, so they can be switched back on.
+  for (const it of shownItems) { const first = it.lines.find((l) => !leftOut(l)); if (first && budget > 0) { first.included = true; budget -= lineCost(first.text); } }
+  const rest = shownItems.flatMap((it) => it.lines.filter((l) => !leftOut(l)).slice(1)).map((l) => ({ l, score: relevance(l.text, posting) })).sort((a, b) => b.score - a.score);
   for (const { l } of rest) { if (budget - lineCost(l.text) < 0) continue; l.included = true; budget -= lineCost(l.text); }
 
   const source: ResumeSource = {

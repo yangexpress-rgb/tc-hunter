@@ -3,7 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { findSkills } from "../jobs/skills";
 import { relevance } from "./build";
-import type { LetterProposal, LetterProposer, ResumeProposal, ResumeProposer, TailorPosting, TailorProfile } from "./types";
+import type { LetterProposal, LetterProposer, ProposeOptions, ResumeProposal, ResumeProposer, TailorPosting, TailorProfile } from "./types";
 
 /**
  * Proposers suggest wording and order; they never decide what is true (risk 3).
@@ -21,17 +21,17 @@ const period = (s: string) => (/[.!?]$/.test(s.trim()) ? s.trim() : `${s.trim()}
 
 export class RulesResumeProposer implements ResumeProposer {
   readonly version = "tailor-rules-1";
-  async propose(profile: TailorProfile, posting: TailorPosting) {
-    // Own words only; the builder orders lines and selects skills by relevance.
+  async propose(profile: TailorProfile, posting: TailorPosting, opts: ProposeOptions = {}) {
+    // Own words only; the builder orders lines and selects skills by relevance. Free-text feedback needs Claude.
     const skill_ids = profile.skills.filter((s) => s.verified).map((s) => ({ s, r: relevance(s.name, posting) }))
       .filter((x) => x.r > 0).sort((a, b) => b.r - a.r).map((x) => x.s.id);
-    return { proposal: { lines: [], skill_ids } as ResumeProposal, meta: { proposer: this.version } };
+    return { proposal: { lines: [], skill_ids } as ResumeProposal, meta: { proposer: this.version, ...(opts.feedback ? { feedback_applied: false } : {}) } };
   }
 }
 
 export class RulesLetterProposer implements LetterProposer {
   readonly version = "letter-rules-1";
-  async propose(profile: TailorProfile, posting: TailorPosting) {
+  async propose(profile: TailorProfile, posting: TailorPosting, opts: ProposeOptions = {}) {
     const paragraphs: LetterProposal["paragraphs"] = [];
     paragraphs.push({ fact_ids: [posting.id], role: "opening", text: `I'm applying for the ${posting.title} role at ${posting.employer}.` });
     const lines = profile.experience.filter((e) => e.verified).flatMap((e) => e.bullets.filter((b) => b.verified).map((b) => ({ e, b, r: relevance(b.text, posting) })))
@@ -43,7 +43,7 @@ export class RulesLetterProposer implements LetterProposer {
     const why = profile.answers.find((a) => a.approved && MOTIVATION_KEYS.includes(a.key));
     if (why) paragraphs.push({ fact_ids: [why.id], role: "motivation", text: why.text });
     paragraphs.push({ fact_ids: [posting.id], role: "closing", text: `Thank you for considering my application for the ${posting.title} role.` });
-    return { proposal: { paragraphs }, meta: { proposer: this.version } };
+    return { proposal: { paragraphs }, meta: { proposer: this.version, ...(opts.feedback ? { feedback_applied: false } : {}) } };
   }
 }
 
@@ -57,7 +57,14 @@ const ResumeOut = z.object({
   })),
   skill_ids: z.array(z.string()).describe("skill ids from the profile, most relevant to this job first"),
   aliases: z.array(z.object({ skill_id: z.string(), alias: z.string() })).describe("where the posting uses another name for a skill the applicant has, that name; the applicant must confirm it"),
+  leave_out: z.array(z.string()).describe("ids of roles, bullets or skills the applicant's feedback asks to drop; empty when there is no feedback"),
 });
+
+/** The applicant's feedback, and the version it is about, as the last part of the request. */
+const feedbackBlock = (opts: ProposeOptions) => opts.feedback
+  ? `\n<previous_version>${(opts.previous ?? "").slice(0, 12000)}</previous_version>\n<feedback>${opts.feedback.slice(0, 2000)}</feedback>` : "";
+const FEEDBACK_RULE = `
+If <feedback> is given, it is the applicant's own request about <previous_version>. Follow it as far as the rules above allow; the rules always win. If it asks for something the facts don't support, leave that out rather than invent it.`;
 
 const RESUME_SYSTEM = `You help an applicant tailor their own resume to one job. You may only reword facts they gave you.
 Rules you must never break:
@@ -66,15 +73,17 @@ Rules you must never break:
 - Where the fact has a number, write {metric} instead of the number.
 - Never claim a skill listed under "gaps", under any name.
 - Never make a level sound higher ("expert", "advanced") than the applicant stated.
-- Keep each line one sentence, plain and specific, starting with a verb. Only reword bullets that become clearly more relevant to the job; skip the rest.`;
+- Keep each line one sentence, plain and specific, starting with a verb. Only reword bullets that become clearly more relevant to the job; skip the rest.
+- To drop a role, bullet or skill, list its id in leave_out.${FEEDBACK_RULE}`;
 
 export class ClaudeResumeProposer implements ResumeProposer {
   readonly version = `${PROMPT_VERSION}:${MODEL}`;
   constructor(private client: Anthropic = new Anthropic(), private fallback: ResumeProposer = new RulesResumeProposer()) {}
 
-  async propose(profile: TailorProfile, posting: TailorPosting) {
+  async propose(profile: TailorProfile, posting: TailorPosting, opts: ProposeOptions = {}) {
+    const roles = profile.experience.filter((e) => e.verified).map((e) => ({ id: e.id, title: e.title, employer: e.employer }));
     const facts = profile.experience.filter((e) => e.verified).flatMap((e) => e.bullets.filter((b) => b.verified).map((b) => ({
-      id: b.id, role: e.title, text: b.metricValue !== null ? b.text.replace(String(b.metricValue), "{metric}") : b.text,
+      id: b.id, role_id: e.id, role: e.title, text: b.metricValue !== null ? b.text.replace(String(b.metricValue), "{metric}") : b.text,
     })));
     const skills = profile.skills.filter((s) => s.verified).map((s) => ({ id: s.id, name: s.name, level: s.proficiency ?? "not stated" }));
     const job = { title: posting.title, required: posting.requirements.must_have, nice_to_have: posting.requirements.nice_to_have, gaps: posting.gapSkills };
@@ -86,12 +95,12 @@ export class ClaudeResumeProposer implements ResumeProposer {
         fallbacks: "default",
         output_config: { effort: "medium", format: zodOutputFormat(ResumeOut) },
         system: RESUME_SYSTEM,
-        messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>` }],
+        messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<roles>${JSON.stringify(roles)}</roles>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>${feedbackBlock(opts)}` }],
       });
-      if (r.stop_reason === "refusal" || !r.parsed_output) return this.fallback.propose(profile, posting);
+      if (r.stop_reason === "refusal" || !r.parsed_output) return this.fallback.propose(profile, posting, opts);
       return { proposal: r.parsed_output as ResumeProposal, meta: { proposer: this.version, model: MODEL, prompt_version: PROMPT_VERSION } };
     } catch {
-      return this.fallback.propose(profile, posting);
+      return this.fallback.propose(profile, posting, opts);
     }
   }
 }
@@ -110,13 +119,13 @@ Rules you must never break:
 - Never add a skill, tool, employer, product, place, number, date or level that is not in the cited facts. Use {metric} for a bullet's own number.
 - Never claim a skill listed under "gaps".
 - Reasons for wanting the job come only from the applicant's approved answers and stories ("motivation" facts). If there are none, write no motivation paragraph.
-- 3 to 5 short paragraphs, plain and warm, no flattery, no clichés.`;
+- 3 to 5 short paragraphs, plain and warm, no flattery, no clichés.${FEEDBACK_RULE}`;
 
 export class ClaudeLetterProposer implements LetterProposer {
   readonly version = `letter-claude-1:${MODEL}`;
   constructor(private client: Anthropic = new Anthropic(), private fallback: LetterProposer = new RulesLetterProposer()) {}
 
-  async propose(profile: TailorProfile, posting: TailorPosting) {
+  async propose(profile: TailorProfile, posting: TailorPosting, opts: ProposeOptions = {}) {
     const facts = profile.experience.filter((e) => e.verified).flatMap((e) => [
       { id: e.id, kind: "role", text: [e.title, e.employer].filter(Boolean).join(" at ") },
       ...e.bullets.filter((b) => b.verified).map((b) => ({ id: b.id, kind: "bullet", text: b.metricValue !== null ? b.text.replace(String(b.metricValue), "{metric}") : b.text })),
@@ -134,12 +143,12 @@ export class ClaudeLetterProposer implements LetterProposer {
         fallbacks: "default",
         output_config: { effort: "medium", format: zodOutputFormat(LetterOut) },
         system: LETTER_SYSTEM,
-        messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<motivation>${JSON.stringify(motivation)}</motivation>` }],
+        messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<motivation>${JSON.stringify(motivation)}</motivation>${feedbackBlock(opts)}` }],
       });
-      if (r.stop_reason === "refusal" || !r.parsed_output) return this.fallback.propose(profile, posting);
+      if (r.stop_reason === "refusal" || !r.parsed_output) return this.fallback.propose(profile, posting, opts);
       return { proposal: r.parsed_output as LetterProposal, meta: { proposer: this.version, model: MODEL, prompt_version: "letter-claude-1" } };
     } catch {
-      return this.fallback.propose(profile, posting);
+      return this.fallback.propose(profile, posting, opts);
     }
   }
 }
