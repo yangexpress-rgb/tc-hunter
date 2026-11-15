@@ -11,6 +11,7 @@ import type { AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
+import { fillProfileFromResume } from "./profileFill";
 
 /**
  * Original resumes and the resume digest.
@@ -376,6 +377,8 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
          JSON.stringify(outcomes), JSON.stringify(summary), JSON.stringify(parsed.notes), batchId]);
       await recordAudit(c, "resume.digested", { objectType: "resume_digest", objectId: digestId,
         payload: { run: claimed.run, parser: readerName, added: counts.add, same: counts.same, similar: counts.similar } });
+      // Name, email, phone and links from the file fill any gaps in the profile (never replacing what's there).
+      await fillProfileFromResume(c, deps.cfg, ctx.applicantId);
     });
     return "ready";
   } catch (e) {

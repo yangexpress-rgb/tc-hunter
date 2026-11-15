@@ -68,19 +68,28 @@ function pick(options: string[] | undefined, answer: string): string | null {
   return options.find((o) => norm(o) === a) ?? options.find((o) => a.length >= 2 && norm(o).startsWith(a)) ?? null;
 }
 
-const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefined, number]> = [
-  [/\b(first|given) name|forename/, (p) => p.firstName, 0.98],
-  [/\b(last|family) name|surname/, (p) => p.lastName, 0.98],
-  [/\bpreferred (first )?name/, (p) => p.preferredName, 0.95],
-  [/^(full |legal )?name$|^your name$|full legal name/, (p) => p.fullName, 0.95],
-  [/e-?mail/, (p) => p.email, 0.98],
-  [/phone|mobile|telephone|cell/, (p) => p.phone, 0.95],
-  [/linkedin/, (p) => p.links.linkedin, 0.97],
-  [/github/, (p) => p.links.github, 0.97],
-  [/website|portfolio|personal (site|url)|blog/, (p) => p.links.website, 0.9],
-  [/^country\b|country of residence/, (p) => p.country, 0.9],
-  [/^city\b|^location\b|current location|where are you (based|located)/, (p) => [p.city, p.region].filter(Boolean).join(", ") || null, 0.88],
+/** The profile details a form question can be about. */
+export type ProfileField = "first_name" | "last_name" | "preferred_name" | "full_name" | "email" | "phone" | "linkedin" | "github" | "website" | "country" | "city";
+
+const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefined, number, ProfileField]> = [
+  [/\b(first|given) name|forename/, (p) => p.firstName, 0.98, "first_name"],
+  [/\b(last|family) name|surname/, (p) => p.lastName, 0.98, "last_name"],
+  [/\bpreferred (first )?name/, (p) => p.preferredName, 0.95, "preferred_name"],
+  [/^(full |legal )?name$|^your name$|full legal name/, (p) => p.fullName, 0.95, "full_name"],
+  [/e-?mail/, (p) => p.email, 0.98, "email"],
+  [/phone|mobile|telephone|cell/, (p) => p.phone, 0.95, "phone"],
+  [/linkedin/, (p) => p.links.linkedin, 0.97, "linkedin"],
+  [/github/, (p) => p.links.github, 0.97, "github"],
+  [/website|portfolio|personal (site|url)|blog/, (p) => p.links.website, 0.9, "website"],
+  [/^country\b|country of residence/, (p) => p.country, 0.9, "country"],
+  [/^city\b|^location\b|current location|where are you (based|located)/, (p) => [p.city, p.region].filter(Boolean).join(", ") || null, 0.88, "city"],
 ];
+
+/** Which profile detail a form question asks for, if any (so an answer typed for it is kept in the profile). */
+export function profileFieldFor(label: string): ProfileField | null {
+  const l = norm(label);
+  return PROFILE_RULES.find(([re]) => re.test(l))?.[3] ?? null;
+}
 
 /** One question → one proposed answer (or none). Never invents: every answer is a profile row, an approved saved answer or an approved document. */
 export function proposeField(f: FormField, p: PacketProfile): ProposedField {

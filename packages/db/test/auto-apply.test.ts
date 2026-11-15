@@ -8,7 +8,7 @@ import {
 import {
   addEvidence, addFact, answerPacketField, applyStatus, applyStatuses, applyShot, approveDocument, approvePacket, approveServerSend, connectEmail, continueAfterAnswers,
   getApplication, getApplySettings, getPacket, listDocuments, listMatches, markDiffViewed, requestApply, requestLink, requestTailor, runNextWork,
-  saveAbout, saveAnswer, saveApplyMode, savePreferences, setStandingAnswer, trackJob, withApplicant,
+  saveAbout, saveAnswer, saveApplyMode, savePreferences, saveWorkAuthAnswer, setStandingAnswer, storeResumeFile, trackJob, withApplicant, getProfile,
   type AppConfig, type ApplyDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -93,7 +93,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -324,5 +324,53 @@ describe("Workday", () => {
     const p = (await getPacket(pool, cfg, yong, apps[7]!))!;
     expect(p.state).toBe("submitted");
     expect(p.fields.map((f) => f.label)).toEqual(["First Name *", "Phone Number", "Resume/CV"]);
+  });
+});
+
+describe("fewer questions (Yong, 2026-11-15)", () => {
+  const SALARY: FormField = { key: "#salary", label: "What are your salary expectations? *", type: "text", required: true };
+  const PHONE: FormField = { key: "#phone", label: "Phone *", type: "tel", required: true };
+  const LI: FormField = { key: "#li", label: "LinkedIn Profile", type: "url" };
+
+  it("details missing from the profile are taken from the uploaded resume, and kept in the profile", async () => {
+    const text = "Yong Example\nToronto, ON | +1 416 555 0199 | yong@example.test | linkedin.com/in/yong-example\n\nExperience\nOperations Analyst, Northwind\n";
+    await storeResumeFile(pool, cfg, yong, { name: "resume.txt", bytes: new TextEncoder().encode(text) });
+    await ownerQuery("DELETE FROM work_item WHERE kind = 'resume_digest'");
+    browser.spec = () => ({ url: GH(9), fields: [...BASE, PHONE, LI], after: "thanks" });
+    await approveResume(apps[8]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[8]!)).status).toBe("sent");
+    const page = browser.pages.at(-1)!;
+    expect(page.values.get("#phone")).toBe("+1 416 555 0199");
+    expect(page.values.get("#li")).toBe("https://linkedin.com/in/yong-example");
+    const about = (await getProfile(pool, cfg, yong)).about;
+    expect(about).toMatchObject({ phone: "+1 416 555 0199", legalName: "Yong Example", email: "yong@example.test", city: "Toronto" });
+  });
+
+  it("an answer given once is saved to the profile, so the next application doesn't ask", async () => {
+    browser.spec = () => ({ url: GH(10), fields: [...BASE, SALARY, { key: "#country", label: "Country *", type: "text", required: true }], after: "thanks" });
+    await approveResume(apps[9]!);
+    await runNow();
+    expect(await applyStatus(pool, yong, apps[9]!)).toMatchObject({ status: "waiting", waitingFor: "answers" });
+    const p = (await getPacket(pool, cfg, yong, apps[9]!))!;
+    await answerPacketField(pool, cfg, yong, p.fields.find((f) => f.label.startsWith("What are your salary"))!.id, "CAD 85,000");
+    await answerPacketField(pool, cfg, yong, p.fields.find((f) => f.label.startsWith("Country"))!.id, "Canada");
+    await requestApply(pool, yong, apps[9]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[9]!)).status).toBe("sent");
+    expect((await getProfile(pool, cfg, yong)).about.country).toBe("Canada");
+
+    browser.spec = () => ({ url: GH(11), fields: [...BASE, SALARY, { key: "#ctry", label: "Country of residence", type: "text" }], after: "thanks" });
+    await approveResume(apps[10]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[10]!)).status).toBe("sent");
+    expect(browser.pages.at(-1)!.values.get("#salary")).toBe("CAD 85,000");
+    expect(browser.pages.at(-1)!.values.get("#ctry")).toBe("Canada");
+  });
+
+  it("a right-to-work answer given on an application becomes the saved answer", async () => {
+    await saveWorkAuthAnswer(pool, cfg, yong, "Will you now or in the future require visa sponsorship?", "No");
+    const rows = (await ownerQuery("SELECT question_key, status, is_applicant_step FROM answer_bank_item WHERE applicant_id = $1 AND question_key = 'sponsorship'", [yong.applicantId])).rows;
+    expect(rows).toEqual([{ question_key: "sponsorship", status: "approved", is_applicant_step: true }]);
   });
 });
