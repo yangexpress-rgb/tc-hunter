@@ -1,3 +1,4 @@
+import { matchChoice } from "./equivalents";
 import { createHmac } from "node:crypto";
 import { canonicalJson } from "../fingerprint";
 
@@ -64,8 +65,7 @@ const norm = (s: string) => s.toLowerCase().replace(/[*:?]+/g, " ").replace(/\s+
 /** A select or radio answer must be one of the form's own choices, exactly; otherwise it's left for the applicant. */
 function pick(options: string[] | undefined, answer: string): string | null {
   if (!options?.length) return answer;
-  const a = norm(answer);
-  return options.find((o) => norm(o) === a) ?? options.find((o) => a.length >= 2 && norm(o).startsWith(a)) ?? null;
+  return matchChoice(options, answer);
 }
 
 /** The profile details a form question can be about. */
