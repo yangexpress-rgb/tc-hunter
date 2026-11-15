@@ -126,6 +126,12 @@ export function goalLevelOf(title: string): GoalLevel | "intern" | null {
   }
 }
 
+/** Every value the Level column and filter use (Yong, 2026-11-15): the goal levels, plus internship and "not stated". */
+export const JOB_LEVEL_FILTERS: ReadonlyArray<readonly [string, string]> = [["intern", "Internship"], ...GOAL_LEVELS, ["none", "Not stated"]];
+/** A posting's level as a filter key: the goal level, "intern", or "none" when the title doesn't say. */
+export const jobLevelKey = (title: string): string => goalLevelOf(title) ?? "none";
+export const jobLevelLabel = (key: string): string => JOB_LEVEL_FILTERS.find(([k]) => k === key)?.[1] ?? "Not stated";
+
 /** Words of a title that name the work, not the rank. */
 export function functionWords(title: string): string[] {
   return normalizeTitle(title).split(" ").filter((w) => w && !LEVEL_WORDS.has(w) && w !== "of" && w !== "and");

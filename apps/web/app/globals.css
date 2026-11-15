@@ -349,3 +349,6 @@ table.jobs-matrix tr.is-unseen td:nth-child(2) a { font-weight: 600; }
 #job-sites fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; }
 #job-sites label { display: block; margin: 8px 0; }
 #job-sites input[type="password"], #job-sites input[type="email"] { display: block; width: 100%; max-width: 420px; }
+/* Level filter on Jobs */
+.level-filter { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.level-filter legend { padding: 0 4px; }
