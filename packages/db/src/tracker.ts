@@ -24,7 +24,7 @@ export const APPLIED_HOW = ["employer_site", "email", "referral", "recruiter", "
 const FOLLOW_UP_DAYS = 7;
 
 /** The applicant's time zone; anything Intl doesn't know (a typo on My profile) reads as UTC rather than breaking the screens. */
-async function tz(c: pg.PoolClient): Promise<string> {
+export async function tz(c: pg.PoolClient): Promise<string> {
   const z = (await c.query("SELECT timezone FROM applicant WHERE id = app_applicant_id()")).rows[0]?.timezone || "UTC";
   try { new Intl.DateTimeFormat("en", { timeZone: z }); return z; } catch { return "UTC"; }
 }
@@ -141,7 +141,7 @@ export async function getApplication(pool: pg.Pool, cfg: AppConfig, session: Ses
   });
 }
 
-async function weeklyBudget(c: pg.PoolClient, zone: string) {
+export async function weeklyBudget(c: pg.PoolClient, zone: string) {
   const cap = (await c.query("SELECT weekly_application_budget FROM hunt_preference WHERE active")).rows[0]?.weekly_application_budget ?? null;
   const week = weekOf(new Date(), zone);
   const applied = (await c.query("SELECT applied_at FROM application WHERE applied_at IS NOT NULL AND applied_at > now() - interval '8 days'")).rows

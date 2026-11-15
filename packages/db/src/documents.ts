@@ -6,6 +6,7 @@ import {
   type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
+import { applyAfterApproval } from "./autoApply";
 import type { Session } from "./auth";
 import type { AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
@@ -417,6 +418,11 @@ export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Se
     if (d.type === "tailored_resume") {
       const jobRef = (await c.query("SELECT public_ref FROM job_posting WHERE id = $1", [d.job_posting_id])).rows[0]?.public_ref;
       if (jobRef) await ensureApplication(c, jobRef, "ready_to_apply");
+    }
+    // Hands-free (Yong, 2026-11-15): an approved resume or cover letter starts applying, after a short pause for any last approval.
+    if (d.type === "tailored_resume" || d.type === "cover_letter") {
+      const a = (await c.query("SELECT id FROM application WHERE match_id = $1 AND stage = 'ready_to_apply'", [d.match_id])).rows[0];
+      if (a) await applyAfterApproval(c, a.id);
     }
   });
 }

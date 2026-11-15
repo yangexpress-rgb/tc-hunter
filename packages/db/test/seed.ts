@@ -122,6 +122,10 @@ export async function seedEverything(
     await one("reader_prompt", "INSERT INTO reader_prompt (applicant_id, body) VALUES ($1, 'Seed instructions') RETURNING id", [me]);
     await one("hunt_goal", "INSERT INTO hunt_goal (applicant_id, roles) VALUES ($1, '{Director}') RETURNING id", [me]);
     await one("discovery_run", "INSERT INTO discovery_run (applicant_id) VALUES ($1) RETURNING id", [me]);
+    await one("apply_setting", "INSERT INTO apply_setting (applicant_id, mode) VALUES ($1, 'check_answers') ON CONFLICT (applicant_id) DO UPDATE SET updated_at = now() RETURNING id", [me]);
+    await one("standing_answer", "INSERT INTO standing_answer (applicant_id, kind, answer_enc) VALUES ($1, 'eeo', '\\x00'::bytea) ON CONFLICT (applicant_id, kind) DO UPDATE SET updated_at = now() RETURNING id", [me]);
+    await one("apply_run", "INSERT INTO apply_run (applicant_id, application_id, status, step) VALUES ($1, $2, 'failed', 'Seed') RETURNING id", [me, ids.application]);
+    await one("apply_shot", "INSERT INTO apply_shot (applicant_id, run_id, kind, caption, image_enc) VALUES ($1, $2, 'stopped', 'Seed', '\\x00'::bytea) RETURNING id", [me, ids.apply_run]);
     return ids;
   });
 }

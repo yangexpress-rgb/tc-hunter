@@ -17,7 +17,8 @@ describe("schema", () => {
     const names = r.rows.map((x) => x.table_name).sort();
     expect(DOMAIN_TABLES).toHaveLength(30);
     expect(names).toEqual([...DOMAIN_TABLES, "user_session", "request_key", "packet_transition", "stage_forward", "schema_migration",
-      "import_batch", "passkey_credential", "auth_challenge", "job_posting_event", "applicant_job_source", "posting_alert", "work_item", "score_calibration", "email_connection", "email_signal", "extension_device", "mfa_recovery_code", "resume_file", "resume_digest", "honor_award", "reader_prompt", "hunt_goal", "employer_board", "discovery_run", "app_setting"].sort());
+      "import_batch", "passkey_credential", "auth_challenge", "job_posting_event", "applicant_job_source", "posting_alert", "work_item", "score_calibration", "email_connection", "email_signal", "extension_device", "mfa_recovery_code", "resume_file", "resume_digest", "honor_award", "reader_prompt", "hunt_goal", "employer_board", "discovery_run", "app_setting",
+      "apply_setting", "standing_answer", "apply_run", "apply_shot"].sort());
   });
 
   it("no column can hold an employer-site password or session (vault-only rule)", async () => {
@@ -32,7 +33,7 @@ describe("schema", () => {
       ["counter", "created_at", "credential_id", "id", "label", "last_used_at", "public_key", "transports", "user_account_id"]);
     const site = await ownerQuery("SELECT column_name FROM information_schema.columns WHERE table_name = 'site_account'");
     expect(site.rows.map((x) => x.column_name).sort()).toEqual(
-      ["applicant_id", "approved_by_event_id", "created_at", "id", "login_email_enc", "site_host", "updated_at", "vault_ref"]);
+      ["applicant_id", "approved_by_event_id", "created_at", "created_by", "id", "login_email_enc", "site_host", "updated_at", "vault_ref", "verified_at"]);
   });
 
   it("personal fields on the applicant are stored encrypted (bytea), not as text", async () => {

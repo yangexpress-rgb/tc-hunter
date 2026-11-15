@@ -13,9 +13,13 @@ import { canonicalJson } from "../fingerprint";
  */
 export type FieldType = "text" | "email" | "tel" | "url" | "number" | "date" | "textarea" | "select" | "radio" | "checkbox" | "file";
 export type StepKind = "attestation" | "work_auth" | "eeo" | "consent" | "signature" | "captcha" | "mfa" | "verification";
-export type FieldSource = "master_profile" | "answer_bank" | "tailored_doc" | "applicant_typed";
+export type FieldSource = "master_profile" | "answer_bank" | "tailored_doc" | "applicant_typed" | "standing_answer";
+/** Standing answers (Yong, 2026-11-15): kinds of question that are always the applicant's own, unless they set an answer for them in Settings. */
+export type StandingKind = "site_account" | "attestation" | "consent" | "background_check" | "signature" | "eeo";
 
-export interface FormField { key: string; label: string; type: FieldType; options?: string[]; required?: boolean }
+export interface FormField { key: string; label: string; type: FieldType; options?: string[]; required?: boolean;
+  /** The site already shows a value here (Workday fills some questions from the resume). Server browser only. */
+  hasValue?: boolean }
 
 export interface PacketProfile {
   firstName: string; lastName: string; fullName: string; preferredName: string;
@@ -24,12 +28,17 @@ export interface PacketProfile {
   answers: Array<{ id: string; key: string; patterns: string[]; text: string; approved: boolean; stale: boolean; isApplicantStep: boolean }>;
   resume: { id: string } | null;
   letter: { id: string; text: string } | null;
+  /** Standing answers the applicant set in Settings for statements, consents, signatures and personal questions. */
+  standing?: Array<{ kind: StandingKind; text: string }>;
 }
 
 export interface ProposedField {
   key: string; label: string; type: FieldType; options?: string[];
   answer: string | null; source: FieldSource | null; sourceRefId: string | null; confidence: number;
   step: StepKind | null;
+  /** Set when a standing answer from Settings answered a question that is otherwise the applicant's own. */
+  standingKind?: StandingKind | null;
+  required?: boolean;
   /** Why it's left for the applicant, in plain words; for work authorisation, their saved answer to look at. */
   note: string | null;
 }
@@ -75,7 +84,7 @@ const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefi
 
 /** One question → one proposed answer (or none). Never invents: every answer is a profile row, an approved saved answer or an approved document. */
 export function proposeField(f: FormField, p: PacketProfile): ProposedField {
-  const base = { key: f.key, label: f.label, type: f.type, options: f.options, answer: null, source: null, sourceRefId: null, confidence: 0, step: null, note: null } as ProposedField;
+  const base = { key: f.key, label: f.label, type: f.type, options: f.options, answer: null, source: null, sourceRefId: null, confidence: 0, step: null, standingKind: null, required: !!f.required, note: null } as ProposedField;
   const label = norm(f.label);
   const step = applicantStepFor(f);
   if (step === "work_auth") {
@@ -90,7 +99,11 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
       : !saved.approved ? "Your saved right-to-work answer is still a draft, so you answer this one."
       : "Your saved right-to-work answer is over 90 days old. Check it first; until then you answer this one." };
   }
-  if (step) return { ...base, step };
+  if (step) {
+    const standing = standingAnswerFor(f, step, p.standing ?? []);
+    if (standing) return { ...base, ...standing };
+    return { ...base, step };
+  }
   if (f.type === "file") {
     if (/cover|letter/.test(label) && p.letter) return { ...base, answer: "cover_letter.pdf", source: "tailored_doc", sourceRefId: p.letter.id, confidence: 0.97 };
     if (/resume|résumé|\bcv\b|curriculum/.test(label) && p.resume) return { ...base, answer: "resume.pdf", source: "tailored_doc", sourceRefId: p.resume.id, confidence: 0.99 };
@@ -118,6 +131,45 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   return { ...base, note: "New question. Type your answer." };
 }
 
+const AGREE = /^(yes\b|i (agree|accept|consent|certify|confirm|acknowledge|understand|authori[sz]e)|agree|accept|confirm|acknowledged?|i have read)/i;
+const DECLINE = /(decline|prefer not|do ?n[o']t (wish|want) to|not (wish|want) to (answer|say|disclose|identify|self)|choose not to|rather not|not to (say|answer|disclose))/i;
+const BACKGROUND = /\b(background (check|screen|investigation)|criminal|credit (check|report)|reference check|consumer report|drug (test|screen))/i;
+
+/** Which standing answer kind covers a question that would otherwise be the applicant's own step. */
+export function standingKindFor(step: StepKind, label: string): StandingKind | null {
+  if (step === "attestation") return "attestation";
+  if (step === "signature") return "signature";
+  if (step === "eeo") return "eeo";
+  if (step === "consent") return BACKGROUND.test(label) ? "background_check" : "consent";
+  return null;
+}
+
+/**
+ * A question that is the applicant's own, answered from a standing answer they set themselves
+ * in Settings (Yong, 2026-11-15). Statements and consents are agreed to; a signature is the
+ * name they gave; personal questions only ever get the form's own "I'd rather not say" choice.
+ * When the form has no such choice, it stays the applicant's.
+ */
+function standingAnswerFor(f: FormField, step: StepKind, standing: NonNullable<PacketProfile["standing"]>): Partial<ProposedField> | null {
+  const kind = standingKindFor(step, f.label);
+  const s = kind ? standing.find((x) => x.kind === kind) : undefined;
+  if (!kind || !s) return null;
+  const from = { source: "standing_answer" as const, sourceRefId: null, confidence: 0.9, step: null, standingKind: kind,
+    note: "Answered from your standing answer in Settings. You chose to let TC Hunter answer this kind of question." };
+  if (kind === "eeo") {
+    const opt = f.options?.find((o) => DECLINE.test(o));
+    if (!opt) return null;
+    return { ...from, answer: opt };
+  }
+  if (f.type === "checkbox") return { ...from, answer: "Yes" };
+  if (f.type === "select" || f.type === "radio") {
+    const opt = f.options?.find((o) => AGREE.test(o.trim()));
+    return opt ? { ...from, answer: opt } : null;
+  }
+  if (f.type === "file") return null;
+  return s.text.trim() ? { ...from, answer: s.text.trim() } : null;
+}
+
 /** Whether a proposed answer will be typed in. Applicant steps and low-confidence answers never are. */
 export const willFill = (f: Pick<ProposedField, "step" | "answer" | "confidence" | "source">) =>
   !f.step && f.answer !== null && (f.source === "applicant_typed" || f.confidence >= FILL_CONFIDENCE);
@@ -127,6 +179,7 @@ export const willFill = (f: Pick<ProposedField, "step" | "answer" | "confidence"
  * Keyed with the applicant's own key so short answers can't be guessed from the stored hash.
  */
 export function packetHash(key: Buffer, p: { jobRef: string; resume: string; letter: string | null; fields: Array<Pick<ProposedField, "key" | "label" | "answer" | "source" | "step">> }): string {
+  // A standing answer's source ("standing_answer") is part of each field, so changing it changes the hash.
   return createHmac("sha256", key).update(canonicalJson({
     job: p.jobRef, resume: p.resume, letter: p.letter,
     fields: p.fields.map((f) => [f.key, f.label, f.answer, f.source, f.step]),

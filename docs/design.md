@@ -24,6 +24,7 @@
 | 2026-11-14 | §13.7: right-to-work and sponsorship questions are filled from the applicant's own approved, current saved answer (Yong: "Just answer based on profile data"); with none, they stay the applicant's step (§2.3, §5.5). |
 | 2026-11-14 | §13.8: an unclear outcome stops and asks, never retries; first the confirmation is taken from the employer's page or, with Gmail connected, from their "we received your application" email, confirmed with one tap (§5.5). |
 | 2026-11-14 | Phase 4b merged (PR #6). Phase 5 go-ahead from Yong ("Go ahead"). |
+| 2026-11-15 | Hands-free applying from the server (Yong: "This should be automated and authorized to the agent as much as possible. The user should be hands free."). TC Hunter's own browser on the server fills, attaches and presses Submit; default mode hands-free once the resume is approved. Relaxes §2.3 (per-application approval) and §2.4 (account creation, email verification) as described there; the hard limits stay. See the appendix "Hands-free applying". |
 | 2026-11-13 | §13.2: public job-board feeds only (Greenhouse, Lever, Ashby, SmartRecruiters, plus careers pages); LinkedIn and Indeed by pasted link; no licensed aggregator (folded into §5.2). |
 
 ---
@@ -82,6 +83,8 @@ Technical complexity must never be exposed without a well-designed structure and
 - **No application is submitted without the applicant's approval of that specific application** — that job, that employer, that tailored resume, those form answers. Approval is bound to a fingerprint of exactly that content; any change voids it.
 - Each applicant approves only their own applications. The final "Approve submission" needs a fresh sign-in check, so a shared computer left signed in cannot submit for the other person.
 - No "auto-apply to everything" mode in v1 (§13.4 is parked).
+- **Changed 2026-11-15 (Yong, hands-free applying):** the applicant chooses in Settings › Applying for you how much TC Hunter approves by itself: *hands-free* (default; approving the tailored resume for a job is the approval to apply to that job), *check the answers first*, or *ask before each step* (the original rule above, with a fresh sign-in check for sending). The database checks the applicant's setting on every approval made by automation; only the applicant can change it, with a fresh "confirm it's you". Applies stay within the weekly limit unless the applicant chooses "Apply now anyway" on one application.
+- **Standing answers (2026-11-15):** attestations, privacy and data consents, background-check consent, typed signatures, "I'd rather not say" for personal (EEO) questions, and accepting an employer site's terms when creating an account are answered by automation **only** when the applicant turned on that standing answer in Settings, after reading what it means and the risk they take on. Without it, the question stays the applicant's step and the run waits. EEO questions only ever get the form's own "decline to answer" choice.
 - **Legal attestations are the applicant's alone:** certifications, background-check consent, EEO / demographic self-identification, and signatures are **never** checked, filled, or signed by automation. **Work-authorisation questions (decision §13.7, Yong 2026-11-14):** "Are you authorised to work…?" and "Will you require sponsorship?" are answered from the applicant's own approved saved answer (My profile › Saved answers), word for word and only when it matches one of the form's choices. With no approved answer, a draft, or one not reviewed in 90 days, the question stays the applicant's step. The applicant still sees it in the packet review and checks the whole form before pressing Submit.
 
 *Built in Phase 0:* a packet field marked as an applicant step cannot hold an answer and cannot be marked filled (database constraint).
@@ -90,8 +93,8 @@ Technical complexity must never be exposed without a well-designed structure and
 
 - Employer-site passwords and saved employer-site sessions are **vault-only**: never in the app database in any form (encrypted or not), never logged, never shown in any UI layer, never exported. The database holds only an opaque reference.
 - Each applicant has their own vault.
-- Account creation on an employer site happens **only** for a site the applicant explicitly approved for that application.
-- CAPTCHA, MFA codes, email / SMS verification, and passkey prompts are **the applicant's step**. Automation pauses at that exact step and resumes after; it never solves, bypasses, or farms out these checks.
+- Account creation on an employer site happens **only** for a site the applicant explicitly approved for that application. **Changed 2026-11-15:** or when the applicant turned on the standing answer "Create accounts on employer hiring sites for me" (Workday). The password is generated, kept only in the applicant's vault, and the site's "verify your email" link is opened from their connected Gmail (read-only).
+- CAPTCHA, MFA codes, SMS verification, and passkey prompts are **the applicant's step** (an email verification link may be opened from connected Gmail, as above). Automation pauses at that exact step and resumes after; it never solves, bypasses, or farms out these checks.
 - Respect each site's terms, rate limits, and robots signals. Ordinary-use volume only (see the weekly budget, §5.6). If a site refuses automated access, stop for that site and report it plainly.
 
 ### 2.5 Privacy (MUST)
@@ -585,3 +588,19 @@ Asked by Yong after trying the live import. Two changes to Module A:
   - *Sections, flexibly mapped:* the file is split at its headings; each section gets a suggested place in the profile (jobs, internships, projects, volunteering, activities, coursework, education, skills, certifications, or not used). Unusual headings (Leadership, Awards, Languages, Research Experience…) are recognised. The applicant can change any mapping and read the file again; undecided drafts from the previous reading are replaced, checked rows stay. The reader only sees mapped sections, under their mapped headings.
   - *Duplicates:* every row is compared with the profile, including drafts from earlier uploads. Same role/bullet/school/skill/certification → not added again ("already there", with where it came from). New bullets under a known role go under that role. Close-but-different rows (reworded bullet, same role with other dates, same school without a degree, same certification from another issuer) are added as drafts and flagged on the review page as possible duplicates.
   - Rows still arrive only as drafts; the honesty check (F1) still runs on every reading.
+
+## Appendix — Hands-free applying (2026-11-15)
+
+Asked by Yong: "This should be automated and authorized to the agent as much as possible. The user should be hands free." Built alongside the extension (which stays, for applying in the applicant's own browser).
+
+| Area | Where | What |
+|---|---|---|
+| Data | `027_auto_apply.sql` | `apply_setting` (mode, default hands-free), `standing_answer` (encrypted; applicant-only), `apply_run` (live status, every step, plain problem), `apply_shot` (encrypted pictures of the employer's page), `work_item` kind `apply`; approval guards accept automation only when the applicant's setting allows it |
+| Rules | `packages/domain/src/apply` | modes, standing answers with their risk text, the browser interface, form addresses per system, "are you human" detection, plain problem messages |
+| Engine | `packages/db/src/autoApply.ts` | queues after the resume is approved (90 s grace), opens the form, fills from the profile, attaches the approved resume and cover letter, waits for the applicant only where needed, presses Submit once (single-use key), reads the thank-you, checks Gmail when unclear, keeps a receipt; Workday: account, Gmail link, page by page to Review |
+| Browser | `apps/worker/src/apply` | Playwright Chromium (headless shell in the Railway image) through the worker's outbound gate; no private addresses |
+| Screens | application page, Applications list, Settings | live status with each step, problems in red, pictures; Settings › Applying for you |
+| Tests | `packages/db/test/auto-apply.test.ts`, `apps/worker/test/browser.test.ts` | hands-free send, isolation, required question pause, consents need a standing answer, "are you human" stop, unclear never re-pressed, LinkedIn/Indeed refused, ask-before-each-step, Workday account + Gmail link; the real browser on Greenhouse- and Workday-shaped sandbox pages |
+| Still to do | with Yong | watch the first live applications (real employer sites were not reachable from the build sandbox) |
+
+Hard limits that stay: never gets past CAPTCHA or "are you human" checks; work-authorisation answers only from the approved profile answer; an unclear result stops, checks Gmail, then asks, never retried automatically; LinkedIn and Indeed are never automated.

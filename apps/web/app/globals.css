@@ -352,3 +352,12 @@ table.jobs-matrix tr.is-unseen td:nth-child(2) a { font-weight: 600; }
 /* Level filter on Jobs */
 .level-filter { border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .level-filter legend { padding: 0 4px; }
+/* Applying for you (server browser) */
+.apply-panel progress { width: 100%; height: 8px; accent-color: var(--accent, currentColor); }
+.apply-steps { margin: 8px 0 0; }
+.apply-steps li { margin: 4px 0; }
+.apply-shots { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+.apply-shot { display: flex; flex-direction: column; gap: 4px; width: 220px; max-width: 100%; text-decoration: none; }
+.apply-shot img { width: 100%; height: 150px; object-fit: cover; object-position: top; border: 1px solid var(--border); border-radius: 6px; }
+#applying fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; }
+#applying label.choice { display: block; margin: 8px 0; }

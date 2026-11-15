@@ -215,7 +215,7 @@ describe("unclear outcome after the click (decision 13.8): stop, never retry, as
     const id = await readyPacket(apps[3]!, GH(4), "rk-d1");
     await readyToSubmit(pool, owner, id, { fields: FIELDS, filledHash: FILLED });
     await approveSending(pool, cfg, yong, apps[3]!, FILLED, "rk-d2");
-    await ownerQuery("UPDATE application_packet SET ats = 'workday' WHERE id = $1", [id]);
+    await ownerQuery("UPDATE application_packet SET ats = 'icims' WHERE id = $1", [id]);
     await expect(startSubmit(pool, owner, id, FILLED)).rejects.toThrow("TC_NOT_AUTOMATED_HERE");
     // Yong can still press Submit on the employer's site and say so.
     await markSubmitted(pool, cfg, yong, apps[3]!, null);
