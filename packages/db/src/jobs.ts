@@ -365,7 +365,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     if (s.last_success_at && wall - new Date(s.last_success_at).getTime() < fresh) return;
     const spec: SourceSpec = { type: s.type, kind: s.kind, key: s.source_key, name: s.name, url: s.url };
     try {
-      const got = await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets));
+      const got = await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets), 25, targets);
       checked += got.checked;
       // Catalogue writes are shared rows; they run in the applicant's transaction scope but touch no personal data.
       await withApplicant(pool, ctx, async (c) => {

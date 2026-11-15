@@ -111,15 +111,15 @@ describe("the app finds where to look, from the goals", () => {
     const site: SearchSite = { id: "adzuna", name: "Adzuna", async search(): Promise<RawPosting[]> { order.push("job sites"); return []; } };
     const logged: Fetcher = { get: async (url, o) => { order.push(url); return web.get(url, o); } };
     const named: CompanyProposer = { version: "test-proposer", async propose() {
-      return [{ name: "Globex", reason: "named", careersUrl: "https://globex.wd5.myworkdayjobs.com/External" }]; } };
+      return [{ name: "Globex", reason: "named", careersUrl: "https://globex.taleo.net/careersection/2/jobsearch.ftl" }]; } };
     await saveGoal(pool, mia, goal({ roles: ["Operations Analyst"], companies: ["Fabrikam", "Globex"] }));
     await requestScan(pool, mia);
     while (await runNextWork(pool, { ...deps, fetcher: logged, search: [site], discover: { proposer: named } })) { /* drain */ }
     const board = order.findIndex((u) => u.includes("greenhouse.io/v1/boards/fabrikam"));
     expect(board).toBeGreaterThanOrEqual(0);
     expect(board).toBeLessThan(order.indexOf("job sites"));
-    expect(order.some((u) => u.includes("myworkdayjobs"))).toBe(false);  // never fetched: we can't read it
+    expect(order.some((u) => u.includes("taleo.net"))).toBe(false);  // never fetched: we can't read it
     const status = Object.fromEntries((await namedCompanies(pool, mia)).map((n) => [n.name, [Boolean(n.sourceId), n.note]]));
-    expect(status).toEqual({ Fabrikam: [true, null], Globex: [false, "system:Workday"] });
+    expect(status).toEqual({ Fabrikam: [true, null], Globex: [false, "system:Taleo"] });
   });
 });

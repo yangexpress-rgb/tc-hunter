@@ -30,7 +30,6 @@ export function isNoFetchHost(url: string): boolean {
  * scripts and they publish no public job feed. Returns the system's name, or null.
  */
 const UNREADABLE_CAREERS: Array<[string, RegExp]> = [
-  ["Workday", /(^|\.)(myworkdayjobs\.com|myworkdaysite\.com|workday\.com)$/i],
   ["Taleo", /(^|\.)taleo\.net$/i],
   ["iCIMS", /(^|\.)icims\.com$/i],
   ["SuccessFactors", /(^|\.)(successfactors\.(com|eu)|sapsf\.(com|eu))$/i],
@@ -43,6 +42,87 @@ export function unreadableCareersSystem(url: string): string | null {
   let host: string;
   try { host = new URL(url).hostname; } catch { return null; }
   return UNREADABLE_CAREERS.find(([, re]) => re.test(host))?.[0] ?? null;
+}
+
+// Workday (Yong, 2026-11-15: an Embecta job on Workday was missed) ---------------------------
+// Many large employers list jobs on Workday. Its careers sites are drawn by scripts, but they
+// read their jobs from a public JSON service on the same site, which we read the same way.
+
+export interface WorkdaySite { host: string; tenant: string; site: string; /** "/job/…" when the address is one job. */ jobPath: string | null }
+
+/** A Workday careers site (or one of its jobs) from its address: tenant.wdN.myworkdayjobs.com/[lang/]site[/job/…]. */
+export function parseWorkday(input: string): WorkdaySite | null {
+  let url: URL;
+  try { url = new URL(input.trim()); } catch { return null; }
+  if (url.protocol !== "https:") return null;
+  const host = url.hostname.toLowerCase();
+  let segs = url.pathname.split("/").filter(Boolean);
+  let tenant: string | undefined;
+  const m = /^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/.exec(host);
+  if (m) tenant = m[1];
+  else if (/^wd\d+\.myworkdaysite\.com$/.test(host) && segs[0] === "recruiting" && segs.length >= 3) { tenant = segs[1]; segs = segs.slice(2); }
+  else return null;
+  if (segs[0] && /^[a-z]{2}-[A-Za-z]{2}$/.test(segs[0])) segs = segs.slice(1);
+  const site = segs[0];
+  if (!tenant || !site || !/^[A-Za-z0-9_-]+$/.test(site)) return null;
+  const rest = segs.slice(1);
+  const jobPath = rest[0] === "job" || rest[0] === "details" ? `/${rest.map((s) => encodeURIComponent(decodeURIComponent(s))).join("/")}` : null;
+  return { host, tenant: tenant.toLowerCase(), site, jobPath };
+}
+const workdayKey = (w: WorkdaySite) => `${w.host}/${w.tenant}/${w.site}`;
+const workdayFromKey = (key: string): WorkdaySite => { const [host, tenant, site] = key.split("/"); return { host: host!, tenant: tenant!, site: site!, jobPath: null }; };
+const workdayApi = (w: WorkdaySite) => `https://${w.host}/wday/cxs/${w.tenant}/${w.site}`;
+const WORKDAY_HEADERS = { "Accept-Language": "en-US" };
+
+/** One job from Workday's job service (jobPostingInfo + hiringOrganization). */
+export function readWorkdayJob(d: Obj, w: WorkdaySite, employer: string, path: string): RawPosting {
+  const i = (d.jobPostingInfo ?? {}) as Obj;
+  const desc = htmlToText(String(i.jobDescription ?? ""));
+  const locs = [i.location, ...((i.additionalLocations ?? []) as unknown[])].filter(Boolean).map(String);
+  const loc = locs.join("; ") || null;
+  const rt = String(i.remoteType ?? "").toLowerCase();
+  const url = String(i.externalUrl ?? `https://${w.host}/${w.site}${path}`);
+  return {
+    externalId: `workday:${w.tenant}:${String(i.jobReqId ?? i.id ?? path)}`, url, employer: String((d.hiringOrganization as Obj)?.name ?? "").trim() || employer,
+    title: String(i.title ?? ""), locationRaw: loc,
+    workplaceType: /remote/.test(rt) ? "remote" : /hybrid|flex/.test(rt) ? "hybrid" : /on.?site/.test(rt) ? "onsite" : detectWorkplace(loc, desc.slice(0, 600)),
+    descriptionText: desc, salary: null, postedAt: typeof i.startDate === "string" && i.startDate ? i.startDate : null, applyUrl: url, atsType: "workday",
+  };
+}
+
+/** Does this Workday site answer with jobs? Used when checking a careers address. */
+export async function workdayHasJobs(w: WorkdaySite, f: Fetcher): Promise<boolean> {
+  const r = JSON_OR((await f.get(`${workdayApi(w)}/jobs`, { headers: WORKDAY_HEADERS, body: { appliedFacets: {}, limit: 1, offset: 0, searchText: "" } })).text, "Workday");
+  return Array.isArray(r.jobPostings) && Number(r.total ?? r.jobPostings.length) > 0;
+}
+
+/**
+ * A Workday site's jobs that relate to the goals. Searches the site for each goal title
+ * (a few pages each) when given them, else reads the newest 200; then reads up to
+ * `maxDetails` related jobs in full.
+ */
+async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) => boolean, maxDetails: number, terms: string[]): Promise<SourceFetchResult> {
+  const w = workdayFromKey(spec.key);
+  const api = workdayApi(w);
+  const list = new Map<string, Obj>();
+  const searches = terms.length ? terms.slice(0, 6) : [""];
+  for (const searchText of searches) {
+    for (let offset = 0; offset < (searchText ? 60 : 200); offset += 20) {
+      const r = JSON_OR((await f.get(`${api}/jobs`, { headers: WORKDAY_HEADERS, body: { appliedFacets: {}, limit: 20, offset, searchText } })).text, "Workday");
+      const page = (r.jobPostings ?? []) as Obj[];
+      for (const j of page) if (j.externalPath) list.set(String(j.externalPath), j);
+      if (page.length < 20 || offset + 20 >= Number(r.total ?? 0)) break;
+    }
+  }
+  const related = [...list.values()].filter((j) => wanted(String(j.title ?? "")));
+  const postings: RawPosting[] = [];
+  for (const j of related.slice(0, maxDetails)) {
+    const path = String(j.externalPath);
+    try { postings.push(readWorkdayJob(JSON_OR((await f.get(`${api}${path}`, { headers: WORKDAY_HEADERS })).text, "Workday"), w, spec.name, path)); } catch (e) {
+      if (!(e instanceof SourceRefusedError) || e.reason !== "not_found") throw e;
+    }
+  }
+  return { postings, complete: false, checked: list.size, notes: related.length > maxDetails ? [`Read the first ${maxDetails} related jobs only.`] : [] };
 }
 
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -59,10 +139,12 @@ export function detectSource(input: string, name?: string): SourceSpec | null {
       return { type: "ats_api", kind, key, name: name?.trim() || titleCase(key), url: url.href };
     }
   }
+  const wd = parseWorkday(url.href);
+  if (wd) return { type: "ats_api", kind: "workday", key: workdayKey(wd), name: name?.trim() || titleCase(wd.tenant), url: `https://${wd.host}/${wd.site}` };
   return { type: "careers_page", kind: "careers_page", key: `${url.origin}${url.pathname}`.replace(/\/$/, ""), name: name?.trim() || titleCase(url.hostname.replace(/^www\.|^careers\.|^jobs\./, "").split(".")[0]!), url: url.href };
 }
 
-export interface JobLink { kind: AtsKind | "page" | "no_fetch"; board?: string; id?: string; url: string }
+export interface JobLink { kind: AtsKind | "workday" | "page" | "no_fetch"; board?: string; id?: string; url: string }
 
 /** One job's address: which board it lives on, and its id there. */
 export function detectJobLink(input: string): JobLink | null {
@@ -80,6 +162,8 @@ export function detectJobLink(input: string): JobLink | null {
   if (m) return { kind: "ashby", board: decodeURIComponent(m[1]!).toLowerCase(), id: m[2]!.toLowerCase(), url: url.href };
   m = /(?:jobs|careers)\.smartrecruiters\.com\/([a-z0-9_-]+)\/(\d+)/i.exec(url.href);
   if (m) return { kind: "smartrecruiters", board: m[1]!, id: m[2]!, url: url.href };
+  const wd = parseWorkday(url.href);
+  if (wd?.jobPath) return { kind: "workday", board: workdayKey(wd), id: wd.jobPath, url: url.href };
   return { kind: "page", url: url.href };
 }
 
@@ -169,7 +253,7 @@ const JSON_OR = (text: string, what: string): Obj => {
  * Reads one source. `wanted(title)` lets a big board skip detail pages for jobs whose
  * titles have nothing to do with what the applicant wants (fewer requests, same result).
  */
-export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: string) => boolean = () => true, maxDetails = 25): Promise<SourceFetchResult> {
+export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: string) => boolean = () => true, maxDetails = 25, terms: string[] = []): Promise<SourceFetchResult> {
   const key = encodeURIComponent(spec.key);
   switch (spec.kind) {
     case "greenhouse": {
@@ -203,6 +287,7 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
       }
       return { postings, complete: false, checked: list.length, notes: want.length < list.filter((j) => wanted(String(j.name ?? ""))).length ? ["Read the first 25 related jobs only."] : [] };
     }
+    case "workday": return fetchWorkday(spec, f, wanted, maxDetails, terms);
     case "careers_page": {
       const page = await f.get(spec.url, { kind: "page" });
       let postings = jobPostingsFromHtml(page.text, page.url);
@@ -242,6 +327,11 @@ export async function fetchJobLink(link: JobLink, f: Fetcher): Promise<RawPostin
       return j ? readAshbyJob(j, titleCase(link.board ?? "")) : null;
     }
     case "smartrecruiters": return readSmartRecruitersJob(JSON_OR((await f.get(`https://api.smartrecruiters.com/v1/companies/${b}/postings/${id}`)).text, "SmartRecruiters"), titleCase(link.board ?? ""));
+    case "workday": {
+      const w = workdayFromKey(link.board ?? "");
+      const d = JSON_OR((await f.get(`${workdayApi(w)}${link.id}`, { headers: WORKDAY_HEADERS })).text, "Workday");
+      return readWorkdayJob(d, w, titleCase(w.tenant), link.id ?? "");
+    }
     case "page": {
       const page = await f.get(link.url, { kind: "page" });
       return jobPostingsFromHtml(page.text, page.url)[0] ?? null;

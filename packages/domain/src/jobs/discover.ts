@@ -1,6 +1,6 @@
 import { jobLinksFromHtml, jobPostingsFromHtml } from "./jsonld";
 import { SourceRefusedError, type Fetcher } from "./fetcher";
-import { detectSource, isNoFetchHost, unreadableCareersSystem } from "./sources";
+import { detectSource, isNoFetchHost, parseWorkday, unreadableCareersSystem, workdayHasJobs } from "./sources";
 import type { AtsKind, SourceSpec } from "./types";
 
 /**
@@ -115,8 +115,14 @@ export async function findBoard(idea: Pick<CompanyIdea, "name" | "boards" | "car
   if (idea.careersUrl && !unreadableCareersSystem(idea.careersUrl)) {
     try {
       const spec = detectSource(idea.careersUrl, idea.name);
-      if (spec && spec.kind === "careers_page" && !isNoFetchHost(spec.url)) {
+      const wd = parseWorkday(idea.careersUrl);
+      if (spec && wd && spec.kind === "workday") { if (await workdayHasJobs(wd, f)) return spec; }
+      else if (spec && spec.kind === "careers_page" && !isNoFetchHost(spec.url)) {
         const page = await f.get(spec.url, { kind: "page" });
+        // Many careers pages (Salesforce's, for one) send people on to a Workday site for the jobs themselves.
+        const wdLink = /https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[A-Za-z0-9_\/-]+/.exec(page.text)?.[0];
+        const wdSite = wdLink ? parseWorkday(wdLink) : null;
+        if (wdSite && await workdayHasJobs(wdSite, f)) return detectSource(`https://${wdSite.host}/${wdSite.site}`, idea.name);
         if (jobPostingsFromHtml(page.text, page.url).length || jobLinksFromHtml(page.text, page.url).length) return spec;
       }
     } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }

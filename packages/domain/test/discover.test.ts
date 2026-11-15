@@ -53,12 +53,12 @@ describe("finding employers' job boards", () => {
   });
 
   it("names the hiring system behind a careers site we can't read, and says so plainly", () => {
-    expect(unreadableCareersSystem("https://acme.wd1.myworkdayjobs.com/en-US/External")).toBe("Workday");
+    expect(unreadableCareersSystem("https://acme.taleo.net/careersection/2/jobsearch.ftl")).toBe("Taleo");
     expect(unreadableCareersSystem("https://careers-acme.icims.com/jobs")).toBe("iCIMS");
     expect(unreadableCareersSystem("https://acme.com/careers")).toBeNull();
     expect(noBoardReason({ careersUrl: "https://acme.taleo.net/careersection/2/jobsearch.ftl" })).toBe("system:Taleo");
     expect(noBoardReason({ careersUrl: "https://acme.com/careers" })).toBe("page");
     expect(noBoardReason({})).toBe("none");
-    expect(noBoardSentence("system:Workday")).toMatch(/^Its careers site runs on Workday, which we can't read yet\./);
+    expect(noBoardSentence("system:Taleo")).toMatch(/^Its careers site runs on Taleo, which we can't read yet\./);
   });
 });
