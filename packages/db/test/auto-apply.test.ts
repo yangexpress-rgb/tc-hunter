@@ -93,7 +93,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -372,5 +372,21 @@ describe("fewer questions (Yong, 2026-11-15)", () => {
     await saveWorkAuthAnswer(pool, cfg, yong, "Will you now or in the future require visa sponsorship?", "No");
     const rows = (await ownerQuery("SELECT question_key, status, is_applicant_step FROM answer_bank_item WHERE applicant_id = $1 AND question_key = 'sponsorship'", [yong.applicantId])).rows;
     expect(rows).toEqual([{ question_key: "sponsorship", status: "approved", is_applicant_step: true }]);
+  });
+});
+
+describe("a consent the site draws as a drop-down (Spaulding Ridge, 2026-11-15)", () => {
+  it("waits without the standing answer; turning it on carries the waiting application on by itself", async () => {
+    await setStandingAnswer(pool, cfg, yong, "consent", null);
+    const notice: FormField = { key: "#notice", label: "Before submitting your application, you must agree to Spaulding's Candidate Privacy Notice.*", type: "select", required: true };
+    browser.spec = () => ({ url: GH(12), fields: [...BASE, notice], after: "thanks" });
+    await approveResume(apps[11]!);
+    await runNow();
+    expect(await applyStatus(pool, yong, apps[11]!)).toMatchObject({ status: "waiting", waitingFor: "answers" });
+    await setStandingAnswer(pool, cfg, yong, "consent", "I agree");
+    expect((await applyStatus(pool, yong, apps[11]!)).status).toBe("queued");
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[11]!)).status).toBe("sent");
+    expect(browser.pages.at(-1)!.values.get("#notice")).toBe("I agree");
   });
 });

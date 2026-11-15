@@ -45,11 +45,14 @@ describe.skipIf(!available)("the server's browser on a Greenhouse-shaped form", 
     expect(form.humanCheck).toBe(false);
     expect(form.fields.map((f) => [f.key, f.type, !!f.required])).toEqual([
       ["#first_name", "text", true], ["#last_name", "text", true], ["#email", "email", true], ["#phone", "tel", false], ["#resume", "file", true],
-      ["#work_auth", "select", true], ["radio:relocate", "radio", false], ["#source", "select", false], ["#privacy", "checkbox", true], ["#newsletter", "checkbox", false],
+      ["#work_auth", "select", true], ["radio:relocate", "radio", false], ["#source", "select", false], ["#notice", "select", true], ["#privacy", "checkbox", true], ["#newsletter", "checkbox", false],
     ]);
     expect(form.fields.find((f) => f.key === "#work_auth")!.options).toEqual(["Yes", "No"]);
     expect(form.fields.find((f) => f.key === "radio:relocate")).toMatchObject({ label: "Are you willing to relocate?", options: ["Yes", "No"] });
     expect(form.fields.find((f) => f.key === "#source")!.label).toBe("How did you hear about us?");
+    // Drop-downs drawn by the page are opened to read their choices (and closed again, nothing chosen).
+    expect(form.fields.find((f) => f.key === "#source")!.options).toEqual(["LinkedIn", "Company website", "Job board", "Referral"]);
+    expect(form.fields.find((f) => f.key === "#notice")).toMatchObject({ options: ["Acknowledge"], hasValue: false });
   });
 
   it("types, picks, ticks and attaches; the filled form has a stable fingerprint", async () => {
@@ -59,11 +62,12 @@ describe.skipIf(!available)("the server's browser on a Greenhouse-shaped form", 
       { key: "#email", type: "email", value: "yong@example.test" }, { key: "#resume", type: "file", value: null, file: { name: "resume.pdf", mime: "application/pdf", bytes: pdf } },
       { key: "#work_auth", type: "select", value: "Yes" }, { key: "radio:relocate", type: "radio", value: "No" },
       { key: "#source", type: "select", value: "Company website" }, { key: "#privacy", type: "checkbox", value: "Yes" },
+      { key: "#notice", type: "select", value: "I agree" },
       { key: "#missing", type: "text", value: "x" }, { key: "#work_auth", type: "select", value: "Maybe" },
     ]);
-    expect(r.map((x) => x.status)).toEqual(["filled", "filled", "filled", "filled", "filled", "filled", "filled", "filled", "not_found", "no_match"]);
+    expect(r.map((x) => x.status)).toEqual(["filled", "filled", "filled", "filled", "filled", "filled", "filled", "filled", "filled", "not_found", "no_match"]);
     const again = await page.readForm();
-    expect(again.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#first_name", "#last_name", "#email", "#resume", "#work_auth", "radio:relocate", "#source", "#privacy"]);
+    expect(again.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#first_name", "#last_name", "#email", "#resume", "#work_auth", "radio:relocate", "#source", "#notice", "#privacy"]);
     expect(await page.filledHash()).toBe(await page.filledHash());
     expect(await page.filledHash()).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -77,6 +81,7 @@ describe.skipIf(!available)("the server's browser on a Greenhouse-shaped form", 
     expect(submits).toHaveLength(1);
     expect(submits[0]).toMatch(/first_name=Yong/);
     expect(submits[0]).toMatch(/privacy=on/);
+    expect(submits[0]).toMatch(/notice=Acknowledge/);
     expect(submits[0]).not.toMatch(/newsletter/);
     const shot = await page.screenshot();
     expect(shot[0]).toBe(0xff);
