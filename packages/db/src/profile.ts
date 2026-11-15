@@ -234,7 +234,7 @@ const CHECKABLE = ["experience_item", "experience_bullet", "education_item", "sk
 
 /**
  * "Confirm all": the applicant checks every waiting row at once, from one import or all of them
- * (Yong, 2026-11-15: an unchecked profile left his tailored resume empty). Returns how many rows.
+ * (Yong, 2026-11-15). Returns how many rows.
  */
 export async function verifyAll(pool: pg.Pool, session: Session, batchId: string | null = null): Promise<number> {
   return withApplicant(pool, asApplicant(session), async (c) => {
@@ -247,13 +247,12 @@ export async function verifyAll(pool: pg.Pool, session: Session, batchId: string
   });
 }
 
-/** What a tailored resume can draw on: checked roles and lines, and how many rows still wait to be checked. */
+/** What a tailored resume can draw on (every row, confirmed or not), and how many rows aren't confirmed yet. */
 export async function tailorReadiness(pool: pg.Pool, session: Session): Promise<{ roles: number; lines: number; waiting: number }> {
   return withApplicant(pool, asApplicant(session), async (c) => {
     const r = (await c.query(`SELECT
-        (SELECT count(*) FROM experience_item WHERE verification = 'verified')::int AS roles,
-        (SELECT count(*) FROM experience_bullet b JOIN experience_item e ON e.id = b.experience_item_id
-          WHERE b.verification = 'verified' AND e.verification = 'verified')::int AS lines,
+        (SELECT count(*) FROM experience_item)::int AS roles,
+        (SELECT count(*) FROM experience_bullet)::int AS lines,
         (${CHECKABLE.map((t) => `(SELECT count(*) FROM ${t} WHERE verification = 'draft')`).join(" + ")})::int AS waiting`)).rows[0];
     return { roles: r.roles, lines: r.lines, waiting: r.waiting };
   });

@@ -76,10 +76,7 @@ export default async function JobPage(props: Props) {
         <h2>Your documents for this job</h2>
         {ready.roles === 0 && !preparing ? (
           <p className="error" role="alert">{lastResult.empty ? "Nothing was prepared: " : "A resume can't be prepared yet: "}
-            none of your work history is confirmed{ready.waiting ? ` (${ready.waiting} ${ready.waiting === 1 ? "row is" : "rows are"} waiting)` : ""}. Only rows you've confirmed are used.{" "}
-            <a href="/profile/review">Confirm your profile rows</a>, then come back and prepare it.</p>
-        ) : ready.waiting && !preparing ? (
-          <p className="warn">{ready.waiting} profile {ready.waiting === 1 ? "row isn't" : "rows aren't"} confirmed yet, so {ready.waiting === 1 ? "it's" : "they're"} left out. <a href="/profile/review">Confirm them</a> to use them.</p>
+            your profile has no work history. <a href="/profile/import">Add your resume</a> or <a href="/profile/experience">add a role</a>, then come back and prepare it.</p>
         ) : null}
         {preparing ? <p className="status" role="status">Preparing your resume and cover letter from your profile. This page updates when they're ready.</p> : null}
         {work?.status === "failed" ? <p className="error" role="alert">We couldn't prepare them this time. Try again.</p> : null}
@@ -98,7 +95,7 @@ export default async function JobPage(props: Props) {
             <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
             {minScore !== null && m.score < minScore && !docs.length ? <p className="muted">This job scores below the {minScore} you set for preparing resumes.</p> : null}
             <button className={docs.length ? "secondary" : ""}>{docs.length ? "Prepare a fresh draft" : "Prepare a resume for this job"}</button>
-            <p className="hint">Makes a resume and a cover letter, built only from rows you've confirmed. Nothing is sent anywhere.</p>
+            <p className="hint">Makes a resume and a cover letter from your profile as it is now, in its own words. Nothing is sent anywhere.</p>
           </form>
         ) : null}
         {params.preparing === "1" && !preparing && docs.length ? <p className="status" role="status">Ready. Open the draft to look it over.</p> : null}

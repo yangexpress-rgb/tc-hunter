@@ -133,8 +133,8 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
   return (
     <section className="doc-preview" aria-label="This version">
       {s.experience.length === 0 ? (
-        <p className="error" role="alert">This resume has no experience in it, because none of your roles are confirmed yet. Only rows you've confirmed are used.{" "}
-          <a href="/profile/review">Confirm your profile rows</a>, then go back to the job and press "Prepare a fresh draft".</p>
+        <p className="error" role="alert">This resume has no experience in it, because your profile had no work history when it was made.{" "}
+          <a href="/profile/import">Add your resume</a> or <a href="/profile/experience">a role</a>, then go back to the job and press "Prepare a fresh draft".</p>
       ) : null}
       <p className="muted">Showing {shown} of your {total} lines, to fit about {s.targetPages} {s.targetPages === 1 ? "page" : "pages"}. Names, dates and numbers come straight from your profile.</p>
       <h2>Experience</h2>
@@ -293,7 +293,7 @@ function ProfilePane({ d }: { d: DocumentView }) {
   const p = d.profile;
   return (
     <section aria-label="Your profile">
-      <p className="muted">Everything this document can draw on: only rows you've checked are used. <a href="/profile">Change your profile</a></p>
+      <p className="muted">Everything this document can draw on: your whole profile as it was when the draft was made. <a href="/profile">Change your profile</a></p>
       {p.experience.filter((e) => e.verified).map((e) => (
         <article key={e.id} className="doc-item">
           <div className="doc-role"><strong>{e.title}</strong><span className="muted">{monthYear(e.start)} – {monthYear(e.end)}</span></div>
