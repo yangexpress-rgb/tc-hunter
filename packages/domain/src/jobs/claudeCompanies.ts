@@ -19,11 +19,11 @@ const Output = z.object({
       kind: z.enum(["greenhouse", "lever", "ashby", "smartrecruiters"]),
       token: z.string().describe("the board's token as it appears in its public address, e.g. 'stripe' in boards.greenhouse.io/stripe"),
     })).describe("public job boards you believe it uses; empty if unsure"),
-    careers_url: z.string().nullable().describe("its own careers page address (https), if you know it"),
+    careers_url: z.string().nullable().describe("its own careers page address (https), if you know it; for employers on Workday, the myworkdayjobs.com address, e.g. https://acme.wd1.myworkdayjobs.com/AcmeCareers"),
   })),
 });
 
-const SYSTEM = `You help one person find employers to watch for job openings. Given a career goal, list real employers that hire for it, mixing well-known and mid-size employers, and favour employers that hire in the places named. Include every company the person named. For each employer, give the public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and its careers page if you know it. Never invent employers. Never suggest job aggregators or recruiting agencies.`;
+const SYSTEM = `You help one person find employers to watch for job openings. Given a career goal, list real employers that hire for it, mixing well-known and mid-size employers, and favour employers that hire in the places named. Include every company the person named. For each employer, give the public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and its careers page if you know it (for employers that use Workday, give their myworkdayjobs.com careers address). Never invent employers. Never suggest job aggregators or recruiting agencies.`;
 
 export class ClaudeCompanyProposer implements CompanyProposer {
   readonly version = `companies-claude-1:${MODEL}`;

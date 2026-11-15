@@ -24,7 +24,7 @@ const WHY: Record<string, string> = {
 const why = (reason: string | null) => WHY[String(reason ?? "").split(":")[0]!.trim()] ?? "It didn't answer as expected.";
 const KIND: Record<string, string> = {
   job_search: "Job search site", greenhouse: "Company jobs page", lever: "Company jobs page", ashby: "Company jobs page",
-  smartrecruiters: "Company jobs page", careers_page: "Company careers page", pasted_link: "Pasted links",
+  smartrecruiters: "Company jobs page", workday: "Company jobs page (Workday)", careers_page: "Company careers page", pasted_link: "Pasted links",
 };
 
 const health = (h: string) => (h === "blocked" ? t("jobs.sources.unavailable") : h === "degraded" ? t("jobs.sources.trouble") : t("jobs.sources.ok"));
@@ -224,7 +224,7 @@ export default async function SourcesPage(props: PageProps) {
         <p>Then we search the job search sites above for each goal's roles in each of its places. We only send a job title and a place, never anything about you.</p>
         <p>Then, when Claude is set up, it suggests other employers that hire for each goal. We check each employer's public jobs page on Greenhouse, Lever, Ashby or SmartRecruiters, or its own careers page, and only watch the ones that answer with jobs.</p>
         <p>We look again when you change a goal, when you press Refresh, and once a day (or as often as your search settings say). We follow each site's rules for automated visitors.</p>
-        <p>Careers sites run on Workday, Taleo, iCIMS and similar systems can't be read yet, but those employers' jobs often still come in through the job sites. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
+        <p>Careers sites on Workday are read too. Ones run on Taleo, iCIMS and similar systems can't be read yet, but those employers' jobs often still come in through the job sites. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
       </Details>
 
       <Advanced>
