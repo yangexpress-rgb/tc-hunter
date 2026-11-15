@@ -9,7 +9,12 @@
     <div class="field"><label for="last_name">Last Name *</label><input id="last_name" name="last_name" required></div>
     <div class="field"><label for="email">Email *</label><input id="email" name="email" type="email" required></div>
     <div class="field"><label for="phone">Phone</label><input id="phone" name="phone" type="tel"></div>
-    <div class="field"><label for="resume">Resume/CV *</label><input id="resume" name="resume" type="file" required></div>
+    <!-- Like the newer Greenhouse boards: the file box's own label is just "Attach"; the question is the box's heading. -->
+    <div class="file-upload" role="group" aria-labelledby="upload-label-resume">
+      <div class="label upload-label" id="upload-label-resume">Resume/CV<span aria-hidden="true">*</span></div>
+      <div class="button-container"><button type="button" onclick="document.getElementById('resume').click()">Attach</button>
+        <label for="resume" style="position:absolute;width:1px;height:1px;overflow:hidden">Attach</label>
+        <input id="resume" name="resume" type="file" style="position:absolute;width:1px;height:1px;opacity:0"></div></div>
     <div class="field"><label for="work_auth">Are you legally authorised to work in this country? *</label>
       <select id="work_auth" name="work_auth" required><option value="">Select…</option><option value="1">Yes</option><option value="0">No</option></select></div>
     <fieldset><legend>Are you willing to relocate?</legend>

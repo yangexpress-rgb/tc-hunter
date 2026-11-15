@@ -48,6 +48,8 @@ describe.skipIf(!available)("the server's browser on a Greenhouse-shaped form", 
       ["#work_auth", "select", true], ["radio:relocate", "radio", false], ["#source", "select", false], ["#country", "select", true], ["#notice", "select", true], ["#privacy", "checkbox", true], ["#newsletter", "checkbox", false],
     ]);
     expect(form.fields.find((f) => f.key === "#work_auth")!.options).toEqual(["Yes", "No"]);
+    // A file box labelled only "Attach" is read by its heading, so the resume goes there.
+    expect(form.fields.find((f) => f.key === "#resume")).toMatchObject({ label: "Resume/CV*", type: "file", required: true, hasValue: false });
     expect(form.fields.find((f) => f.key === "radio:relocate")).toMatchObject({ label: "Are you willing to relocate?", options: ["Yes", "No"] });
     expect(form.fields.find((f) => f.key === "#source")!.label).toBe("How did you hear about us?");
     // Drop-downs drawn by the page are opened to read their choices (and closed again, nothing chosen).

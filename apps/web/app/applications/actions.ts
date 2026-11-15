@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, markSubmitted, requestApply,
+  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
   resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
@@ -169,6 +169,10 @@ export async function resolveOutcomeAction(form: FormData) {
   const s = await requireSession();
   const ref = String(form.get("app") ?? "");
   const went = form.get("went") === "1";
-  await act(form, () => resolveOutcome(app().pool, s, ref, went, went ? str(form, "confirmation") : null, String(form.get("rk") ?? "")),
-    `/applications/${ref}#packet`, went ? "submitted" : "not_sent");
+  const { pool, cfg } = app();
+  await act(form, async () => {
+    await resolveOutcome(pool, s, ref, went, went ? str(form, "confirmation") : null, String(form.get("rk") ?? ""));
+    // Hands-free: "It didn't" means TC Hunter fills their form again and sends it (the applicant's answer, not a retry by itself).
+    if (!went && (await getApplySettings(pool, cfg, s)).mode === "hands_free") await requestApply(pool, s, ref);
+  }, `/applications/${ref}${went ? "#packet" : "#applying"}`, went ? "submitted" : "not_sent");
 }
