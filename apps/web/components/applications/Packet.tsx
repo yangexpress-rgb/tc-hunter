@@ -3,7 +3,7 @@ import type { getPacket } from "@tc-hunter/db";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Details } from "@/components/Layers";
 import { BudgetLine, day } from "@/components/applications/AppBits";
-import { packetAnswerAction, packetApproveAction, resolveOutcomeAction, sendApproveAction, serverSendApproveAction, submittedAction } from "@/app/applications/actions";
+import { packetAnswerAction, packetApproveAction, workAuthAnswerAction, resolveOutcomeAction, sendApproveAction, serverSendApproveAction, submittedAction } from "@/app/applications/actions";
 import { stepUpAction } from "@/app/settings/vault-actions";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
@@ -217,7 +217,7 @@ function AnswerForm({ p, f, back, label }: { p: Packet; f: Packet["fields"][numb
       ) : (
         <label className="sr-label">Your answer{f.type === "textarea" ? <textarea name="answer" rows={3} maxLength={10000} defaultValue={f.answer ?? ""} /> : <input name="answer" maxLength={1000} defaultValue={f.answer ?? ""} />}</label>
       )}
-      <label className="small"><input type="checkbox" name="remember" value="1" defaultChecked /> Use this answer for other applications too</label>
+      <span className="small muted">Saved to your profile, so you won&apos;t be asked again.</span>
       <button className="secondary">{label}</button>
     </form>
   );
@@ -274,7 +274,22 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
           {p.fields.map((f) => (
             <li key={f.id} className={f.required && !f.willFill ? "packet-field yours" : "packet-field"}>
               <div className="packet-q">{f.label}</div>
-              {f.step ? (
+              {f.step === "work_auth" ? (
+                <div>
+                  <div className={f.required ? "error small" : "muted"}>{f.note ?? "Your right to work."}{f.required ? " Required." : ""}</div>
+                  {review ? (
+                    <form action={workAuthAnswerAction} className="inline-form">
+                      <Hidden appRef={p.appRef} back={back} />
+                      <input type="hidden" name="question" value={f.label} />
+                      {f.options?.length ? (
+                        <label className="sr-label">Your answer<select name="answer" required defaultValue=""><option value="" disabled>Choose</option>{f.options.map((o) => <option key={o}>{o}</option>)}</select></label>
+                      ) : <label className="sr-label">Your answer<input name="answer" maxLength={500} required /></label>}
+                      <span className="small muted">Saved as your right-to-work answer in your profile and used on every form from now on.</span>
+                      <button className="secondary">Use this answer</button>
+                    </form>
+                  ) : null}
+                </div>
+              ) : f.step ? (
                 f.required
                   ? <div className="error small">{STEP[f.step] ?? "Always yours"}. Required, so TC Hunter can&apos;t send this form without it. Set a standing answer in <a href="/settings#applying">Settings</a>, or apply on their site yourself.{f.note ? <div>{f.note}</div> : null}</div>
                   : <div className="muted">{STEP[f.step] ?? "Always yours"}. Optional: TC Hunter leaves it blank.</div>

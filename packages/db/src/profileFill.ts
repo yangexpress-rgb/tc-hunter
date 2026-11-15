@@ -1,0 +1,151 @@
+import type pg from "pg";
+import {
+  ANSWER_PRESETS, contactFromResume, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor,
+  type ProfileField, type ResumeFileKind,
+} from "@tc-hunter/domain";
+import { recordAudit } from "./audit";
+import type { Session } from "./auth";
+import type { AppConfig } from "./config";
+import { withApplicant } from "./context";
+import { DomainError } from "./packets";
+import { asApplicant, dataKeyFor } from "./profile";
+
+/**
+ * Fewer questions while applying (Yong, 2026-11-15): "pull the information from the initial
+ * resume as much as possible, such as email, name, phone", and "once user provided [an
+ * answer] in the hands-free application, the app should save to my profile accordingly, so
+ * next time similar application wouldn't need to ask again".
+ *
+ * Contact details are read from the stored original resume on this server (plain rules,
+ * never an AI service: §13.6 keeps contact details away from it) and only fill gaps; what
+ * the applicant typed in their profile always wins.
+ */
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Fills empty profile details (name, email, phone, city, LinkedIn, GitHub, website) from the newest uploaded resume. Returns what it filled. */
+export async function fillProfileFromResume(c: pg.PoolClient, cfg: AppConfig, applicantId: string): Promise<string[]> {
+  const a = (await c.query("SELECT legal_name_enc, preferred_name, email_enc, phone_enc, city, region, links FROM applicant WHERE id = $1", [applicantId])).rows[0];
+  if (!a) return [];
+  const links = (a.links ?? {}) as Record<string, string>;
+  const has = (re: RegExp) => Object.entries(links).some(([k, v]) => re.test(k) || re.test(String(v)));
+  const want = {
+    name: !a.legal_name_enc, email: !a.email_enc, phone: !a.phone_enc, city: !a.city,
+    linkedin: !has(/linkedin/i), github: !has(/github/i), website: !has(/^(website|portfolio|site|web)$/i),
+  };
+  if (!Object.values(want).some(Boolean)) return [];
+  const files = (await c.query(
+    "SELECT kind, file_kind, content_enc FROM resume_file ORDER BY (kind = 'resume') DESC, created_at DESC LIMIT 3")).rows;
+  if (!files.length) return [];
+  const dk = await dataKeyFor(c, cfg, applicantId);
+  const found: ReturnType<typeof contactFromResume> = { links: {} };
+  for (const f of files) {
+    let text = "";
+    try {
+      const bytes = open(dk, f.content_enc, "file:resume_file.content");
+      text = f.file_kind === "zip" ? parseLinkedInExport(bytes).sourceText : await extractText(f.file_kind as ResumeFileKind, bytes);
+    } catch { continue; }
+    const k = contactFromResume(text);
+    found.name ??= k.name; found.email ??= k.email; found.phone ??= k.phone;
+    if (!found.city && k.city) { found.city = k.city; found.region = k.region; }
+    found.links.linkedin ??= k.links.linkedin; found.links.github ??= k.links.github; found.links.website ??= k.links.website;
+  }
+  const filled: string[] = [];
+  const enc = (col: string, v: string) => encryptField(dk, `applicant.${col}`, v);
+  if (want.name && found.name) {
+    await c.query("UPDATE applicant SET legal_name_enc = $2, preferred_name = CASE WHEN preferred_name IN ('', 'You') THEN $3 ELSE preferred_name END, updated_at = now() WHERE id = $1",
+      [applicantId, enc("legal_name", found.name), found.name.split(" ")[0]]);
+    filled.push("name");
+  }
+  if (want.email && found.email) { await c.query("UPDATE applicant SET email_enc = $2, updated_at = now() WHERE id = $1", [applicantId, enc("email", found.email)]); filled.push("email"); }
+  if (want.phone && found.phone) { await c.query("UPDATE applicant SET phone_enc = $2, updated_at = now() WHERE id = $1", [applicantId, enc("phone", found.phone)]); filled.push("phone"); }
+  if (want.city && found.city) {
+    await c.query("UPDATE applicant SET city = $2, region = coalesce(region, $3), updated_at = now() WHERE id = $1", [applicantId, found.city.slice(0, 100), found.region?.slice(0, 100) ?? null]);
+    filled.push("city");
+  }
+  const add: Record<string, string> = {};
+  for (const k of ["linkedin", "github", "website"] as const) if (want[k] && found.links[k]) { add[k] = found.links[k]!.slice(0, 300); filled.push(k); }
+  if (Object.keys(add).length) await c.query("UPDATE applicant SET links = links || $2::jsonb, updated_at = now() WHERE id = $1", [applicantId, JSON.stringify(add)]);
+  if (filled.length) await recordAudit(c, "profile.filled_from_resume", { objectType: "applicant", objectId: applicantId, payload: { fields: filled.join(",") } });
+  return filled;
+}
+
+/**
+ * Keeps an answer the applicant typed on an application, so the next form with the same
+ * question doesn't ask again: a profile detail (name, email, phone, links, city, country)
+ * goes into the profile; anything else becomes an approved saved answer for that question.
+ */
+export async function keepAnswer(c: pg.PoolClient, dk: Buffer, applicantId: string, label: string, type: string, answer: string): Promise<void> {
+  const text = answer.trim();
+  const question = label.replace(/\s+/g, " ").replace(/[\s*:?]+$/, "").trim().slice(0, 200);
+  if (!text || type === "file" || question.length < 2) return;
+  const field = profileFieldFor(label);
+  if (field) { await keepProfileDetail(c, dk, applicantId, field, text.slice(0, 300)); return; }
+  const encText = encryptField(dk, "answer_bank_item.answer_text", text);
+  const items = (await c.query("SELECT id, question_patterns FROM answer_bank_item WHERE NOT is_applicant_step")).rows;
+  const same = items.find((x) => (x.question_patterns as string[]).some((re) => { try { return new RegExp(re, "i").test(label); } catch { return false; } }));
+  if (same) {
+    await c.query("UPDATE answer_bank_item SET answer_text_enc = $2, status = 'approved', last_reviewed_at = now() WHERE id = $1", [same.id, encText]);
+  } else {
+    const preset = ANSWER_PRESETS.find((p) => !p.applicantStep && p.patterns.some((re) => new RegExp(re, "i").test(label)));
+    const taken = preset ? (await c.query("SELECT 1 FROM answer_bank_item WHERE question_key = $1", [preset.key])).rowCount : 1;
+    const [key, patterns] = preset && !taken ? [preset.key, [...preset.patterns]] : [`custom:${question.slice(0, 80)}`, [`^${escapeRe(question)}`]];
+    await c.query(
+      `INSERT INTO answer_bank_item (applicant_id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step)
+       VALUES (app_applicant_id(), $1, $2, $3, 'approved', now(), false)`, [key, patterns, encText]);
+  }
+  await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: applicantId, payload: { field: "question", where: "saved_answers" } });
+}
+
+async function keepProfileDetail(c: pg.PoolClient, dk: Buffer, applicantId: string, field: ProfileField, v: string) {
+  const enc = (col: string, x: string) => encryptField(dk, `applicant.${col}`, x);
+  const a = (await c.query("SELECT legal_name_enc, preferred_name FROM applicant WHERE id = $1", [applicantId])).rows[0];
+  const legal = a?.legal_name_enc ? decryptField(dk, "applicant.legal_name", a.legal_name_enc).trim().split(/\s+/).filter(Boolean) : [];
+  const setName = (words: string[]) => c.query(
+    "UPDATE applicant SET legal_name_enc = $2, preferred_name = CASE WHEN preferred_name IN ('', 'You') THEN $3 ELSE preferred_name END, updated_at = now() WHERE id = $1",
+    [applicantId, enc("legal_name", words.join(" ")), words[0] ?? "You"]);
+  switch (field) {
+    case "first_name": await setName(legal.length > 1 ? [v, ...legal.slice(1)] : [v]); break;
+    case "last_name": await setName(legal.length > 1 ? [...legal.slice(0, -1), v] : legal.length === 1 && legal[0] !== v ? [legal[0]!, v] : [v]); break;
+    case "full_name": await setName(v.split(/\s+/)); break;
+    case "preferred_name": await c.query("UPDATE applicant SET preferred_name = $2, updated_at = now() WHERE id = $1", [applicantId, v.slice(0, 100)]); break;
+    case "email": await c.query("UPDATE applicant SET email_enc = $2, updated_at = now() WHERE id = $1", [applicantId, enc("email", v)]); break;
+    case "phone": await c.query("UPDATE applicant SET phone_enc = $2, updated_at = now() WHERE id = $1", [applicantId, enc("phone", v)]); break;
+    case "country": await c.query("UPDATE applicant SET country = $2, updated_at = now() WHERE id = $1", [applicantId, v.slice(0, 100)]); break;
+    case "city": {
+      const [city, region] = v.split(/,\s*/);
+      await c.query("UPDATE applicant SET city = $2, region = coalesce($3, region), updated_at = now() WHERE id = $1", [applicantId, city!.slice(0, 100), region?.slice(0, 100) ?? null]);
+      break;
+    }
+    case "linkedin": case "github": case "website":
+      await c.query("UPDATE applicant SET links = links || $2::jsonb, updated_at = now() WHERE id = $1", [applicantId, JSON.stringify({ [field]: v })]);
+      break;
+  }
+  await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: applicantId, payload: { field, where: "profile" } });
+}
+
+/**
+ * A right-to-work or sponsorship question the applicant answered on an application: saved
+ * (approved) as their saved answer for it, so every later form fills it from there (§13.7).
+ */
+export async function saveWorkAuthAnswer(pool: pg.Pool, cfg: AppConfig, session: Session, label: string, answer: string): Promise<void> {
+  const text = answer.trim().slice(0, 500);
+  if (!text) throw new DomainError("TC_BAD_INPUT");
+  const preset = ANSWER_PRESETS.filter((p) => p.applicantStep).find((p) => p.patterns.some((re) => new RegExp(re, "i").test(label)))
+    ?? ANSWER_PRESETS.find((p) => p.key === "work_auth")!;
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const dk = await dataKeyFor(c, cfg, session.applicantId);
+    const encText = encryptField(dk, "answer_bank_item.answer_text", text);
+    const q = label.replace(/\s+/g, " ").replace(/[\s*:?]+$/, "").trim().slice(0, 200);
+    const r = await c.query(
+      `UPDATE answer_bank_item SET answer_text_enc = $2, status = 'approved', last_reviewed_at = now(),
+         question_patterns = CASE WHEN $3 = ANY(question_patterns) THEN question_patterns ELSE question_patterns || $3 END
+        WHERE question_key = $1 RETURNING id`, [preset.key, encText, `^${escapeRe(q)}`]);
+    if (!r.rowCount) {
+      await c.query(
+        `INSERT INTO answer_bank_item (applicant_id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step)
+         VALUES (app_applicant_id(), $1, $2, $3, 'approved', now(), true)`, [preset.key, [...preset.patterns, `^${escapeRe(q)}`], encText]);
+    }
+    await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: session.applicantId, payload: { field: preset.key, where: "saved_answers" } });
+  });
+}

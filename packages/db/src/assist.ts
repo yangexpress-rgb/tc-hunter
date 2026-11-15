@@ -12,6 +12,7 @@ import { exportDocument } from "./documents";
 import { approveSubmission, consumeSubmissionKey, DomainError, markOutcomeUnknown, recordSubmitted } from "./packets";
 import { once } from "./requestKey";
 import { asApplicant, dataKeyFor } from "./profile";
+import { fillProfileFromResume, keepAnswer } from "./profileFill";
 import { budgetNow } from "./tracker";
 
 /**
@@ -163,6 +164,8 @@ export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId
   let host: string | null = null;
   try { host = new URL(url).hostname.toLowerCase(); } catch { /* keep null */ }
   if ((await c.query("SELECT 1 FROM application_packet WHERE application_id = $1 AND state = 'submitted'", [app.id])).rowCount) throw new DomainError("TC_PACKET_CLOSED");
+  // Gaps in the profile (name, email, phone, links) are filled from the uploaded resume first.
+  await fillProfileFromResume(c, cfg, applicantId);
   const { profile, dk, resume, letter } = await packetProfile(c, cfg, applicantId, app.match_id);
   if (!resume) throw new DomainError("TC_PACKET_DOCUMENT_NOT_APPROVED");
   // What the applicant typed before, by question, so they never answer the same question twice.
@@ -264,7 +267,7 @@ export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session,
 /** The applicant types or changes an answer. After approval this sends the packet back for review (database-enforced). */
 export async function answerPacketField(pool: pg.Pool, cfg: AppConfig, session: Session, fieldId: string, text: string): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
-    const f = (await c.query("SELECT packet_id, requires_applicant_step, options FROM packet_field WHERE id = $1", [fieldId])).rows[0];
+    const f = (await c.query("SELECT packet_id, requires_applicant_step, options, question_as_shown, field_type FROM packet_field WHERE id = $1", [fieldId])).rows[0];
     if (!f) throw new DomainError("TC_NOT_FOUND");
     if (f.requires_applicant_step) throw new DomainError("TC_APPLICANT_STEP");
     const t = text.trim().slice(0, 10000);
@@ -274,6 +277,8 @@ export async function answerPacketField(pool: pg.Pool, cfg: AppConfig, session: 
       `UPDATE packet_field SET answer_value_enc = $2, source = $3, source_ref_id = NULL, confidence = $4, note = NULL, fill_status = 'pending', updated_at = now() WHERE id = $1`,
       [fieldId, t ? encryptField(dk, "packet_field.answer_value", t) : null, t ? "applicant_typed" : null, t ? 1 : 0]);
     await rehash(c, dk, f.packet_id);
+    // Kept in the profile (or as a saved answer) so the next form doesn't ask again (Yong, 2026-11-15).
+    if (t) await keepAnswer(c, dk, session.applicantId, f.question_as_shown, f.field_type ?? "text", t);
   });
 }
 

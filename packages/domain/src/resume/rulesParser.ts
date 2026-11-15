@@ -295,3 +295,36 @@ export function firstSectionIndex(text: string): number {
   const i = lines.findIndex((l) => headingOf(l) !== null);
   return i < 0 ? 0 : i;
 }
+
+/**
+ * Contact details read from the top of a resume, on this server only (never sent to an AI
+ * service). Used to fill gaps in the applicant's profile so a form never asks for an email,
+ * phone number or name that's already on their resume (Yong, 2026-11-15).
+ */
+export interface ResumeContact {
+  name?: string; email?: string; phone?: string; city?: string; region?: string;
+  links: { linkedin?: string; github?: string; website?: string };
+}
+
+export function contactFromResume(text: string): ResumeContact {
+  const lines = text.replace(/\r/g, "").split("\n").map((l) => l.trim());
+  const firstHeading = lines.findIndex((l, i) => i > 0 && !!headingOf(l));
+  const head = lines.slice(0, firstHeading > 0 ? Math.min(firstHeading, 15) : 15).filter(Boolean);
+  const c = parseContact(head);
+  // The whole text for email and links: some resumes put them in a footer.
+  const email = c.email ?? EMAIL_RE.exec(text)?.[0];
+  const phone = c.phone ?? PHONE_RE.exec(head.join("\n"))?.[0]?.trim();
+  const urls = [...new Set([...c.links, ...[...text.matchAll(URL_RE)].map((m) => m[0])])].map((u) => u.replace(/[).;]+$/, ""));
+  const full = (u: string) => (/^https?:\/\//i.test(u) ? u : `https://${u}`);
+  const linkedin = urls.find((u) => /linkedin\.com\/in\//i.test(u));
+  const github = urls.find((u) => /github\.com\/[A-Za-z0-9-]+/i.test(u));
+  const website = urls.find((u) => !/linkedin\.com|github\.com|gitlab\.com/i.test(u));
+  // A name is two to four words of letters, not a heading or a line with contact details.
+  const nameOk = c.name && /^[\p{L}][\p{L}'.-]*(\s+[\p{L}][\p{L}'.-]*){1,3}$/u.test(c.name) && !headingOf(c.name) && !CITY_RE.test(c.name);
+  const loc = c.location?.split(/,\s?/);
+  return {
+    name: nameOk ? c.name!.replace(/\s+/g, " ") : undefined, email, phone,
+    city: loc?.[0], region: loc?.[1],
+    links: { linkedin: linkedin && full(linkedin), github: github && full(github), website: website && full(website) },
+  };
+}

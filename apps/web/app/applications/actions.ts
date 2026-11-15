@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, markSubmitted, requestApply,
-  resolveOutcome, dismissEmailSignal, resetCalibration, saveAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -89,22 +89,27 @@ export async function emailSignalAction(form: FormData) {
   await act(form, () => (form.get("do") === "dismiss" ? dismissEmailSignal(pool, s, id) : acceptEmailSignal(pool, s, id, app().cfg)), "/applications", form.get("do") === "dismiss" ? "dismissed" : "moved");
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export async function packetAnswerAction(form: FormData) {
   const s = await requireSession();
   const ref = String(form.get("app") ?? "");
   const { pool, cfg } = app();
-  const answer = String(form.get("answer") ?? "");
-  const question = String(form.get("question") ?? "").replace(/\s+/g, " ").replace(/[\s*]+$/, "").trim().slice(0, 200);
   await act(form, async () => {
-    await answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), answer);
-    // "Use this answer next time too": saved (approved) so the same question never stops TC Hunter again.
-    if (form.get("remember") === "1" && answer.trim() && question.length >= 3) {
-      await saveAnswer(pool, cfg, s, { questionKey: `custom:${question.slice(0, 80)}`, patterns: [`^${escapeRe(question)}`], answer, approve: true });
-    }
+    // The answer is also kept in the profile (or as a saved answer), so the next form doesn't ask again.
+    await answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), String(form.get("answer") ?? ""));
     await continueIfAnswered(pool, s, ref);
   }, `/applications/${ref}#packet`);
+}
+
+/** A right-to-work or sponsorship question answered on the application: saved as the approved saved answer, then TC Hunter carries on. */
+export async function workAuthAnswerAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const { pool, cfg } = app();
+  await act(form, async () => {
+    await saveWorkAuthAnswer(pool, cfg, s, String(form.get("question") ?? ""), String(form.get("answer") ?? ""));
+    await requestApply(pool, s, ref);
+  }, `/applications/${ref}#applying`, "applying");
 }
 
 /** "Approve these answers": bound to the exact packet the applicant was shown (its hash). TC Hunter's browser then carries on. */
