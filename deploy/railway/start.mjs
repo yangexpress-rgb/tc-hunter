@@ -62,7 +62,7 @@ if (env.DATABASE_OWNER_URL && env.DB_APP_PASSWORD) {
 const NO_PROXY = "localhost,127.0.0.1,.railway.internal";
 await Promise.all([
   [3128, "*"],
-  [3129, env.WEB_ALLOW_HOSTS || "api.anthropic.com,oauth2.googleapis.com"],
+  [3129, env.WEB_ALLOW_HOSTS || "api.anthropic.com,oauth2.googleapis.com,imap.gmail.com"],
 ].map(([port, hosts]) => new Promise((ok) => createGate(gateOptions(hosts)).listen(port, "127.0.0.1", () => {
   log("egress.ready", { port, allow: hosts });
   ok();
