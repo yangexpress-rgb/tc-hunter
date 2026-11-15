@@ -1,4 +1,4 @@
-import { latestDiscovery, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
+import { latestDiscovery, listAppSettings, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
 import { LookAgainButton, ScanStatusBox } from "@/components/jobs/ScanStatus";
 import { companyKey, goalName, noBoardSentence, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
@@ -46,13 +46,15 @@ export default async function SourcesPage(props: PageProps) {
   const found = sources.filter((s) => s.origin === "found");
   const mine = sources.filter((s) => s.origin === "you");
   const searchRows = new Map(sources.filter((s) => s.origin === "search").map((s) => [s.url, s]));
-  const sites = searchSites(process.env).status;
+  // Which sites are on: keys saved in Settings, or Railway variables (only whether each is set; no values read here).
+  const keyState = await listAppSettings(pool);
+  const sites = searchSites({ ...process.env, ...Object.fromEntries(keyState.filter((k) => k.saved).map((k) => [k.name, "set"])) }).status;
   const HOME: Record<string, string> = { adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com" };
   // One row per source for the status table: job sites (on or not), LinkedIn alerts, and every followed page.
   type StatusRow = { key: string; name: string; kind: string; status: string; last: Date | null; jobs: number; reason: string; link?: { href: string; label: string } };
   const table: StatusRow[] = [
     ...sites.filter((x) => !x.on).map((x) => ({ key: `off-${x.id}`, name: x.name, kind: "Job search site", status: "Off", last: null, jobs: 0,
-      reason: `Needs ${x.needs}.`, link: { href: x.signup!, label: "Get one free" } })),
+      reason: `Needs ${x.needs}.`, link: { href: "/settings#job-sites", label: "Add it in Settings" } })),
     ...sources.map((s) => {
       const never = !s.last_checked_at;
       const failed = !never && s.health !== "ok";
@@ -170,7 +172,7 @@ export default async function SourcesPage(props: PageProps) {
                   <div className={row.health === "ok" ? "muted" : "warn"}>{row.health === "ok" ? "Searching" : `Couldn't search it last time${row.health === "blocked" ? ": it turned us down" : ""}. We'll try again.`}</div>
                   <div className="muted">{row.open_jobs} open {row.open_jobs === 1 ? "job" : "jobs"} found · searched {ago(row.last_checked_at)}</div>
                 </> : <div className="muted">On. It's searched with your next look.</div>)
-                  : <div className="warn">Not on yet: it needs {site.needs}. <a href={site.signup} target="_blank" rel="noreferrer">Get one free</a>.</div>}
+                  : <div className="warn">Not on yet: it needs {site.needs}. <a href="/settings#job-sites">Add it in Settings</a> (<a href={site.signup} target="_blank" rel="noreferrer">get one free</a>).</div>}
               </div>
               {site.on && row ? (
                 <form action={unfollowSourceAction}>
