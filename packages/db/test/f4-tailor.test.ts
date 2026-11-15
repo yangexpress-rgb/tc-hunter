@@ -8,7 +8,7 @@ import {
 } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, approveDocument, confirmAlias, editDocument, exportDocument, getDocument, listDocuments, markDiffViewed,
-  newVersion, requestLink, requestTailor, reviseDocument, runNextWork, savePreferences, tailorReadiness, tailorWork, listMatches, verifyAll,
+  newVersion, remakeDocument, requestLink, requestTailor, reviseDocument, runNextWork, savePreferences, tailorReadiness, tailorWork, listMatches, verifyAll,
   type AppConfig, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -275,5 +275,22 @@ describe("Revise with feedback (Yong, 2026-11-15)", () => {
   it("only the applicant's own documents can be revised", async () => {
     const yongDoc = (await listDocuments(pool, yong, jobRef))[0]!;
     await expect(reviseDocument(pool, leo, yongDoc.id, "change it")).rejects.toThrow("TC_NOT_FOUND");
+  });
+});
+
+describe("making a draft again from the latest profile (Yong, 2026-11-15)", () => {
+  it("keeps the old draft in the history and logs only counts", async () => {
+    const leoJob = (await listMatches(pool, leo, { status: "all" })).rows[0].public_ref;
+    const before = (await listDocuments(pool, leo, leoJob)).find((d) => d.type === "tailored_resume")!;
+    await remakeDocument(pool, leo, before.id);
+    await drain();
+    const w = await tailorWork(pool, leo, leoJob);
+    expect(w.result).toMatchObject({ roles: 1, lines: 1 });
+    expect(JSON.stringify(w.result)).not.toContain("Contoso");
+    const after = (await listDocuments(pool, leo, leoJob)).find((d) => d.type === "tailored_resume")!;
+    expect(after.version).toBe(before.version + 1);
+    const d = (await getDocument(pool, cfg, leo, after.public_ref))!;
+    expect(d.meta.feedback).toBeUndefined();
+    expect(d.versions[1]).toMatchObject({ ref: before.public_ref, status: "superseded" });
   });
 });
