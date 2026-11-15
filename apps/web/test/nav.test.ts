@@ -15,7 +15,7 @@ describe("app navigation", () => {
     expect(at("/profile/goals")).toBe("me:/profile/goals");
     expect(at("/profile/preferences")).toBe("me:/profile/goals");
     expect(at("/jobs/J-123")).toBe("jobs:/jobs");
-    expect(at("/jobs/paste")).toBe("jobs:/jobs/paste");
+    expect(at("/jobs/paste")).toBe("jobs:/jobs");  // adding a job lives on Matches now
     expect(at("/applications/A-1")).toBe("applications:/applications");
     expect(at("/documents/D-1")).toBe("documents:/documents");
   });

@@ -161,7 +161,7 @@ export default async function SourcesPage(props: PageProps) {
         </div>
       </section>
 
-      <p className="muted small">LinkedIn and Indeed don't let other apps search them, so we never read them directly. Adzuna and Jooble bring in many of the same jobs, with a link to the original, and LinkedIn's own alert emails bring in the rest. You can also paste any job's link in <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
+      <p className="muted small">LinkedIn and Indeed don't let other apps search them, so we never read them directly. Adzuna and Jooble bring in many of the same jobs, with a link to the original, and LinkedIn's own alert emails bring in the rest. You can also paste any job's link in <a href="/jobs#add-job">Add a job on Matches</a>.</p>
 
       <section className="card" id="add">
         <h2>Add a company yourself</h2>
@@ -180,7 +180,7 @@ export default async function SourcesPage(props: PageProps) {
         <p>Then we search the job search sites in the table for each goal's roles in each of its places. We only send a job title and a place, never anything about you.</p>
         <p>Then, when Claude is set up, it suggests other employers that hire for each goal. We check each employer's public jobs page on Greenhouse, Lever, Ashby or SmartRecruiters, or its own careers page, and only watch the ones that answer with jobs.</p>
         <p>We look again when you change a goal, when you press Refresh, and once a day (or as often as your search settings say). We follow each site's rules for automated visitors.</p>
-        <p>Careers sites on Workday are read too. Ones run on Taleo, iCIMS and similar systems can't be read yet, but those employers' jobs often still come in through the job sites. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs/paste">{t("jobs.paste.title").toLowerCase()}</a>.</p>
+        <p>Careers sites on Workday are read too. Ones run on Taleo, iCIMS and similar systems can't be read yet, but those employers' jobs often still come in through the job sites. LinkedIn, Indeed and similar sites are never read automatically. To add a job from one of them, use <a href="/jobs#add-job">Add a job on Matches</a>.</p>
       </Details>
 
       <Advanced>

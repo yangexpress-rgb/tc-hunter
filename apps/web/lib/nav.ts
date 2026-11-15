@@ -19,7 +19,6 @@ export const NAV: NavSection[] = [
   ] },
   { key: "jobs", label: "Jobs", icon: "◎", tabs: [
     { href: "/jobs", label: "Matches" },
-    { href: "/jobs/paste", label: "Add a job" },
     { href: "/jobs/sources", label: "Where we look" },
   ] },
   { key: "applications", label: "Applications", icon: "✓", tabs: [

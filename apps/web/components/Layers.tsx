@@ -20,9 +20,9 @@ export function Status({ children }: { children: ReactNode }) {
   return <p className="status" role="status">{children}</p>;
 }
 
-export function Details({ summary, children }: { summary?: string; children: ReactNode }) {
+export function Details({ summary, children, open }: { summary?: string; children: ReactNode; open?: boolean }) {
   return (
-    <details className="layer2">
+    <details className="layer2" open={open}>
       <summary>{summary ?? t("layer.details")}</summary>
       <div className="layer-body">{children}</div>
     </details>
