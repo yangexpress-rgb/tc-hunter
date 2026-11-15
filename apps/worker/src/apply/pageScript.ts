@@ -62,6 +62,26 @@ export const PAGE_SCRIPT = String.raw`
     if (box) { var lb = box.querySelector("legend, label:not([for]), [data-automation-id='formLabel']"); if (lb && clean(lb.textContent)) return clean(lb.textContent); }
     return labelOf(el);
   }
+  // A file box's own label is often just its button ("Attach", "Upload"); the question
+  // ("Resume/CV *") is the box's heading (newer Greenhouse boards, Lever, Ashby).
+  var GENERIC = /^(attach|upload|choose( a)? files?|browse|select( a)? files?|add( a)? files?|drop( your)? files? here|attach,? ?dropbox.*|or drag and drop.*|enter manually)$/i;
+  function fileLabel(el) {
+    var own = labelOf(el);
+    if (own && !GENERIC.test(own) && own !== clean(el.name || el.id)) return own;
+    var grp = el.closest("[role=group]");
+    if (grp) {
+      var by = grp.getAttribute("aria-labelledby"); if (by && textOf(by, grp)) return textOf(by, grp);
+      if (grp.getAttribute("aria-label")) return clean(grp.getAttribute("aria-label"));
+    }
+    for (var box = el.parentElement, depth = 0; box && depth < 5; box = box.parentElement, depth++) {
+      var heads = box.querySelectorAll(".label, .upload-label, [class*='label' i], legend, label, h3, h4");
+      for (var i = 0; i < heads.length; i++) {
+        var t = clean(heads[i].textContent);
+        if (t && !GENERIC.test(t) && t.length <= 120) return t;
+      }
+    }
+    return own;
+  }
   function keyOf(el) {
     if (el.id) return "#" + el.id;
     if (el.name) return el.type === "radio" ? "radio:" + el.name : "name:" + el.name;
@@ -104,7 +124,7 @@ export const PAGE_SCRIPT = String.raw`
         continue;
       }
       var key = keyOf(el); if (!key || seen[key]) continue; seen[key] = 1;
-      var label = type === "checkbox" ? labelOf(el) : labelOf(el);
+      var label = type === "file" ? fileLabel(el) : labelOf(el);
       var f = { key: key, label: label, type: type, required: isRequired(el, label), hasValue: false };
       if (tag === "select") {
         f.options = Array.prototype.filter.call(el.options, function (o) { return o.value !== ""; }).map(function (o) { return clean(o.textContent); });
@@ -114,6 +134,12 @@ export const PAGE_SCRIPT = String.raw`
         f.hasValue = !!shown && !/^select( one)?$|^choose/i.test(shown);
       } else if (type === "checkbox") f.hasValue = el.checked;
       else if (type === "file") f.hasValue = !!(el.files && el.files.length);
+      else if (role === "combobox") {
+        // Site-drawn drop-downs show the chosen value next to the box, not in it.
+        var ctl = el.closest("[class*='control' i], [class*='container' i]");
+        var sv = ctl && ctl.querySelector("[class*='single-value' i], [class*='singleValue' i], [class*='multi-value' i]");
+        f.hasValue = !!clean(el.value) || !!(sv && clean(sv.textContent));
+      }
       else f.hasValue = !!clean(el.value);
       if (f.label) out.push(f);
     }

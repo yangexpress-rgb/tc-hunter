@@ -151,9 +151,20 @@ class PwPage implements ApplyPage {
     const loc = locate(this.pg, it.key);
     if (!(await loc.count())) return "not_found";
     if (it.file) {
-      await loc.setInputFiles({ name: it.file.name, mimeType: it.file.mime, buffer: Buffer.from(it.file.bytes) });
+      const file = { name: it.file.name, mimeType: it.file.mime, buffer: Buffer.from(it.file.bytes) };
+      const held = () => loc.evaluate((el: HTMLInputElement) => (el.files?.length ?? 0) > 0).catch(() => false);
+      await loc.setInputFiles(file);
       await this.pg.waitForTimeout(1500);  // let the site take the file in
-      return "filled";
+      if (await held()) return "filled";
+      // Some upload boxes replace their input once used: choose the file through the box's own button instead.
+      const button = loc.locator("xpath=ancestor::*[.//button][1]").locator("button").filter({ hasText: /attach|upload|choose|browse|select/i }).first();
+      if (await button.count()) {
+        const [chooser] = await Promise.all([this.pg.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null), button.click().catch(() => {})]);
+        if (chooser) { await chooser.setFiles(file); await this.pg.waitForTimeout(2500); }
+      }
+      const name = it.file.name.replace(/\.[a-z]+$/i, "");
+      const shown = await this.pg.evaluate((n) => (document.body?.innerText ?? "").includes(n), name).catch(() => false);
+      return (await held()) || shown ? "filled" : "failed";
     }
     const value = it.value ?? "";
     if (it.key.startsWith("radio:")) {

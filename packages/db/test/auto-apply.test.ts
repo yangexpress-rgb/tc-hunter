@@ -19,7 +19,7 @@ import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./
  * one press of Submit. The real browser runs against local pages in apps/worker/test.
  */
 
-interface FakeSpec { url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[] }
+interface FakeSpec { url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
 
 class FakePage implements ApplyPage {
   values = new Map<string, string>();
@@ -31,11 +31,12 @@ class FakePage implements ApplyPage {
   async readForm(): Promise<PageForm> {
     // "more" questions appear once the first answers are in (a form that grows as you answer).
     const fields = this.fills.length && this.spec.more ? [...this.spec.fields, ...this.spec.more] : this.spec.fields;
-    return { url: this.spec.url, fields, captcha: !!this.spec.captcha, humanCheck: false };
+    return { url: this.spec.url, fields: fields.map((f) => ({ ...f, hasValue: this.values.has(f.key) })), captcha: !!this.spec.captcha, humanCheck: false };
   }
   async fill(items: FillItem[]) {
     this.fills.push(items);
-    for (const i of items) this.values.set(i.key, i.file ? `file:${i.file.name}:${i.file.bytes.length}` : String(i.value));
+    // A site whose upload box ignores the file (the browser says it's attached, their form disagrees).
+    for (const i of items) if (!(i.file && this.spec.fileDoesNotStick)) this.values.set(i.key, i.file ? `file:${i.file.name}:${i.file.bytes.length}` : String(i.value));
     return items.map((i) => ({ key: i.key, status: "filled" as const }));
   }
   async filledHash() { return createHash("sha256").update(JSON.stringify([...this.values].sort())).digest("hex"); }
@@ -93,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -388,5 +389,19 @@ describe("a consent the site draws as a drop-down (Spaulding Ridge, 2026-11-15)"
     await runNow();
     expect((await applyStatus(pool, yong, apps[11]!)).status).toBe("sent");
     expect(browser.pages.at(-1)!.values.get("#notice")).toBe("I agree");
+  });
+});
+
+describe("a last look before Submit (Spaulding Ridge, 2026-11-15)", () => {
+  it("a required file that didn't attach stops it before Submit: nothing is sent, and the cause shows", async () => {
+    browser.spec = () => ({ url: GH(13), fields: BASE, after: "thanks", fileDoesNotStick: true });
+    const clicks = browser.clicks;
+    await approveResume(apps[12]!);
+    await runNow();
+    const s = await applyStatus(pool, yong, apps[12]!);
+    expect(s.status).toBe("failed");
+    expect(s.problem).toMatch(/still needs "Resume\/CV \*": the file didn't attach.*nothing was sent/);
+    expect(browser.clicks).toBe(clicks);
+    expect((await getPacket(pool, cfg, yong, apps[12]!))!.outcomeUnknown).toBe(false);
   });
 });

@@ -328,12 +328,16 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
       return { status: "failed" };
     }
     // Answer, approve (as the setting allows), fill; read the form again, since answers can bring up more questions.
+    const filledKeys = new Set<string>();
+    let labels = new Map<string, string>();
     for (let round = 0; round < 3; round++) {
       const r = await prepare(pool, auto, deps, app, mode, run, form, ats, { prefilled: prefilledOf(form) });
       if (r.stop) return { status: r.stop };
       await run.step(`Filling in ${r.fill.length} answers${r.fill.some((f) => f.file) ? " and attaching your documents" : ""}`);
       const results = await page.fill(r.fill);
       const failed = results.filter((x) => x.status !== "filled");
+      for (const x of results) if (x.status === "filled") filledKeys.add(x.key);
+      labels = new Map([...labels, ...r.labels]);
       await markFilled(pool, auto, r.packetId, results);
       const missedRequired = failed.filter((x) => r.requiredKeys.has(x.key));
       if (missedRequired.length) {
@@ -351,6 +355,18 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
       if (round === 2) { await run.end("failed", "Their form kept changing as answers went in, so TC Hunter stopped. Nothing was sent."); return { status: "failed" }; }
       await run.step("More questions appeared after the first answers; answering those too");
       form = again;
+    }
+    // Last look before sending: every required question has an answer in their form and every
+    // required file is attached. Anything missing stops it here, before Submit, so nothing is sent.
+    const check = await page.readForm();
+    const empty = check.fields.filter((f) => f.required && f.hasValue === false && (f.type === "file" || !filledKeys.has(f.key)));
+    if (empty.length) {
+      await run.shot("stopped", "Their form, with what's still empty", page, deps.cfg);
+      const names = empty.map((f) => `"${labels.get(f.key) ?? f.label}"`).slice(0, 3).join(", ");
+      await run.end("failed", empty.some((f) => f.type === "file")
+        ? `${app.employer}'s form still needs ${names}: the file didn't attach. TC Hunter stopped before pressing Submit, so nothing was sent. Choose Try again, or apply on their site yourself.`
+        : `${app.employer}'s form still needs ${names}. TC Hunter stopped before pressing Submit, so nothing was sent. Answer it below, then choose Try again.`);
+      return { status: "failed" };
     }
     // The filled form: its fingerprint is what gets approved and sent.
     const filled = await page.filledHash();
