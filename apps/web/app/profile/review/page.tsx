@@ -8,7 +8,7 @@ import { EditForm } from "@/components/profile/Section";
 import { TopBar } from "@/components/TopBar";
 import { CATEGORY_LABELS, dateRange, employmentLabel, flashOf, PROFICIENCY_LABELS, showMonth, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { removeDuplicatesAction, deleteFactAction, discardImportAction, verifyFactAction } from "../actions";
+import { removeDuplicatesAction, deleteFactAction, discardImportAction, verifyAllAction, verifyFactAction } from "../actions";
 import { DuplicateBanner } from "@/components/profile/Digest";
 
 export const dynamic = "force-dynamic";
@@ -69,7 +69,15 @@ export default async function ReviewPage(props: PageProps) {
       <DuplicateBanner dups={copies} back={back} action={removeDuplicatesAction} />
 
       {total === 0 ? <p className="status">{t("profile.review.empty")} <a href="/profile">Back to your profile</a></p> : (
-        <p className="muted">{total} {total === 1 ? "row is" : "rows are"} waiting. Nothing here is used until you confirm it. Levels are only ever what your file says; you can change them yourself.</p>
+        <>
+          <p className="muted">{total} {total === 1 ? "row is" : "rows are"} waiting. Nothing here goes into a resume or cover letter until you confirm it. Levels are only ever what your file says; you can change them yourself.</p>
+          <form action={verifyAllAction} className="inline-actions">
+            <input type="hidden" name="back" value={back} />
+            {batchId ? <input type="hidden" name="batch_id" value={batchId} /> : null}
+            <button>Confirm all {total} {total === 1 ? "row" : "rows"}</button>
+            <span className="hint">Only if you've read them. You can still edit or remove any row later.</span>
+          </form>
+        </>
       )}
 
       {batch?.resume_file_id ? <p className="muted">From <a href={`/profile/resumes/${batch.resume_file_id}`}>{batch.file_name ?? "your file"}</a>. That page shows what was skipped as already in your profile.</p> : null}
