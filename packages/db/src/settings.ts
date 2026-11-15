@@ -6,7 +6,7 @@ import type { AppConfig } from "./config";
 import { withApplicant } from "./context";
 
 /**
- * Job-site keys entered in Settings (Yong, 2026-11-15), instead of on Railway. Household-wide.
+ * Job-site keys and the Gmail sign-in client entered in Settings (Yong, 2026-11-15), instead of on Railway. Household-wide.
  * Sealed with the master key; a saved value wins over the Railway variable of the same name.
  */
 export const APP_SETTINGS = [
@@ -15,6 +15,9 @@ export const APP_SETTINGS = [
   { name: "JOOBLE_API_KEY", label: "Jooble key", site: "jooble" },
   { name: "USAJOBS_API_KEY", label: "USAJOBS key", site: "usajobs" },
   { name: "USAJOBS_EMAIL", label: "Email the USAJOBS key was issued to", site: "usajobs" },
+  // Gmail sign-in for the household (Settings › Email). Each person still connects their own mailbox.
+  { name: "TC_GOOGLE_CLIENT_ID", label: "Client ID", site: "google" },
+  { name: "TC_GOOGLE_CLIENT_SECRET", label: "Client secret", site: "google" },
 ] as const;
 export type AppSettingName = (typeof APP_SETTINGS)[number]["name"];
 
@@ -46,7 +49,7 @@ export async function saveAppSetting(pool: pg.Pool, cfg: AppConfig, session: Ses
   });
 }
 
-/** The environment with saved settings laid over it: what the job-site searches read. */
+/** The environment with saved settings laid over it: what the job-site searches and the Gmail sign-in read. */
 export async function settingsEnv(pool: pg.Pool, cfg: AppConfig, env: NodeJS.ProcessEnv = process.env): Promise<Record<string, string | undefined>> {
   const out: Record<string, string | undefined> = { ...env };
   for (const r of (await pool.query("SELECT name, value_sealed FROM app_setting")).rows) {

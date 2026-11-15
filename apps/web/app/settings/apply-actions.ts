@@ -5,11 +5,11 @@ import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
 async function go(fn: () => Promise<void>, ok: string): Promise<never> {
-  let target = `/settings?apply=${ok}#applying`;
+  let target = `/settings/applying?apply=${ok}`;
   try { await fn(); } catch (e) {
     const code = errorCode(e) ?? "TC_UNKNOWN";
     log.warn("apply.settings_failed", { code });
-    target = `/settings?e=${code}#applying`;
+    target = `/settings/applying?e=${code}`;
   }
   redirect(target);
 }

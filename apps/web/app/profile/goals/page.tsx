@@ -138,7 +138,7 @@ export default async function GoalsPage(props: PageProps) {
           <header className="section-head"><h2>Bring in LinkedIn's jobs too</h2></header>
           <p>LinkedIn doesn't let other apps search it, and we never sign in as you. LinkedIn can email you new jobs, though, and we read those emails for you:</p>
           <ol>
-            <li>{mail?.status === "connected" ? <>Your Gmail is connected{mail.address ? ` (${mail.address})` : ""}. Make sure LinkedIn sends alerts to this address.</> : <><a href="/settings#email">Connect your Gmail</a>, the one LinkedIn emails.</>}</li>
+            <li>{mail?.status === "connected" ? <>Your Gmail is connected{mail.address ? ` (${mail.address})` : ""}. Make sure LinkedIn sends alerts to this address.</> : <><a href="/settings/email">Connect your Gmail</a>, the one LinkedIn emails.</>}</li>
             <li>Open each goal's search on LinkedIn below, and switch on <strong>Set alert</strong> (daily, by email).</li>
             <li>That's it. Jobs in those emails show up in Jobs under the goal they fit, scored like any other.</li>
           </ol>

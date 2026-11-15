@@ -16,7 +16,7 @@ const API = "https://gmail.googleapis.com/gmail/v1/users/me";
 
 export interface GoogleClient { clientId: string; clientSecret: string; redirectUri: string }
 
-export function googleClientFrom(env: NodeJS.ProcessEnv, origin?: string): GoogleClient | null {
+export function googleClientFrom(env: Record<string, string | undefined>, origin?: string): GoogleClient | null {
   const id = env.TC_GOOGLE_CLIENT_ID, secret = env.TC_GOOGLE_CLIENT_SECRET, base = origin ?? env.TC_PUBLIC_ORIGIN;
   return id && secret && base ? { clientId: id, clientSecret: secret, redirectUri: `${base.replace(/\/$/, "")}/settings/email/callback` } : null;
 }

@@ -12,9 +12,9 @@ const same = (a: string, b: string) => a.length === b.length && timingSafeEqual(
 export async function GET(req: Request): Promise<Response> {
   const session = await requireSession();
   const url = new URL(req.url);
-  const back = (q: string) => Response.redirect(new URL(`/settings?${q}#email`, req.url), 303);
+  const back = (q: string) => Response.redirect(new URL(`/settings/email?${q}`, req.url), 303);
   const attempt = await takeAttempt();
-  const client = googleClient();
+  const client = await googleClient();
   if (!client) return back("e=TC_EMAIL_NOT_SET_UP");
   if (url.searchParams.get("error")) return back("e=TC_EMAIL_CANCELLED");
   const code = url.searchParams.get("code") ?? "";

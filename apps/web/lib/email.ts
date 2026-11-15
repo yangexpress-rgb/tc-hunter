@@ -1,13 +1,23 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { settingsEnv } from "@tc-hunter/db";
 import { googleClientFrom, type GoogleClient } from "@tc-hunter/domain";
+import { app } from "@/lib/server";
 
 /** One connect attempt at a time, bound to this applicant, for ten minutes. Never logged. */
 export const OAUTH_COOKIE = "tc_email_oauth";
 const PATH = "/settings/email";
 
-export function googleClient(): GoogleClient | null {
-  return googleClientFrom(process.env);
+/** The household's Google sign-in: saved in Settings › Email, or Railway variables as a fallback. */
+export async function googleClient(): Promise<GoogleClient | null> {
+  const { pool, cfg } = app();
+  return googleClientFrom(await settingsEnv(pool, cfg, process.env));
+}
+
+/** Where Google must send people back to. It has to be listed exactly like this on the Google client. */
+export function callbackUrl(): string | null {
+  const base = process.env.TC_PUBLIC_ORIGIN;
+  return base ? `${base.replace(/\/$/, "")}/settings/email/callback` : null;
 }
 
 export async function saveAttempt(applicantId: string, state: string, verifier: string): Promise<void> {

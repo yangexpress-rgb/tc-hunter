@@ -42,8 +42,8 @@ export function AddPasskey({ text }: { text: Text & { label: string } }) {
   );
 }
 
-export function ConfirmWithPasskey({ text }: { text: Text }) {
-  return <Ceremony text={text} after="/settings?confirmed=1" run={async () => {
+export function ConfirmWithPasskey({ text, back = "/settings" }: { text: Text; back?: string }) {
+  return <Ceremony text={text} after={`${back}?confirmed=1`} run={async () => {
     const opts = await passkeyStepUpOptions();
     if (!isOptions(opts)) return false;
     const res = await startAuthentication({ optionsJSON: opts as never });

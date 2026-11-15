@@ -72,7 +72,7 @@ Also pick a **sign-up code** (any phrase) to give Leo.
 | `DB_APP_PASSWORD`, `TC_MASTER_KEY`, `TC_VAULT_KEY` | from step 1 |
 | `SIGNUP_CODE` | your sign-up code |
 | `ANTHROPIC_API_KEY` | optional, same as on the Mac |
-| `TC_GOOGLE_CLIENT_ID`, `TC_GOOGLE_CLIENT_SECRET` | optional, same as on the Mac (see step 6) |
+| `TC_GOOGLE_CLIENT_ID`, `TC_GOOGLE_CLIENT_SECRET` | optional: easier to enter in Settings › Email (see step 6) |
 | `BACKUP_*`, `RCLONE_CONFIG_*` | see step 5 |
 
 `TC_PUBLIC_ORIGIN` is filled in automatically from the Railway domain. If you later add
@@ -133,15 +133,16 @@ don't include the vault and they stay inside Railway, so they don't replace this
 
 ### 6. Connected Gmail (if you use it)
 
-In the Google Cloud console, open the TC Hunter OAuth client (**APIs & Services ›
-Credentials**) and add this **Authorised redirect URI**:
+Everything happens in the app: open **Settings › Email**. If Google sign-in isn't set up yet,
+the page lists the Google Cloud console steps and shows the exact **Authorised redirect URI**
+to add (`https://<your-railway-domain>/settings/email/callback`). Paste the client ID and
+secret there and press *Save*; no Railway variables or restart needed (the worker picks
+them up within a minute). `TC_GOOGLE_CLIENT_ID` / `TC_GOOGLE_CLIENT_SECRET` on Railway
+still work as a fallback when nothing is saved in Settings.
 
-```
-https://<your-railway-domain>/settings/email/callback
-```
-
-Then each person connects Gmail again in **Settings › Email**. The Gmail permission
-lives in each person's vault, so it doesn't carry over from the Mac.
+Then each person presses **Connect Gmail (read-only)** on the same page, signed in as
+themselves. The Gmail permission lives in each person's vault, so it doesn't carry over
+from the Mac.
 
 ### 7. The browser extension
 

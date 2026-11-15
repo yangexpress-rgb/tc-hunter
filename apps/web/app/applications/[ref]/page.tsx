@@ -106,7 +106,7 @@ export default async function ApplicationPage(props: Props) {
           {resume?.status === "approved" && !packet ? (
             <Details summary="Let TC Hunter type your answers into their form">
               <p className="muted">Open the employer's application form, then choose the TC Hunter button in your browser. You'll check every answer here before anything is typed, and you press Submit yourself.</p>
-              {devices.length ? <p className="muted">Paired: {devices.map((d: { label: string }) => d.label).join(", ")}.</p> : <p><a href="/settings#browser">Pair your browser first</a></p>}
+              {devices.length ? <p className="muted">Paired: {devices.map((d: { label: string }) => d.label).join(", ")}.</p> : <p><a href="/settings/applying#browser">Pair your browser first</a></p>}
             </Details>
           ) : null}
         </section>
