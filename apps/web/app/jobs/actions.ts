@@ -56,7 +56,7 @@ export async function unfollowSourceAction(form: FormData) {
 export async function pasteLinkAction(form: FormData) {
   const s = await requireSession();
   const g = (k: string) => String(form.get(k) ?? "").trim() || undefined;
-  await act(form, () => requestLink(app().pool, s, { url: g("url") ?? "", title: g("title"), employer: g("employer"), location: g("location"), text: g("text") }), "/jobs/paste", "queued");
+  await act(form, () => requestLink(app().pool, s, { url: g("url") ?? "", title: g("title"), employer: g("employer"), location: g("location"), text: g("text") }), "/jobs#add-job", "queued");
 }
 
 export async function feedbackAction(form: FormData) {

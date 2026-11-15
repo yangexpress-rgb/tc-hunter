@@ -9,7 +9,7 @@ import { GOAL_SORTS, GoalTables, type GoalSort } from "@/components/jobs/GoalTab
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { adjustmentAction, alertSeenAction, refreshAction } from "./actions";
+import { adjustmentAction, alertSeenAction, pasteLinkAction, refreshAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +49,9 @@ export default async function JobsPage(props: PageProps) {
     return s ? `/jobs?${s}` : "/jobs";
   };
   const here = q({});
+  // Jobs added by link in the last day, newest first.
+  const recentLinks = work.filter((w) => w.kind === "ingest_link" && (w.status === "queued" || w.status === "running" || Date.now() - new Date(w.created_at).getTime() < 86_400_000)).slice(0, 5);
+  const linkBusy = recentLinks.some((w) => w.status === "queued" || w.status === "running");
 
   return (
     <>
@@ -63,8 +66,45 @@ export default async function JobsPage(props: PageProps) {
             <LookAgainButton label="Refresh" title="Start a new search now with your latest goals, and score every job again" /></form>
           {sources.length === 0 && !goals.some((g) => g.active) ? <a className="button" href="/profile/goals">Add a goal</a> : null}
           <a href="/jobs/sources">{t("jobs.sources.title")}</a>
-          <a href="/jobs/paste">{t("jobs.paste.title")}</a>
+          <a href="#add-job">Add a job</a>
         </div>
+      </section>
+
+      {/* Add a job by its link, here on Matches rather than its own tab (Yong, 2026-11-15). */}
+      <section className="card" id="add-job">
+        {linkBusy ? <meta httpEquiv="refresh" content="5" /> : null}
+        <Details summary="Add a job by its link" open={linkBusy || params.queued === "1"}>
+          <form action={pasteLinkAction} className="stack">
+            <input type="hidden" name="back" value="/jobs#add-job" />
+            <p>{t("jobs.paste.intro")}</p>
+            <label>Job address<input name="url" type="url" required placeholder="https://…" /></label>
+            <p className="hint">{t("jobs.paste.no_fetch")}</p>
+            <Details summary="Add the job's details yourself">
+              <label>Job title<input name="title" maxLength={300} /></label>
+              <label>Employer<input name="employer" maxLength={300} /></label>
+              <label>Where<input name="location" maxLength={300} /></label>
+              <label>Job description<textarea name="text" rows={10} maxLength={40000} /></label>
+            </Details>
+            <button>Add this job</button>
+          </form>
+        </Details>
+        {linkBusy ? <p className="status" role="status">{t("jobs.paste.reading")}</p> : null}
+        {recentLinks.length ? (
+          <ul className="plain">
+            {recentLinks.map((w) => {
+              const res = (w.result ?? {}) as { ref?: string | null; note?: string };
+              return (
+                <li key={w.id} className="paste-row">
+                  <span className="muted">Added {ago(w.created_at)}:</span>{" "}
+                  {w.status === "done" && res.ref ? <a href={`/jobs/${res.ref}`}>See how it matches you</a>
+                    : w.status === "done" ? <span className="warn">{res.note ?? "We couldn't read a job there."}</span>
+                    : w.status === "failed" ? <span className="warn">We couldn't read that job. Paste its title, employer and text and try again.</span>
+                    : <span>Reading…</span>}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
       </section>
 
       {alerts.length ? (
