@@ -3,14 +3,16 @@ import { Details, Status } from "@/components/Layers";
 import { app, requireSession } from "@/lib/server";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { callbackUrl, googleClient } from "@/lib/email";
-import { checkEmailAction, disconnectEmailAction, saveGoogleAction } from "../email-actions";
+import { checkEmailAction, connectAppPasswordAction, disconnectEmailAction, saveGoogleAction } from "../email-actions";
 import { ConfirmCard, NeedsConfirm, SettingsHeader, ago } from "../shared";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Settings › Email (Yong, 2026-11-15: "a place to link to my email"). Each person connects their own
- * Gmail, read-only; the Google sign-in it goes through is set up once for the household.
+ * Settings › Email (Yong, 2026-11-15: "a place to link to my email", then "can you automate this
+ * set up process as much as possible?"). Each person connects their own Gmail with an app password:
+ * one code made in their Google account, pasted here. The Google Cloud sign-in stays as an
+ * optional other way, folded away.
  */
 export default async function EmailSettingsPage(props: PageProps) {
   const session = await requireSession();
@@ -21,42 +23,65 @@ export default async function EmailSettingsPage(props: PageProps) {
   const google = keys.filter((k) => k.site === "google");
   const googleSaved = google.some((k) => k.saved);
   const back = callbackUrl();
-  const state = !email ? (client ? "off" : "not_set_up") : email.status === "needs_reconnect" ? "reconnect" : "on";
+  const state = !email ? "off" : email.status === "needs_reconnect" ? "reconnect" : "on";
+  const guess = email?.address ?? (/@(gmail|googlemail)\.com$/i.test(session.email) ? session.email : "");
+
+  const connectForm = (
+    <ol className="steps">
+      <li>
+        <strong>Make an app password in your Google account.</strong>{" "}
+        <a className="button secondary small" href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">Open Google app passwords</a>
+        <br /><span className="muted small">Sign in to Google if it asks. Type <strong>TC Hunter</strong> as the name and press <em>Create</em>. Google shows a code of 16 letters: copy it.
+        If Google says app passwords aren&apos;t available, <a href="https://myaccount.google.com/signinoptions/twosv" target="_blank" rel="noreferrer">turn on 2-Step Verification</a> first, then try again.</span>
+      </li>
+      <li>
+        <strong>Paste it here and connect.</strong>
+        <form action={connectAppPasswordAction} className="stack">
+          <label>Your Gmail address<input name="address" type="email" autoComplete="email" defaultValue={guess} required placeholder="you@gmail.com" /></label>
+          <label>App password<input name="app_password" autoComplete="off" required placeholder="abcd efgh ijkl mnop" spellCheck={false} /></label>
+          {fresh ? null : (
+            <>
+              <label>Your TC Hunter password <span className="muted small">(to confirm it&apos;s you)</span><input name="password" type="password" autoComplete="current-password" /></label>
+              {session.mfaEnabled ? <label>Or the 6-digit code from your authenticator app<input name="code" inputMode="numeric" pattern="[0-9]{6}" autoComplete="one-time-code" /></label> : null}
+            </>
+          )}
+          <button>Connect Gmail</button>
+        </form>
+        <span className="muted small">TC Hunter checks the code with Gmail straight away and tells you here if it doesn&apos;t work.</span>
+      </li>
+    </ol>
+  );
 
   return (
     <>
       <SettingsHeader title="Email" params={params} saved={saved} error={error}
         intro="Link your Gmail so TC Hunter can spot employer replies and finish job-site sign-ups for you. Each person links their own; nobody else in the household sees your mail." />
       {params.email === "connected" ? <Status>Gmail is connected. TC Hunter looks for replies from employers about once an hour.</Status> : null}
-      {params.email === "disconnected" ? <Status>Gmail is disconnected, and everything taken from it is deleted.</Status> : null}
+      {params.email === "disconnected" ? <Status>Gmail is disconnected, and everything taken from it is deleted. If you used an app password, you can also delete it on Google&apos;s app passwords page.</Status> : null}
       {params.email === "looking" ? <Status>Looking now. Suggestions appear on your applications.</Status> : null}
-      {params.google === "saved" ? <Status>Google sign-in saved. You can connect Gmail now.</Status> : null}
+      {params.google === "saved" ? <Status>Google sign-in saved. You can connect Gmail with it now.</Status> : null}
       {params.google === "removed" ? <Status>Google sign-in removed from Settings.</Status> : null}
 
       <section className="card" id="gmail">
         <h2>Your Gmail{" "}
           {state === "on" ? <span className="ok">Connected</span>
             : state === "reconnect" ? <span className="error">Needs connecting again</span>
-            : state === "off" ? <span className="warn">Not connected</span>
-            : <span className="error">Not set up yet</span>}
+            : <span className="warn">Not connected</span>}
         </h2>
-        {state === "not_set_up" ? (
-          <p className="error">Gmail can&apos;t be connected yet: TC Hunter&apos;s Google sign-in isn&apos;t set up. Do the one-time setup below first (about 10 minutes, once for the household).</p>
-        ) : state === "off" ? (
+        {state === "off" ? (
           <>
-            <p>Connect the Gmail address you use for job hunting. Google will ask you to allow read-only access.</p>
-            {fresh ? <a className="button" href="/settings/email/connect">Connect Gmail (read-only)</a> : <NeedsConfirm what="Connecting Gmail" />}
+            <p>Two steps, about two minutes.</p>
+            {connectForm}
           </>
         ) : email ? (
           <>
-            {state === "reconnect" ? <p className="error">Google stopped letting TC Hunter read your mail{email.lastError ? ` (${email.lastError})` : ""}. Connect again to keep it working.</p> : null}
+            {state === "reconnect" ? <p className="error">Gmail stopped letting TC Hunter in{email.lastError ? ` (${email.lastError})` : ""}. The app password was probably deleted or your Google password changed. Make a new app password and connect again below.</p> : null}
             <p>Connected{email.address ? <>: <strong>{email.address}</strong></> : null} · since {ago(email.connectedAt)} · last looked {ago(email.lastCheckedAt)}.</p>
             <div className="inline-actions">
-              {state === "reconnect"
-                ? (!client ? null : fresh ? <a className="button" href="/settings/email/connect">Connect again</a> : <NeedsConfirm what="Connecting again" />)
-                : <form action={checkEmailAction}><button className="secondary">Look now</button></form>}
+              {state === "on" ? <form action={checkEmailAction}><button className="secondary">Look now</button></form> : null}
               <form action={disconnectEmailAction}><button className="secondary">Disconnect</button></form>
             </div>
+            {state === "reconnect" ? connectForm : null}
           </>
         ) : null}
         <h3>What TC Hunter uses it for</h3>
@@ -67,20 +92,24 @@ export default async function EmailSettingsPage(props: PageProps) {
         </ul>
         <Details summary="What TC Hunter reads and keeps">
           <ul>
-            <li>It can only read. It can&apos;t send, delete or change anything in your mailbox.</li>
+            <li>It only reads. It opens your mailbox in read-only mode, so it never sends, deletes, moves or marks anything as read. It talks only to Gmail&apos;s own mail server.</li>
+            <li>An app password itself could do more than read, so treat it like a password: TC Hunter keeps it in your own locked vault, never in its records, and nobody else in the household can see it, your mail or anything taken from it.</li>
             <li>It only looks at recent mail that mentions employers you&apos;re tracking, job alerts, and confirmation emails from sites it is applying on.</li>
             <li>It keeps only what a suggestion needs: which application, what kind of reply, the date and the sender&apos;s web address. Never the subject or the message.</li>
-            <li>The permission Google gives is kept in your own locked vault, never in TC Hunter&apos;s records. Nobody else in the household can see your mail or anything taken from it.</li>
-            <li>Disconnecting tells Google to forget the permission and deletes everything taken from your mail.</li>
+            <li>Your mail is never sent to an AI service. Plain rules decide what kind of reply it is.</li>
+            <li>Disconnecting deletes the app password from TC Hunter and everything taken from your mail. To cancel the code on Google&apos;s side too, delete it on <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noreferrer">Google&apos;s app passwords page</a>.</li>
           </ul>
         </Details>
       </section>
 
-      <section className="card" id="google">
-        <h2>Google sign-in for TC Hunter{" "}
-          {client ? <span className="ok">Set up</span> : <span className="error">Not set up</span>}
-        </h2>
-        <p className="muted">Once for the whole household. Google needs to know TC Hunter before anyone can connect a Gmail. You make it a free &quot;sign-in client&quot; in Google&apos;s console and paste two values here.</p>
+      <Details summary="Another way to connect (advanced): your own Google sign-in">
+        {client && state !== "on" ? (
+          <p>{fresh ? <a className="button secondary" href="/settings/email/connect">Connect Gmail with Google sign-in (read-only)</a> : <NeedsConfirm what="Connecting with Google sign-in" />}</p>
+        ) : null}
+        <h3>Google sign-in for TC Hunter{" "}
+          {client ? <span className="ok">Set up</span> : <span className="muted">Not set up</span>}
+        </h3>
+        <p className="muted">You don&apos;t need this: the app password above is enough. This other way lets TC Hunter ask Google for read-only permission itself, but it needs a free &quot;sign-in client&quot; made once in Google&apos;s console (about 10 minutes).</p>
         {client ? (
           <p>
             {googleSaved
@@ -88,7 +117,7 @@ export default async function EmailSettingsPage(props: PageProps) {
               : <>Set as Railway variables. Each person can now connect their own Gmail.</>}
           </p>
         ) : null}
-        <Details summary={client ? "Setup steps, and changing the sign-in" : "Setup steps"} open={!client}>
+        <Details summary={client ? "Setup steps, and changing the sign-in" : "Setup steps"}>
           <ol>
             <li>Open <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noreferrer">Google Cloud console › New project</a>, sign in with your Google account, name it <strong>TC Hunter</strong> and press <em>Create</em>.</li>
             <li>Turn on Gmail for it: open <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noreferrer">Gmail in Google&apos;s library</a> (check the TC Hunter project is picked at the top) and press <em>Enable</em>.</li>
@@ -117,9 +146,9 @@ export default async function EmailSettingsPage(props: PageProps) {
             </form>
           ) : <NeedsConfirm what="Saving the Google sign-in" />}
         </Details>
-      </section>
 
-      <ConfirmCard session={session} back="/settings/email" why="Connecting Gmail or changing TC Hunter's Google sign-in needs a fresh check that it's you." />
+        <ConfirmCard session={session} back="/settings/email" why="Connecting with Google sign-in or changing it needs a fresh check that it's you." />
+      </Details>
     </>
   );
 }

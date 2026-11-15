@@ -1,6 +1,6 @@
 // Outbound gate. The web app and the worker have no internet route of their own; they
 // reach out only through here. HTTPS stays end to end (CONNECT tunnel): this gate never
-// sees what is sent, only which host on port 443.
+// sees what is sent, only which host on port 443 (or Gmail's mail server on 993).
 //   ALLOW_HOSTS=api.anthropic.com          only these hosts (the web app's gate)
 //   ALLOW_HOSTS=*                          any public host (the worker's gate, for job boards and careers pages),
 //                                          but never a private, loopback or link-local address (no reaching into the home network)
@@ -13,9 +13,14 @@ const anyPublic = allowList.includes("*");
 const allow = new Set(allowList.filter((h) => h !== "*"));
 const port = Number(process.env.PORT ?? 3128);
 
+// One exception to "HTTPS only": Gmail's mail server, for people who connect Gmail with an app
+// password (Settings › Email). Still TLS end to end, and only this exact host and port.
+const MAIL_SERVERS = new Set(["imap.gmail.com:993"]);
+
 export function allowed(target, opts = { anyPublic, allow }) {
   const m = /^([a-z0-9.-]+):(\d+)$/i.exec(target ?? "");
-  if (!m || m[2] !== "443") return false;
+  if (!m) return false;
+  if (m[2] !== "443") return MAIL_SERVERS.has(`${m[1].toLowerCase()}:${m[2]}`) && (opts.anyPublic || opts.allow.has(m[1].toLowerCase()));
   const host = m[1].toLowerCase();
   if (net.isIP(host)) return false;            // names only: an address could point anywhere
   if (opts.anyPublic) return host.includes(".") && !/\.(local|internal|lan|home|arpa|localhost)$/.test(host) && host !== "localhost";
@@ -45,14 +50,14 @@ export function createGate(opts = { anyPublic, allow }) {
   server.on("connect", async (req, client, head) => {
     const refuse = (why) => { log("egress.refused", { target: req.url, why }); client.end("HTTP/1.1 403 Forbidden\r\n\r\n"); };
     if (!allowed(req.url, opts)) return refuse("not allowed");
-    const [host] = req.url.split(":");
+    const [host, port] = req.url.split(":");
     let addr;
     try {
       const all = await dns.lookup(host, { all: true });
       if (!all.length || all.some((a) => isPrivateAddress(a.address))) return refuse("private address");
       addr = all[0].address;
     } catch { return refuse("no such host"); }
-    const upstream = net.connect(443, addr, () => {
+    const upstream = net.connect(Number(port), addr, () => {
       client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
       if (head?.length) upstream.write(head);
       upstream.pipe(client); client.pipe(upstream);

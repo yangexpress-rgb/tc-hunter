@@ -46,17 +46,20 @@ export async function emailStatus(pool: pg.Pool, cfg: AppConfig, session: Sessio
 }
 
 /** After Google sends the applicant back: the token goes into their vault, and a first look is queued. */
-export async function connectEmail(pool: pg.Pool, session: Session, vault: SecretStore, token: SecretValue): Promise<void> {
+export async function connectEmail(pool: pg.Pool, session: Session, vault: SecretStore, token: SecretValue,
+  known?: { cfg: AppConfig; address: string; how: "app_password" }): Promise<void> {
   const ref = await vault.put(session.applicantId, "email_token", "gmail", token);
   let old: string | null = null;
   try {
     await withApplicant(pool, asApplicant(session), async (c) => {
       old = (await c.query("SELECT vault_ref FROM email_connection")).rows[0]?.vault_ref ?? null;
+      // With an app password the address is already known; with a Google sign-in the first look fills it in.
+      const address = known ? encryptField(await dataKeyFor(c, known.cfg, session.applicantId), "email_connection.address", known.address) : null;
       await c.query(
-        `INSERT INTO email_connection (applicant_id, vault_ref) VALUES (app_applicant_id(), $1)
-         ON CONFLICT (applicant_id) DO UPDATE SET vault_ref = EXCLUDED.vault_ref, status = 'connected', last_error = NULL, connected_at = now(), updated_at = now()`, [ref]);
+        `INSERT INTO email_connection (applicant_id, vault_ref, address_enc) VALUES (app_applicant_id(), $1, $2)
+         ON CONFLICT (applicant_id) DO UPDATE SET vault_ref = EXCLUDED.vault_ref, address_enc = EXCLUDED.address_enc, status = 'connected', last_error = NULL, connected_at = now(), updated_at = now()`, [ref, address]);
       await c.query("INSERT INTO work_item (applicant_id, kind) VALUES (app_applicant_id(), 'email_check') ON CONFLICT DO NOTHING");
-      await recordAudit(c, "email.connected", { payload: { provider: "gmail" } });
+      await recordAudit(c, "email.connected", { payload: { provider: "gmail", how: known?.how ?? "google_sign_in" } });
     });
   } catch (e) {
     await vault.delete(session.applicantId, ref);

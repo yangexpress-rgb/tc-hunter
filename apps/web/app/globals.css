@@ -361,3 +361,7 @@ table.jobs-matrix tr.is-unseen td:nth-child(2) a { font-weight: 600; }
 .apply-shot img { width: 100%; height: 150px; object-fit: cover; object-position: top; border: 1px solid var(--border); border-radius: 6px; }
 #applying fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; }
 #applying label.choice { display: block; margin: 8px 0; }
+
+/* Settings › Email: the two connect steps */
+ol.steps { padding-left: 20px; display: grid; gap: 16px; }
+ol.steps > li > form.stack { margin-top: 10px; }

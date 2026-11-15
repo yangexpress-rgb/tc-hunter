@@ -26,7 +26,7 @@ describe("Railway deploy", () => {
 
   it("the web app and the worker go out only through their gates, with the same rules as Compose", async () => {
     expect(start).toMatch(/\[3128, "\*"\]/);
-    expect(start).toMatch(/\[3129, env\.WEB_ALLOW_HOSTS \|\| "api\.anthropic\.com,oauth2\.googleapis\.com"\]/);
+    expect(start).toMatch(/\[3129, env\.WEB_ALLOW_HOSTS \|\| "api\.anthropic\.com,oauth2\.googleapis\.com,imap\.gmail\.com"\]/);
     expect(start).toMatch(/run\("web",[\s\S]*?HTTPS_PROXY: "http:\/\/127\.0\.0\.1:3129"/);
     expect(start).toMatch(/run\("worker",[\s\S]*?HTTPS_PROXY: "http:\/\/127\.0\.0\.1:3128"/);
     expect(start).toMatch(/listen\(port, "127\.0\.0\.1"/);  // gates are never reachable from outside
@@ -37,6 +37,14 @@ describe("Railway deploy", () => {
     const web = gateOptions("api.anthropic.com,oauth2.googleapis.com");
     expect(allowed("oauth2.googleapis.com:443", web)).toBe(true);
     expect(allowed("boards.greenhouse.io:443", web)).toBe(false);
+    // Gmail with an app password: Gmail's mail server on 993, and no other host or port.
+    const webMail = gateOptions("api.anthropic.com,oauth2.googleapis.com,imap.gmail.com");
+    expect(allowed("imap.gmail.com:993", webMail)).toBe(true);
+    expect(allowed("imap.gmail.com:993", web)).toBe(false);
+    expect(allowed("imap.gmail.com:993", worker)).toBe(true);
+    expect(allowed("imap.mail.example.com:993", worker)).toBe(false);
+    expect(allowed("imap.gmail.com:25", worker)).toBe(false);
+    expect(allowed("smtp.gmail.com:465", worker)).toBe(false);
   });
 
   it("applies migrations and the tc_app password at every start, before the app connects", () => {

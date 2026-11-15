@@ -133,7 +133,7 @@ services:
     restart: unless-stopped
     command: ["node", "/proxy/proxy.mjs"]
     environment:
-      ALLOW_HOSTS: api.anthropic.com,oauth2.googleapis.com
+      ALLOW_HOSTS: api.anthropic.com,oauth2.googleapis.com,imap.gmail.com
     volumes:
       - ./egress-proxy:/proxy:ro
     read_only: true

@@ -6,7 +6,7 @@
 import { createPool, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
-  ClaudeResumeParser, GmailReader, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
+  ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
 
@@ -22,12 +22,12 @@ const tailor = {
   letter: claudeWrites ? new ClaudeLetterProposer() : new RulesLetterProposer(),
   cfg,
 };
-// Connected Gmail (decision 13.3): only when a Google client is configured (in Settings › Email or on
-// Railway, read again every minute below) and the vault is mounted.
-const emailWith = (google: GoogleClient | null): EmailDeps | undefined => google && process.env.TC_VAULT_DIR
-  ? { vault: loadSecretStore(), cfg, reader: (token) => new GmailReader(google, token), postings: reader } : undefined;
-let email = emailWith(googleClientFrom(process.env));
-let emailKey = JSON.stringify(googleClientFrom(process.env));
+// Connected Gmail (decision 13.3): each applicant connects with an app password (Yong, 2026-11-15)
+// or through a Google sign-in client when one is set up (Settings › Email or Railway, read again
+// every minute below). Only needs the vault mounted.
+let google: GoogleClient | null = googleClientFrom(process.env);
+const email: EmailDeps | undefined = process.env.TC_VAULT_DIR
+  ? { vault: loadSecretStore(), cfg, reader: (token) => mailReaderFor(token, google, { proxy: process.env.HTTPS_PROXY || undefined }), postings: reader } : undefined;
 // Resume digest (decision 13.6): Claude with contact details and the applicant's names removed, or the built-in rules.
 const digest = {
   cfg,
@@ -47,14 +47,7 @@ async function currentSearch() {
     try {
       const env = await settingsEnv(pool, cfg, process.env);
       search = searchSites(env).sites;
-      const google = googleClientFrom(env);
-      const key = JSON.stringify(google);
-      if (key !== emailKey) {
-        email = emailWith(google);
-        emailKey = key;
-        if (apply) apply.email = email;
-        log.info("worker.email_setup_changed", { email: email ? "gmail.readonly" : "off" });
-      }
+      google = googleClientFrom(env);
       searchReadAt = Date.now();
     }
     catch (e) { log.warn("worker.settings_failed", { message: String((e as Error).message ?? e).slice(0, 200) }); }
@@ -65,7 +58,7 @@ async function currentSearch() {
 // Employer-site passwords live in each applicant's vault; Gmail confirms new Workday accounts.
 const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
   browser: new ServerBrowser({ proxy: process.env.HTTPS_PROXY || undefined, executablePath: process.env.TC_CHROMIUM_PATH || undefined }),
-  cfg, vault: process.env.TC_VAULT_DIR ? loadSecretStore() : undefined, email: email as EmailDeps | undefined,
+  cfg, vault: process.env.TC_VAULT_DIR ? loadSecretStore() : undefined, email,
 };
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
@@ -74,7 +67,7 @@ let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
 async function main() {
-  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail.readonly" : "off", apply: apply ? "browser" : "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
+  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
   // One worker: anything still marked running was cut off by the last restart or update.
   try {
     const n = await recoverInterruptedWork(pool);

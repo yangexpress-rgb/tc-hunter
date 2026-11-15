@@ -3,7 +3,7 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   output: "standalone",
   transpilePackages: ["@tc-hunter/db", "@tc-hunter/domain"],
-  serverExternalPackages: ["@node-rs/argon2", "pg"],
+  serverExternalPackages: ["@node-rs/argon2", "pg", "imapflow", "mailparser"],
   poweredByHeader: false,
   // Resume uploads go through a server action; files are capped at 5 MB in the app itself.
   experimental: { serverActions: { bodySizeLimit: "6mb" } },
