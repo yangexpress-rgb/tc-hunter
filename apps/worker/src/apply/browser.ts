@@ -517,14 +517,28 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     await pw.first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
     const n = await pw.count();
     if (!n) { log.warn("workday.account_page", { host, step: "reset_link", shows: await this.describe(), says: await this.says() }); return false; }
+    log.info("workday.reset_form", { host, boxes: n, shows: await this.describe() });
     for (let i = 0; i < n; i++) await pw.nth(i).fill(password);
-    await this.pressFirst(["resetPasswordSubmitButton", "changePasswordSubmitButton", "passwordResetSubmitButton", "submitButton"], /^\s*(submit|reset( my)? password|change password|set password|save|continue|sign in|update password)\s*$/i);
-    await settle(this.pg, 6000);
-    const t = await this.text();
-    if (/(must|should) (contain|be at least|include)|doesn'?t match|do not match|invalid|expired/i.test(t) && await pw.first().isVisible().catch(() => false)) {
-      log.warn("workday.account_page", { host, step: "reset_refused", says: await this.says() });
-      return false;
+    const SAVE = /^\s*(submit|reset( my)? password|change password|set password|save|continue|sign in|update password)\s*$/i;
+    const ids = ["resetPasswordButton", "resetPasswordSubmitButton", "changePasswordButton", "changePasswordSubmitButton", "passwordResetSubmitButton", "submitButton"];
+    await this.pressFirst(ids, SAVE);
+    let done = false;
+    for (let i = 0; i < 20 && !done; i++) {
+      await this.pg.waitForTimeout(1000);
+      const t = await this.text();
+      if (/(must|should) (contain|be at least|include|not)|doesn'?t match|do not match|invalid|expired|not (allowed|valid)/i.test(t) && await pw.first().isVisible().catch(() => false)) {
+        log.warn("workday.reset_result", { host, result: "refused", says: await this.says() });
+        return false;
+      }
+      done = /password (has been|was|is) (changed|reset|updated)|successfully/i.test(t) || !(await pw.first().isVisible().catch(() => false));
+      // Still the form after a few seconds: the press didn't take. Enter in the last box, then a forced press.
+      if (!done && (i === 4 || i === 9)) {
+        if (i === 4) await pw.nth(n - 1).press("Enter").catch(() => {});
+        else await this.pg.getByRole("button", { name: SAVE }).filter({ visible: true }).first().click({ force: true }).catch(() => {});
+      }
     }
+    log.info("workday.reset_result", { host, result: done ? "saved" : "form_stayed", says: await this.says() });
+    if (!done) return false;
     await this.pg.goto(this.jobUrl, { waitUntil: "domcontentloaded" });
     await settle(this.pg);
     const s = await this.start();
