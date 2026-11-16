@@ -17,7 +17,16 @@
       on("applyManually", function (e) { e.preventDefault(); signInPage(); });
     });
   }
+  // Workday's newer sign-in page (?v=new): Apple, Google or email, with the email boxes shown only after "Sign in with email".
+  var NEW = location.search.indexOf("v=new") >= 0, revealed = false;
   function signInPage() {
+    if (NEW && !revealed) {
+      h('<div data-automation-id="signInContent"><h2>Sign In</h2><button data-automation-id="SignInWithAppleButton">Sign in with Apple</button>' +
+        '<button data-automation-id="SignInWithGoogleButton">Sign in with Google</button><p>or</p>' +
+        '<button data-automation-id="SignInWithEmailButton">Sign in with email</button></div>');
+      on("SignInWithEmailButton", function () { revealed = true; signInPage(); });
+      return;
+    }
     h('<div data-automation-id="signInContent"><h2>Sign In</h2><label for="e">Email Address</label><input id="e" data-automation-id="email">' +
       '<label for="p">Password</label><input id="p" type="password" data-automation-id="password">' +
       '<button data-automation-id="signInSubmitButton">Sign In</button> <a href="#" data-automation-id="createAccountLink">Create Account</a><p id="msg"></p></div>');
