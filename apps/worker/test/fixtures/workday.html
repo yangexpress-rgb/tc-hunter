@@ -118,12 +118,16 @@
       list.querySelectorAll("li").forEach(pickable);
       // Like Workday's search list: typed words are looked up on Enter; the choice shows beside the box.
       var pc = document.getElementById("pc"), pcl = document.getElementById("pc-list");
-      pc.addEventListener("keydown", function (e) {
-        if (e.key !== "Enter") return; e.preventDefault();
-        pcl.innerHTML = ["Canada (+1)", "United States of America (+1)"].filter(function (c) { return c.toLowerCase().indexOf(pc.value.toLowerCase()) >= 0; })
-          .map(function (c) { return '<li data-automation-id="promptOption">' + c + '</li>'; }).join("");
+      // Opened, it shows only its first few choices (Premier: Afghanistan to Anguilla); typing then Enter searches all of them.
+      function shown(list) {
+        pcl.innerHTML = list.map(function (c) { return '<li data-automation-id="promptOption">' + c + '</li>'; }).join("");
         pcl.querySelectorAll("li").forEach(function (li) { li.addEventListener("click", function () {
           document.getElementById("pc-sel").innerHTML = '<span data-automation-id="selectedItem">' + li.textContent + '</span>'; pcl.innerHTML = ""; pc.value = ""; }); });
+      }
+      pc.addEventListener("click", function () { shown(["Afghanistan (+93)", "Albania (+355)"]); });
+      pc.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return; e.preventDefault();
+        shown(["Afghanistan (+93)", "Albania (+355)", "Canada (+1)", "United States of America (+1)"].filter(function (c) { return c.toLowerCase().indexOf(pc.value.toLowerCase()) >= 0; }));
       });
       on("pageFooterNextButton", function () {
         if (btn.textContent === "Select One" || !document.getElementById("fn").value || !document.querySelector("#pc-sel [data-automation-id=selectedItem]")) { var e = document.getElementById("err"); e.hidden = false; e.textContent = "Errors found: How Did You Hear About Us? is required"; return; }

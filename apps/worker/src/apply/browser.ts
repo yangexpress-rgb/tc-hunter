@@ -216,8 +216,8 @@ class PwPage implements ApplyPage {
       if (!isButton) { await loc.fill(term).catch(() => loc.pressSequentially(term)); }
       await this.pg.waitForTimeout(700);
       const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
-      // Workday's search lists look the typed words up only on Enter.
-      if (enterSearches && term && !(await options.count())) { await loc.press("Enter").catch(() => {}); await this.pg.waitForTimeout(1500); }
+      // Workday's search lists look the typed words up only on Enter (the list shown before that is just its first few choices).
+      if (enterSearches && term) { await loc.press("Enter").catch(() => {}); await this.pg.waitForTimeout(1500); }
       const n = await options.count();
       const texts: string[] = [];
       for (let i = 0; i < n; i++) texts.push(((await options.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
