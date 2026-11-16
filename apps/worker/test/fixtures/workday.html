@@ -18,13 +18,20 @@
     });
   }
   // Workday's newer sign-in page (?v=new): Apple, Google or email, with the email boxes shown only after "Sign in with email".
-  var NEW = location.search.indexOf("v=new") >= 0, revealed = false;
+  // With &late=1 the three buttons are drawn a moment after the page, and the email one carries no automation id.
+  var NEW = location.search.indexOf("v=new") >= 0, LATE = location.search.indexOf("late=1") >= 0, revealed = false;
   function signInPage() {
     if (NEW && !revealed) {
-      h('<div data-automation-id="signInContent"><h2>Sign In</h2><button data-automation-id="SignInWithAppleButton">Sign in with Apple</button>' +
-        '<button data-automation-id="SignInWithGoogleButton">Sign in with Google</button><p>or</p>' +
-        '<button data-automation-id="SignInWithEmailButton">Sign in with email</button></div>');
-      on("SignInWithEmailButton", function () { revealed = true; signInPage(); });
+      h('<div data-automation-id="signInContent"><h2>Sign In</h2><div id="sso"></div></div>');
+      var draw = function () {
+        if (!document.getElementById("sso")) return;
+        document.getElementById("sso").innerHTML = '<button data-automation-id="SignInWithAppleButton">Sign in with Apple</button>' +
+          '<button data-automation-id="SignInWithGoogleButton">Sign in with Google</button><p>or</p>' +
+          (LATE ? '<div role="button" tabindex="0" id="byEmail"><span>Sign in with email</span></div>' : '<button data-automation-id="SignInWithEmailButton">Sign in with email</button>');
+        var b = LATE ? document.getElementById("byEmail") : document.querySelector('[data-automation-id="SignInWithEmailButton"]');
+        b.addEventListener("click", function () { revealed = true; signInPage(); });
+      };
+      if (LATE) setTimeout(draw, 2500); else draw();
       return;
     }
     h('<div data-automation-id="signInContent"><h2>Sign In</h2><label for="e">Email Address</label><input id="e" data-automation-id="email">' +
