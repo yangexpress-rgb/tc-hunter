@@ -340,12 +340,19 @@ class WorkdayPw extends PwPage implements WorkdayPage {
   }
   /** What the account page shows, for the worker log when it can't get through (button names only, nothing typed). */
   private async describe() {
-    return this.pg.evaluate(() => {
-      const seen = (el: Element) => { const r = (el as HTMLElement).getBoundingClientRect(); return r.width > 0 && r.height > 0; };
-      const all = [...document.querySelectorAll("button, a, [role=button], input, [data-automation-id]")].filter(seen).slice(0, 60);
-      return all.map((el) => `${el.tagName.toLowerCase()}${el.getAttribute("data-automation-id") ? "#" + el.getAttribute("data-automation-id") : ""}${(el as HTMLInputElement).type && el.tagName === "INPUT" ? "[" + (el as HTMLInputElement).type + "]" : ""}${el.tagName !== "INPUT" ? ":" + (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40) : ""}`)
-        .filter((x, i, a) => a.indexOf(x) === i).join(" | ").slice(0, 3000);
-    }).catch(() => "");
+    // A string, not a function: the worker runs through tsx, which wraps named functions in a
+    // helper the page doesn't have, so a function here failed silently and logged nothing.
+    return this.pg.evaluate(`(() => {
+      var out = [], all = document.querySelectorAll("button, a, [role=button], input, [data-automation-id]");
+      for (var k = 0; k < all.length && out.length < 60; k++) {
+        var el = all[k], r = el.getBoundingClientRect();
+        if (!(r.width > 0 && r.height > 0)) continue;
+        var id = el.getAttribute("data-automation-id"), tag = el.tagName.toLowerCase();
+        var x = tag + (id ? "#" + id : "") + (tag === "input" ? "[" + el.type + "]" : ":" + (el.getAttribute("aria-label") || el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 40));
+        if (out.indexOf(x) < 0) out.push(x);
+      }
+      return out.join(" | ").slice(0, 3000);
+    })()`).then((x) => String(x)).catch((e) => `(couldn't read the page: ${String(e).slice(0, 80)})`);
   }
   /** A box by Workday's own name, else by what it is (some tenants rename them). */
   private box(name: "email" | "password" | "verifyPassword") {
@@ -447,7 +454,19 @@ class WorkdayPw extends PwPage implements WorkdayPage {
       if (await this.inForm()) { log.info("workday.create_result", { host, result: "created_form" }); return "created"; }
       // Some Workday sites go straight back to "Sign In" once the account is made, with no message
       // (or one that fades). Signing in next tells whether it needs the email's link.
-      if (i >= 2 && !(await onCreateForm()) && (await this.onSignIn())) { log.info("workday.create_result", { host, result: "back_to_sign_in", says: await this.says() }); return "created"; }
+      // A blank page between the two (Premier shows only its header for a moment) isn't an answer yet.
+      const settledOnSignIn = /sign ?in/i.test(t) && ((await this.box("email").isVisible().catch(() => false)) || (await this.emailChoice().isVisible().catch(() => false)));
+      if (i >= 3 && settledOnSignIn && !(await onCreateForm()) && (await this.onSignIn())) {
+        // Give a message that fades a moment to show, then decide.
+        await this.pg.waitForTimeout(2000);
+        const later = (await this.text()).replace(before, " ");
+        if (/verify your (email|account)|verification (email|link)|check your (email|inbox)|activate your account|sent (you )?(an|a verification) email|confirm your (email|account)/i.test(later)) {
+          log.info("workday.create_result", { host, result: "verify_email", says: await this.says() });
+          return "verify_email";
+        }
+        log.info("workday.create_result", { host, result: "back_to_sign_in", says: await this.says() });
+        return "created";
+      }
     }
     log.warn("workday.account_page", { host: new URL(this.pg.url()).host, step: "after_create", shows: await this.describe(), says: await this.says() });
     return "failed";
@@ -469,18 +488,25 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     await this.box("email").waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
     if (!(await this.box("email").isVisible().catch(() => false))) { log.warn("workday.account_page", { host, step: "forgot_form", shows: await this.describe(), says: await this.says() }); return "failed"; }
     await this.box("email").fill(email);
-    await this.pressFirst(["resetPasswordSubmitButton", "forgotPasswordSubmitButton", "passwordResetSubmitButton"], /^\s*(submit|reset( my)? password|send( (reset )?(link|email))?|continue|next)\s*$/i);
-    for (let i = 0; i < 15; i++) {
+    const RESET = /^\s*(submit|reset( my)? password|send( (reset )?(link|email))?|continue|next)\s*$/i;
+    const resetButton = () => this.pg.getByRole("button", { name: RESET }).filter({ visible: true }).first();
+    log.info("workday.forgot_form", { host, shows: await this.describe() });
+    await this.pressFirst(["resetPasswordSubmitButton", "forgotPasswordSubmitButton", "passwordResetSubmitButton"], RESET);
+    for (let i = 0; i < 20; i++) {
       await this.pg.waitForTimeout(1000);
       const t = await this.text();
       if (humanCheckIn(t)) return "human_check";
-      if (/sent|check your (email|inbox)|we('ve| have) (sent|emailed)|if (an|the) (account|email)|instructions/i.test(t)) { log.info("workday.forgot_result", { host, says: await this.says() }); return "sent"; }
+      if (/\bsent\b|check your (email|inbox)|we('ve| have) (sent|emailed)|if (an|the) (account|email)|instructions/i.test(t)) { log.info("workday.forgot_result", { host, says: await this.says() }); return "sent"; }
+      // Still the reset form after a few seconds: the press didn't take. Press Enter in the box, then the button again.
+      if ((i === 4 || i === 9) && (await resetButton().isVisible().catch(() => false))) {
+        if (i === 4) await this.box("email").press("Enter").catch(() => {});
+        else await resetButton().click({ force: true }).catch(() => {});
+      }
     }
-    log.info("workday.forgot_result", { host, fallback: true, shows: await this.describe(), says: await this.says() });
-    // Some sites just go back to Sign In: the email is on its way all the same.
-    if (await this.onSignIn()) return "sent";
-    log.warn("workday.account_page", { host, step: "forgot_sent", shows: await this.describe(), says: await this.says() });
-    return "failed";
+    const stillForm = await resetButton().isVisible().catch(() => false);
+    log.info("workday.forgot_result", { host, fallback: true, stillForm, shows: await this.describe(), says: await this.says() });
+    // Back on Sign In with no word: the email may be on its way all the same. Still the form: it didn't go.
+    return !stillForm && (await this.onSignIn()) ? "sent" : "failed";
   }
 
   async setPassword(url: string, password: string): Promise<boolean> {

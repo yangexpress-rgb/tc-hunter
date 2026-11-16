@@ -183,4 +183,11 @@ describe.skipIf(!available)("Workday's newer sign-in page (Sign in with Apple, G
     expect(await wd.createAccount("leo@example.test", password)).toBe("created");
     expect(await wd.signIn("leo@example.test", "Not-the-password-1!")).toBe("wrong");
   }, 120_000);
+
+  it("after Create, a blank moment isn't an answer: it waits for the page, and catches a \"verify\" message before it fades", async () => {
+    await wd?.close();
+    wd = await new ServerBrowser({ timeoutMs: 15_000 }).openWorkday!(`${base}/wd/job?v=new&quiet=1&blank=1&bar=1`);
+    expect(await wd.start()).toBe("sign_in");
+    expect(await wd.createAccount("leo@example.test", password)).toBe("verify_email");
+  }, 120_000);
 });

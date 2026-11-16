@@ -94,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -405,6 +405,25 @@ describe("Workday", () => {
     expect(st.status).toBe("sent");
     const acct = (await ownerQuery("SELECT * FROM site_account WHERE site_host = $1", [host])).rows[0];
     expect((await vault.get(yong.applicantId, acct.vault_ref))!.reveal()).toBe(s5.account!.password);
+  });
+
+  it("a site that refuses sign-in to a new account (\"wrong password\") until its email link is opened: it waits for that email first", async () => {
+    const s6: { account: FakeWorkday["account"] } = { account: null };
+    const host = "dunmore.wd1.myworkdayjobs.com";
+    class Dunmore extends FakeWorkday {
+      override async createAccount(email: string, password: string) { this.store.account = this.account = { email, password, verified: false }; return "created" as const; }
+      override async signIn(email: string, password: string) { const r = await super.signIn(email, password); return r === "unverified" ? "wrong" as const : r; }
+    }
+    browser.workday = () => new Dunmore(s6, `https://${host}/en-US/External/job/Remote/Analyst_R1`);
+    browser.spec = () => ({ url: `https://${host}/en-US/External/job/Remote/Analyst_R1`, fields: [] });
+    applyDeps.email = { vault: applyDeps.vault as MemorySecretStore, cfg, reader: () => ({ ...reader,
+      async accountLink(h: string, _since: Date, kind?: string) { return kind !== "reset" && s6.account ? `https://${h}/en-US/External/activate?verify=abc` : null; } }) };
+    await approveResume(apps[17]!);
+    await requestApply(pool, yong, apps[17]!);
+    await runNow();
+    const st = await applyStatus(pool, yong, apps[17]!);
+    expect(st.steps.map((x) => x.text).join(" | ")).toMatch(/Creating your account.*Signing in.*Gmail.*Confirming the account.*Signing in/);
+    expect(st.status).toBe("sent");
   });
 
   it("and when the site really didn't make it, the next try makes it with that same kept password", async () => {
