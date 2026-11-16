@@ -818,7 +818,12 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     all.push(...pg.form.fields.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
     for (const f of pg.form.fields) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
     const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll });
-    if ("stop" in r && r.stop) return r.stop;
+    if ("stop" in r && r.stop) {
+      // What the page asked, with the site's own choices, so a stop can be explained from the logs (no answers).
+      applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, stopped: true, fields: pg.form.fields.map((f) =>
+        `${f.label} [${f.type}${f.hasValue ? ", had value" : ""}${f.options ? `; ${f.options.length} choices: ${f.options.slice(0, 8).join(" / ")}` : ""}]`).join(" | ").slice(0, 3000) });
+      return r.stop;
+    }
     const p = r as Prepared;
     const items = p.fill.filter((f) => f.key.startsWith(prefix)).map((f) => ({ ...f, key: f.key.slice(prefix.length) }));
     const results = await wd.fill(items);

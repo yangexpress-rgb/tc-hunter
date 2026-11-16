@@ -1,4 +1,4 @@
-import { matchChoice } from "./equivalents";
+import { countryForRegion, matchChoice } from "./equivalents";
 import { createHmac } from "node:crypto";
 import { canonicalJson } from "../fingerprint";
 
@@ -68,6 +68,9 @@ function pick(options: string[] | undefined, answer: string): string | null {
   return matchChoice(options, answer);
 }
 
+/** The applicant's country: the profile's, else from their state, else the United States (Yong, 2026-11-16: "default to USA"). */
+const countryOf = (p: PacketProfile) => p.country || countryForRegion(p.region) || "United States";
+
 /** The profile details a form question can be about. */
 export type ProfileField = "first_name" | "last_name" | "preferred_name" | "full_name" | "email" | "phone" | "linkedin" | "github" | "website" | "country" | "city";
 
@@ -78,12 +81,12 @@ const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefi
   [/^(full |legal )?name$|^your name$|full legal name/, (p) => p.fullName, 0.95, "full_name"],
   [/e-?mail/, (p) => p.email, 0.98, "email"],
   // Workday asks for the phone's country on its own ("Country Phone Code": "United States of America (+1)").
-  [/(country|phone) (phone |dial(l?ing) |calling )?code|dial(l?ing) code|calling code|phone country/, (p) => p.country, 0.9, "country"],
+  [/(country|phone) (phone |dial(l?ing) |calling )?code|dial(l?ing) code|calling code|phone country/, (p) => countryOf(p), 0.9, "country"],
   [/phone|mobile|telephone|cell/, (p) => p.phone, 0.95, "phone"],
   [/linkedin/, (p) => p.links.linkedin, 0.97, "linkedin"],
   [/github/, (p) => p.links.github, 0.97, "github"],
   [/website|portfolio|personal (site|url)|blog/, (p) => p.links.website, 0.9, "website"],
-  [/^country\b|country of residence/, (p) => p.country, 0.9, "country"],
+  [/^country\b|country of residence/, (p) => countryOf(p), 0.9, "country"],
   [/^city\b|^location\b|current location|where are you (based|located)/, (p) => [p.city, p.region].filter(Boolean).join(", ") || null, 0.88, "city"],
 ];
 
@@ -148,7 +151,8 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   }
   // "How did you hear about us?" with no saved answer: TC Hunter found the job online, so a job board.
   if (HEARD_ABOUT.test(label)) {
-    const chosen = !f.options?.length ? "Job Board" : HEARD_DEFAULTS.map((re) => f.options!.find((o) => re.test(o))).find(Boolean) ?? null;
+    // No fitting choice: the first one (Yong, 2026-11-16).
+    const chosen = !f.options?.length ? "Job Board" : HEARD_DEFAULTS.map((re) => f.options!.find((o) => re.test(o))).find(Boolean) ?? f.options[0] ?? null;
     if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.86, note: "TC Hunter found this job on a job site. Save your own answer under Saved answers to change it." };
   }
   return { ...base, note: "New question. Type your answer." };
@@ -156,7 +160,7 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
 
 const HEARD_ABOUT = /how did you (hear|learn|find out) about|where did you (hear|find|see|learn)|how did you find (us|this|out)|^(referral |candidate |application )?source$/;
 /** The choice for a job TC Hunter found online, best first. */
-const HEARD_DEFAULTS = [/^job ?board/i, /job (board|site|search)|online job/i, /internet|online/i, /^web ?site$/i, /^other\b/i];
+const HEARD_DEFAULTS = [/^job ?boards?\b/i, /job (boards?|sites?|search|postings?)|online job|posting site|career (site|board)s?/i, /internet|online/i, /^web ?site$/i, /^other\b/i, /\bother\b/i];
 
 /** A form's own "I agree" choice ("Yes", "I agree", "Acknowledge", "I have read and accept", ...). */
 export const AGREE_CHOICE = /^(yes\b|i (agree|accept|consent|certify|confirm|acknowledge|understand|authori[sz]e|have read)|agree|accept|confirm|acknowledge|consent|understood)/i;
