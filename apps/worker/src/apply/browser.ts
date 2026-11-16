@@ -87,6 +87,8 @@ function locate(page: Page, key: string): Locator {
   return page.locator("#__tc_none__");
 }
 
+/** A general choice inside a group of a "how did you hear" list. */
+const GENERAL_SOURCE = /online|internet|general|web ?site|job (board|site|search)/i;
 const norm = (s: string) => s.toLowerCase().replace(/[*:?]+/g, " ").replace(/\s+/g, " ").trim();
 
 class PwPage implements ApplyPage {
@@ -221,8 +223,23 @@ class PwPage implements ApplyPage {
       if (at < 0 && agreeing) at = texts.findIndex((t) => AGREE_OPTION.test(t));
       if (at >= 0) {
         await options.nth(at).click();
-        await this.pg.waitForTimeout(300);
-        return "filled";
+        await this.pg.waitForTimeout(500);
+        // Workday's grouped lists ("How Did You Hear About Us?"): a group opens its own list
+        // instead of being chosen. Choose inside it: the answer itself, else its "Other" choice.
+        const inner: string[] = [];
+        const m = await options.count();
+        for (let i = 0; i < m; i++) inner.push(((await options.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
+        const opened = inner.filter(Boolean).length > 0 && inner.join("|") !== texts.join("|") && !(await this.chosenIn(loc));
+        if (!opened) return "filled";
+        const leaf = matchChoice(inner.filter(Boolean), value) ?? inner.find((t) => /^other\b|\bother$/i.test(t))
+          ?? inner.find((t) => GENERAL_SOURCE.test(t));
+        if (leaf) {
+          await options.nth(inner.indexOf(leaf)).click();
+          await this.pg.waitForTimeout(300);
+          return "filled";
+        }
+        await this.pg.keyboard.press("Escape").catch(() => {});
+        return "no_match";
       }
       await this.pg.keyboard.press("Escape").catch(() => {});
     }
@@ -230,6 +247,12 @@ class PwPage implements ApplyPage {
     return "no_match";
   }
 
+
+  /** Whether a Workday list already shows a chosen item. */
+  protected async chosenIn(loc: Locator): Promise<boolean> {
+    return loc.locator("xpath=ancestor::*[starts-with(@data-automation-id,'formField')][1]")
+      .locator("[data-automation-id='selectedItem']").count().then((n) => n > 0).catch(() => false);
+  }
 
   async filledHash(): Promise<string> {
     await this.helpers();

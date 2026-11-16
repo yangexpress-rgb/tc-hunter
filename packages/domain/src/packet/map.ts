@@ -77,6 +77,8 @@ const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefi
   [/\bpreferred (first )?name/, (p) => p.preferredName, 0.95, "preferred_name"],
   [/^(full |legal )?name$|^your name$|full legal name/, (p) => p.fullName, 0.95, "full_name"],
   [/e-?mail/, (p) => p.email, 0.98, "email"],
+  // Workday asks for the phone's country on its own ("Country Phone Code": "United States of America (+1)").
+  [/(country|phone) (phone |dial(l?ing) |calling )?code|dial(l?ing) code|calling code|phone country/, (p) => p.country, 0.9, "country"],
   [/phone|mobile|telephone|cell/, (p) => p.phone, 0.95, "phone"],
   [/linkedin/, (p) => p.links.linkedin, 0.97, "linkedin"],
   [/github/, (p) => p.links.github, 0.97, "github"],
@@ -121,6 +123,12 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   if (/cover letter/.test(label) && p.letter && (f.type === "textarea" || f.type === "text")) {
     return { ...base, answer: p.letter.text, source: "tailored_doc", sourceRefId: p.letter.id, confidence: 0.95 };
   }
+  // A phone's extension is not the phone number; Workday's "Phone Device Type" wants the kind of phone.
+  if (/\bextension\b|^ext\b/.test(label)) return { ...base, note: "Left blank." };
+  if (/phone (device )?type|type of phone|device type/.test(label)) {
+    const chosen = pick(f.options, "Mobile") ?? f.options?.find((o) => /mobile|cell/i.test(o)) ?? null;
+    if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.9, note: "Your phone number is a mobile." };
+  }
   for (const [re, get, conf] of PROFILE_RULES) {
     if (!re.test(label)) continue;
     const v = get(p);
@@ -130,15 +138,25 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
       : { ...base, note: "Your answer isn't one of the choices." };
   }
   const saved = p.answers.find((a) => !a.isApplicantStep && a.patterns.some((re) => new RegExp(re, "i").test(f.label)));
-  if (saved) {
+  // A draft or empty saved answer for "how did you hear" doesn't stop it: the default below answers it.
+  if (saved && !(HEARD_ABOUT.test(label) && (!saved.approved || saved.stale || !saved.text.trim() || !pick(f.options, saved.text)))) {
     if (!saved.approved) return { ...base, note: "Your saved answer is still a draft." };
     if (saved.stale) return { ...base, note: "Your saved answer is over 90 days old. Check it first." };
     const chosen = pick(f.options, saved.text);
     return chosen ? { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9 }
       : { ...base, note: "Your saved answer isn't one of the choices." };
   }
+  // "How did you hear about us?" with no saved answer: TC Hunter found the job online, so a job board.
+  if (HEARD_ABOUT.test(label)) {
+    const chosen = !f.options?.length ? "Job Board" : HEARD_DEFAULTS.map((re) => f.options!.find((o) => re.test(o))).find(Boolean) ?? null;
+    if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.86, note: "TC Hunter found this job on a job site. Save your own answer under Saved answers to change it." };
+  }
   return { ...base, note: "New question. Type your answer." };
 }
+
+const HEARD_ABOUT = /how did you (hear|learn|find out) about|where did you (hear|find|see|learn)|how did you find (us|this|out)|^(referral |candidate |application )?source$/;
+/** The choice for a job TC Hunter found online, best first. */
+const HEARD_DEFAULTS = [/^job ?board/i, /job (board|site|search)|online job/i, /internet|online/i, /^web ?site$/i, /^other\b/i];
 
 /** A form's own "I agree" choice ("Yes", "I agree", "Acknowledge", "I have read and accept", ...). */
 export const AGREE_CHOICE = /^(yes\b|i (agree|accept|consent|certify|confirm|acknowledge|understand|authori[sz]e|have read)|agree|accept|confirm|acknowledge|consent|understood)/i;

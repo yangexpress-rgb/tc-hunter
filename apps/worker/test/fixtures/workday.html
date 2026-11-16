@@ -102,7 +102,11 @@
         '<button data-automation-id="pageFooterNextButton">Save and Continue</button>');
       var btn = document.getElementById("src"), list = document.getElementById("src-list");
       btn.addEventListener("click", function () { list.hidden = false; });
-      list.querySelectorAll("li").forEach(function (li) { li.addEventListener("click", function () { btn.textContent = li.textContent; list.hidden = true; }); });
+      // Like Workday's grouped list: "Job Board" opens its own choices instead of being chosen.
+      function pickable(li) { li.addEventListener("click", function () {
+        if (li.textContent === "Job Board") { list.innerHTML = '<li role="option">Indeed</li><li role="option">Other Job Board</li>'; list.querySelectorAll("li").forEach(pickable); return; }
+        btn.textContent = li.textContent; list.hidden = true; }); }
+      list.querySelectorAll("li").forEach(pickable);
       on("pageFooterNextButton", function () {
         if (btn.textContent === "Select One" || !document.getElementById("fn").value) { var e = document.getElementById("err"); e.hidden = false; e.textContent = "Errors found: How Did You Hear About Us? is required"; return; }
         S.step = 2; save(); formPage();
