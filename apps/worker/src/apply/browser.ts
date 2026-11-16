@@ -290,7 +290,16 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     await b.click({ timeout: 10_000 }).catch(() => b.click({ force: true }));
   }
   private async text() { return this.pg.evaluate(() => document.body?.innerText ?? "").catch(() => ""); }
-  private async inForm() { return (await this.has("progressBar")) || (await this.has("pageFooterNextButton")) || (await this.has("bottom-navigation-next-button")); }
+  /**
+   * On a page of the application form: its Next / Save and Continue button, and no sign-in boxes.
+   * Newer Workday sites show their step bar ("Create Account/Sign In", "My Information", ...) on
+   * the sign-in page too (Premier, 2026-11-16), so the step bar alone doesn't mean signed in.
+   */
+  private async inForm() {
+    if (!(await this.has("pageFooterNextButton")) && !(await this.has("bottom-navigation-next-button"))) return false;
+    return !(await this.has("signInSubmitButton")) && !(await this.has("createAccountSubmitButton"))
+      && !(await this.pg.locator("input[type=password]:visible").count().catch(() => 0));
+  }
   private async onSignIn() {
     return (await this.has("signInContent")) || (await this.has("signInSubmitButton")) || (await this.has("createAccountLink")) || (await this.has("createAccountSubmitButton"))
       || (await this.emailChoice().isVisible().catch(() => false));

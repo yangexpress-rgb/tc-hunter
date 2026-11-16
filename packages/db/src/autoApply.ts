@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  ADAPTERS, APPLY_PROBLEM, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
+  ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -15,6 +15,8 @@ import { attachReceipt, cleanForm, createPacket, settleUnclear } from "./assist"
 import { approveSubmission, consumeSubmissionKey, DomainError, recordSubmitted } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
 import { tz, weeklyBudget } from "./tracker";
+
+const applyLog = createLogger();
 
 /**
  * Hands-free applying (Yong, 2026-11-15: "This should be automated and authorized to the
@@ -377,6 +379,7 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
     return { status: await pressSubmit(pool, auto, deps, app, run, page, ats, adapter.submit, () => { clicked = true; }) };
   } catch (e) {
     const detail = String((e as Error)?.message ?? e).slice(0, 300);
+    applyLog.warn("apply.error", { host: (() => { try { return new URL(page?.url() ?? "").host; } catch { return ""; } })(), clicked, detail: detail.replace(/[^\s@]+@[^\s@]+/g, "[email]") });
     if (clicked) {
       await settleAfterClickError(pool, auto, app);
       await run.end("unclear", `TC Hunter pressed Submit, then lost track of ${app.employer}'s page. Nothing will be sent again. It's checking your email for their confirmation; if none comes, tell TC Hunter below whether it went through.`);
