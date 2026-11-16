@@ -96,6 +96,8 @@
       h(bar(1, "My Information") + '<div data-automation-id="formField-source"><label id="src-l">How Did You Hear About Us? *</label>' +
         '<button aria-haspopup="listbox" aria-labelledby="src-l" id="src" data-automation-id="sourceDropdown">Select One</button><ul role="listbox" id="src-list" hidden>' +
         '<li role="option">Job Board</li><li role="option">Company Website</li></ul></div>' +
+        '<div data-automation-id="formField-countryPhoneCode"><label for="pc">Country Phone Code*</label><div data-automation-id="multiSelectContainer"><input id="pc" placeholder="Search"></div>' +
+        '<ul role="listbox" id="pc-list"></ul><div id="pc-sel"></div></div>' +
         '<div data-automation-id="formField-legalNameSection_firstName"><label for="fn">Given Name(s) *</label><input id="fn" data-automation-id="legalNameSection_firstName" aria-required="true"></div>' +
         '<div data-automation-id="formField-legalNameSection_lastName"><label for="ln">Family Name *</label><input id="ln" data-automation-id="legalNameSection_lastName" aria-required="true" value="Prefilled"></div>' +
         '<p data-automation-id="errorMessage" id="err" hidden></p>' +
@@ -107,8 +109,17 @@
         if (li.textContent === "Job Board") { list.innerHTML = '<li role="option">Indeed</li><li role="option">Other Job Board</li>'; list.querySelectorAll("li").forEach(pickable); return; }
         btn.textContent = li.textContent; list.hidden = true; }); }
       list.querySelectorAll("li").forEach(pickable);
+      // Like Workday's search list: typed words are looked up on Enter; the choice shows beside the box.
+      var pc = document.getElementById("pc"), pcl = document.getElementById("pc-list");
+      pc.addEventListener("keydown", function (e) {
+        if (e.key !== "Enter") return; e.preventDefault();
+        pcl.innerHTML = ["Canada (+1)", "United States of America (+1)"].filter(function (c) { return c.toLowerCase().indexOf(pc.value.toLowerCase()) >= 0; })
+          .map(function (c) { return '<li data-automation-id="promptOption">' + c + '</li>'; }).join("");
+        pcl.querySelectorAll("li").forEach(function (li) { li.addEventListener("click", function () {
+          document.getElementById("pc-sel").innerHTML = '<span data-automation-id="selectedItem">' + li.textContent + '</span>'; pcl.innerHTML = ""; pc.value = ""; }); });
+      });
       on("pageFooterNextButton", function () {
-        if (btn.textContent === "Select One" || !document.getElementById("fn").value) { var e = document.getElementById("err"); e.hidden = false; e.textContent = "Errors found: How Did You Hear About Us? is required"; return; }
+        if (btn.textContent === "Select One" || !document.getElementById("fn").value || !document.querySelector("#pc-sel [data-automation-id=selectedItem]")) { var e = document.getElementById("err"); e.hidden = false; e.textContent = "Errors found: How Did You Hear About Us? is required"; return; }
         S.step = 2; save(); formPage();
       });
     } else if (S.step === 2) {

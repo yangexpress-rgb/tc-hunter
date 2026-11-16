@@ -822,6 +822,11 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     const p = r as Prepared;
     const items = p.fill.filter((f) => f.key.startsWith(prefix)).map((f) => ({ ...f, key: f.key.slice(prefix.length) }));
     const results = await wd.fill(items);
+    // What the page asked and what happened to each question (labels and statuses only, no answers).
+    applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, fields: pg.form.fields.map((f) => {
+      const r = results.find((x) => x.key === f.key);
+      return `${f.label} [${f.type}${f.options ? `, ${f.options.length} choices` : ""}${f.hasValue ? ", had value" : ""}] ${r ? r.status : "not filled"}`;
+    }).join(" | ").slice(0, 3000) });
     await markFilled(pool, auto, p.packetId, results, prefix);
     const next = await wd.next();
     if (!next.moved) {

@@ -105,6 +105,13 @@ export const PAGE_SCRIPT = String.raw`
     return false;
   }
 
+  /** A Workday search list: a text box that opens a list of choices (prompt or multiselect). */
+  function isWorkdayList(el) {
+    if (el.getAttribute("data-automation-id") === "searchBox" || el.getAttribute("data-uxi-widget-type") === "selectinput") return true;
+    if (el.closest("[data-automation-id='multiSelectContainer'], [data-automation-id='multiselectInputContainer'], [data-uxi-widget-type='multiselect'], [data-uxi-widget-type='selectinput']")) return true;
+    return !!el.closest("[data-automation-id^='formField']") && /^search$/i.test(el.placeholder || "");
+  }
+
   /** The form's questions, in page order. */
   function readForm() {
     var out = [], seen = {};
@@ -112,7 +119,8 @@ export const PAGE_SCRIPT = String.raw`
     for (var i = 0; i < els.length; i++) {
       var el = els[i], tag = el.tagName.toLowerCase();
       var role = el.getAttribute("role");
-      var type = tag === "select" || tag === "button" || role === "combobox" ? "select" : tag === "textarea" ? "textarea" : (el.type || "text").toLowerCase();
+      var wdList = tag === "input" && isWorkdayList(el);
+      var type = tag === "select" || tag === "button" || role === "combobox" || wdList ? "select" : tag === "textarea" ? "textarea" : (el.type || "text").toLowerCase();
       if (type === "password" || !TYPES[type] || !visible(el)) continue;
       if (type === "radio") {
         if (!el.name) continue;
@@ -134,6 +142,11 @@ export const PAGE_SCRIPT = String.raw`
         f.hasValue = !!shown && !/^select( one)?$|^choose/i.test(shown);
       } else if (type === "checkbox") f.hasValue = el.checked;
       else if (type === "file") f.hasValue = !!(el.files && el.files.length);
+      else if (wdList) {
+        // Workday's search lists ("How Did You Hear About Us?", "Country Phone Code") show the chosen item beside the box.
+        var fb = el.closest("[data-automation-id^='formField']") || el.parentElement;
+        f.hasValue = !!(fb && fb.querySelector("[data-automation-id='selectedItem'], [data-automation-id='selectedItemList'] li"));
+      }
       else if (role === "combobox") {
         // Site-drawn drop-downs show the chosen value next to the box, not in it.
         var ctl = el.closest("[class*='control' i], [class*='container' i]");
@@ -173,6 +186,6 @@ export const PAGE_SCRIPT = String.raw`
     return JSON.stringify(pairs);
   }
 
-  window.__tcApply = { readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible };
+  window.__tcApply = { isWorkdayList: isWorkdayList, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible };
 })();
 `;
