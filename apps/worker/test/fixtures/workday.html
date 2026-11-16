@@ -91,7 +91,14 @@
   function bar(n, title) {
     return '<div data-automation-id="progressBar"><span data-automation-id="progressBarActiveStep">current step ' + n + ' of 3 ' + title + '</span></div>';
   }
+  var drawn = false;
   function formPage() {
+    // Like Workday: the page frame and its buttons come first, the questions a moment later.
+    if (S.step === 1 && !drawn) {
+      drawn = true;
+      h(bar(1, "My Information") + '<button data-automation-id="pageFooterNextButton">Save and Continue</button>');
+      setTimeout(formPage, 2000); return;
+    }
     if (S.step === 1) {
       h(bar(1, "My Information") + '<div data-automation-id="formField-source"><label id="src-l">How Did You Hear About Us? *</label>' +
         '<button aria-haspopup="listbox" aria-labelledby="src-l" id="src" data-automation-id="sourceDropdown">Select One</button><ul role="listbox" id="src-list" hidden>' +
