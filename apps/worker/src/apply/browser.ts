@@ -389,9 +389,11 @@ class WorkdayPw extends PwPage implements WorkdayPage {
       if (humanCheckIn(t)) return "human_check";
       if (await this.inForm()) return "ok";
       if (/verify your (email|account)|account (has not been|is not) (verified|activated)|not yet verified/i.test(t)) return "unverified";
-      if (/(wrong|incorrect|invalid) (email|password|user ?name)|sign in failed|locked/i.test(t)) return "wrong";
+      if (/(wrong|incorrect|invalid) (email|password|user ?name)|sign in failed|locked/i.test(t)) { log.info("workday.sign_in_refused", { host: new URL(this.pg.url()).host, says: await this.says() }); return "wrong"; }
     }
-    return (await this.inForm()) ? "ok" : "wrong";
+    if (await this.inForm()) return "ok";
+    log.warn("workday.account_page", { host: new URL(this.pg.url()).host, step: "after_sign_in", shows: await this.describe(), says: await this.says() });
+    return "wrong";
   }
 
   async createAccount(email: string, password: string): Promise<"created" | "verify_email" | "exists" | "human_check" | "no_terms_box" | "failed"> {
@@ -424,8 +426,17 @@ class WorkdayPw extends PwPage implements WorkdayPage {
       if (/already (exists|in use|registered|been used)|account with this email/i.test(t)) return "exists";
       if (/verif(y|ication)|check your (email|inbox)|activate your account|sent (you )?an email/i.test(t)) return "verify_email";
       if (await this.inForm()) return "created";
+      // Some Workday sites go straight back to "Sign In" once the account is made, with no message
+      // (or one that fades). Signing in next tells whether it needs the email's link.
+      if (i >= 2 && !(await submit.isVisible().catch(() => false)) && (await this.onSignIn())) return "created";
     }
+    log.warn("workday.account_page", { host: new URL(this.pg.url()).host, step: "after_create", shows: await this.describe(), says: await this.says() });
     return "failed";
+  }
+
+  /** The page's words with any email address taken out, for the worker log. */
+  private async says() {
+    return (await this.text()).replace(/[^\s@]+@[^\s@]+/g, "[email]").replace(/\s+/g, " ").trim().slice(0, 600);
   }
 
   async openLink(url: string): Promise<boolean> {
