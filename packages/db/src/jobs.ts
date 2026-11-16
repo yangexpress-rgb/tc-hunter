@@ -292,6 +292,8 @@ export interface WorkDeps {
   search?: SearchSite[];
   /** TC Hunter's own browser, for hands-free applying. */
   apply?: ApplyDeps;
+  /** Told when a piece of work starts (the worker logs it and watches how long it takes). */
+  onStart?: (w: { kind: string; attempt: number }) => void;
 }
 
 const PLAIN_REFUSAL: Record<string, string> = {
@@ -497,6 +499,7 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
   const item = (await pool.query("SELECT * FROM claim_work()")).rows[0] as ClaimedWork | undefined;
   if (!item) return false;
   const t0 = Date.now();
+  deps.onStart?.({ kind: item.kind, attempt: item.attempts });
   let done: WorkDone;
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
