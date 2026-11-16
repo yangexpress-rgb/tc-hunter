@@ -426,18 +426,28 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     // The site's terms box: ticked only because the applicant set the standing answer for employer-site accounts.
     const terms = this.id("createAccountCheckbox").or(this.pg.locator("input[type=checkbox]:visible")).first();
     if (await terms.count()) await terms.check({ force: true }).catch(() => {});
+    const host = new URL(this.pg.url()).host;
+    log.info("workday.create_form", { host, shows: await this.describe(), terms: await terms.isChecked().catch(() => null) });
+    const before = await this.text();
     if (await this.has("createAccountSubmitButton")) await this.press("createAccountSubmitButton");
     else await submit.click({ timeout: 10_000 }).catch(() => submit.click({ force: true }));
+    // Still the create form: its own password boxes are there (a sign-in page has one).
+    const onCreateForm = async () => (await this.has("createAccountSubmitButton")) || (await this.pg.locator("input[type=password]:visible").count().catch(() => 0)) > 1;
     for (let i = 0; i < 20; i++) {
       await this.pg.waitForTimeout(1000);
       const t = await this.text();
       if (humanCheckIn(t)) return "human_check";
-      if (/already (exists|in use|registered|been used)|account with this email/i.test(t)) return "exists";
-      if (/verif(y|ication)|check your (email|inbox)|activate your account|sent (you )?an email/i.test(t)) return "verify_email";
-      if (await this.inForm()) return "created";
+      if (/already (exists|in use|registered|been used)|account with this email/i.test(t)) { log.info("workday.create_result", { host, result: "exists", says: await this.says() }); return "exists"; }
+      // Words new since pressing Create (the form's own "Verify New Password" doesn't count).
+      const fresh = t.replace(before, " ");
+      if (/verify your (email|account)|verification (email|link)|check your (email|inbox)|activate your account|sent (you )?(an|a verification) email|confirm your (email|account)/i.test(fresh)) {
+        log.info("workday.create_result", { host, result: "verify_email", says: await this.says() });
+        return "verify_email";
+      }
+      if (await this.inForm()) { log.info("workday.create_result", { host, result: "created_form" }); return "created"; }
       // Some Workday sites go straight back to "Sign In" once the account is made, with no message
       // (or one that fades). Signing in next tells whether it needs the email's link.
-      if (i >= 2 && !(await submit.isVisible().catch(() => false)) && (await this.onSignIn())) return "created";
+      if (i >= 2 && !(await onCreateForm()) && (await this.onSignIn())) { log.info("workday.create_result", { host, result: "back_to_sign_in", says: await this.says() }); return "created"; }
     }
     log.warn("workday.account_page", { host: new URL(this.pg.url()).host, step: "after_create", shows: await this.describe(), says: await this.says() });
     return "failed";
@@ -464,8 +474,9 @@ class WorkdayPw extends PwPage implements WorkdayPage {
       await this.pg.waitForTimeout(1000);
       const t = await this.text();
       if (humanCheckIn(t)) return "human_check";
-      if (/sent|check your (email|inbox)|we('ve| have) (sent|emailed)|if (an|the) (account|email)|instructions/i.test(t)) return "sent";
+      if (/sent|check your (email|inbox)|we('ve| have) (sent|emailed)|if (an|the) (account|email)|instructions/i.test(t)) { log.info("workday.forgot_result", { host, says: await this.says() }); return "sent"; }
     }
+    log.info("workday.forgot_result", { host, fallback: true, shows: await this.describe(), says: await this.says() });
     // Some sites just go back to Sign In: the email is on its way all the same.
     if (await this.onSignIn()) return "sent";
     log.warn("workday.account_page", { host, step: "forgot_sent", shows: await this.describe(), says: await this.says() });
