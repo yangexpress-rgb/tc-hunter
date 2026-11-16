@@ -94,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -275,6 +275,13 @@ class FakeWorkday extends FakePage implements WorkdayPage {
   }
   async createAccount(email: string, password: string) { this.store.account = this.account = { email, password, verified: false }; return "verify_email" as const; }
   async openLink(url: string) { if (url.includes("verify") && this.account) this.account.verified = true; return true; }
+  async forgotPassword(email: string) { (this.store as { resetFor?: string }).resetFor = email; return "sent" as const; }
+  async setPassword(url: string, password: string) {
+    const r = (this.store as { resetFor?: string }).resetFor;
+    if (!url.includes("reset") || !r) return false;
+    this.store.account = this.account = { email: r, password, verified: true };
+    return true;
+  }
   async page() {
     const pages = [
       { title: "My Information", fields: [{ key: "legalNameSection_firstName", label: "First Name *", type: "text", required: true }, { key: "phone-number", label: "Phone Number", type: "tel" }] },
@@ -354,6 +361,26 @@ describe("Workday", () => {
     const st = await applyStatus(pool, yong, apps[13]!);
     expect(st.status).toBe("sent");
     expect(st.steps.map((x) => x.text).join(" | ")).toMatch(/Signing in.*Gmail.*Confirming the account.*Signing in/);
+  });
+
+  it("an account an earlier try made but whose password wasn't kept: \"Forgot your password?\" from Gmail, a new kept password, then it applies", async () => {
+    const s4: { account: FakeWorkday["account"]; resetFor?: string } = { account: { email: "yong@example.test", password: "lost-one", verified: true } };
+    const host = "premier.wd1.myworkdayjobs.com";
+    // Premier: Create goes back to Sign In without a word (so "created"), but the account was there already.
+    class Premier extends FakeWorkday { override async createAccount() { return "created" as const; } }
+    browser.workday = () => new Premier(s4, `https://${host}/en-US/External/job/Remote/Analyst_R1`);
+    browser.spec = () => ({ url: `https://${host}/en-US/External/job/Remote/Analyst_R1`, fields: [] });
+    applyDeps.email = { vault: applyDeps.vault as MemorySecretStore, cfg, reader: () => ({ ...reader, async address() { return "yong@example.test"; },
+      async accountLink(h: string, _since: Date, kind?: string) { return kind === "reset" && s4.resetFor ? `https://${h}/en-US/External/passwordreset?token=r` : null; } }) };
+    await approveResume(apps[15]!);
+    await requestApply(pool, yong, apps[15]!);
+    await runNow();
+    const st = await applyStatus(pool, yong, apps[15]!);
+    expect(st.steps.map((x) => x.text).join(" | ")).toMatch(/Creating your account.*Signing in.*Resetting the password.*password reset email.*Setting a new password.*Signing in/);
+    expect(st.status).toBe("sent");
+    const acct = (await ownerQuery("SELECT * FROM site_account WHERE site_host = $1", [host])).rows[0];
+    expect((await (applyDeps.vault as MemorySecretStore).get(yong.applicantId, acct.vault_ref))!.reveal()).toBe(s4.account!.password);
+    expect(s4.account!.password).not.toBe("lost-one");
   });
 
   it("and when the site really didn't make it, the next try makes it with that same kept password", async () => {

@@ -164,4 +164,15 @@ describe.skipIf(!available)("Workday's newer sign-in page (Sign in with Apple, G
     expect(await wd.openLink(`${base}/wd/verify?token=xyz`)).toBe(true);
     expect(await wd.signIn("leo@example.test", password)).toBe("ok");
   }, 90_000);
+
+  it("an account whose password it doesn't know: \"Forgot your password?\", the reset link, a new password, then signs in", async () => {
+    await wd?.close();
+    wd = await new ServerBrowser({ timeoutMs: 15_000 }).openWorkday!(`${base}/wd/job?v=new&quiet=1`);
+    expect(await wd.start()).toBe("sign_in");
+    expect(await wd.createAccount("leo@example.test", "Lost-password-1!aaaaa")).toBe("created");
+    expect(await wd.signIn("leo@example.test", password)).toBe("wrong");
+    expect(await wd.forgotPassword!("leo@example.test")).toBe("sent");
+    expect(await wd.setPassword!(`${base}/wd/reset?token=r1`, password)).toBe(true);
+    expect(await wd.signIn("leo@example.test", password)).toBe("ok");
+  }, 120_000);
 });

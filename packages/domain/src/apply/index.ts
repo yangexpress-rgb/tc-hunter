@@ -84,6 +84,10 @@ export interface WorkdayPage extends ApplyPage {
   createAccount(email: string, password: string): Promise<"created" | "verify_email" | "exists" | "human_check" | "no_terms_box" | "failed">;
   /** Opens the link from the "verify your account" email. */
   openLink(url: string): Promise<boolean>;
+  /** "Forgot your password?" on the sign-in page: asks the site to email a reset link. */
+  forgotPassword?(email: string): Promise<"sent" | "failed" | "human_check">;
+  /** Opens the reset email's link and sets this new password, then goes back to the job. */
+  setPassword?(url: string, password: string): Promise<boolean>;
   /** The page of the form now: its heading, whether it's the last "Review" page, and its questions. */
   page(): Promise<{ title: string; review: boolean; form: PageForm }>;
   /** Save and continue. Returns the problems the site listed if it didn't move on. */
@@ -144,7 +148,7 @@ export function workdayTenant(url: string): string | null {
  * The account-verification link in a Workday email, if it is for this employer's site.
  * Only a link on the same Workday host is taken; nothing else from the email is kept.
  */
-export function verificationLinkIn(body: string, tenantHost: string): string | null {
+export function verificationLinkIn(body: string, tenantHost: string, kind: "verify" | "reset" = "verify"): string | null {
   const text = body.replace(/&amp;/g, "&");
   const links = [...text.matchAll(/https:\/\/[^\s"'<>()]+/g)].map((m) => m[0].replace(/[.,;]+$/, ""));
   const tenant = tenantHost.split(".")[0]!;
@@ -153,7 +157,8 @@ export function verificationLinkIn(body: string, tenantHost: string): string | n
     try { u = new URL(l); } catch { continue; }
     const h = u.hostname.toLowerCase();
     const same = h === tenantHost || (h.startsWith(`${tenant}.`) && /\.myworkday(jobs)?\.com$/.test(h));
-    if (same && /verif|activat|confirm/i.test(u.pathname + u.search)) return u.toString();
+    const what = u.pathname + u.search;
+    if (same && (kind === "verify" ? /verif|activat|confirm/i.test(what) && !/reset|forgot/i.test(what) : /reset|forgot|password/i.test(what))) return u.toString();
   }
   return null;
 }
