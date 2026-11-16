@@ -63,6 +63,9 @@ const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
+/** How long one piece of work may take before the worker counts it as stuck (minutes). */
+const STUCK_MINUTES: Record<string, number> = { scan: 45, apply: 30, tailor: 20, resume_digest: 20, email_check: 15 };
+
 let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
@@ -74,6 +77,18 @@ async function main() {
     if (n) log.info("worker.recovered", { items: n });
   } catch (e) { log.warn("worker.recover_failed", { message: String((e as Error).message ?? e).slice(0, 200) }); }
   let lastSchedule = 0;
+  // Watchdog: one piece of work that runs far too long (a site or service that never answers) would
+  // hold up everything after it. Stop the worker then; the app restarts and the work is queued again.
+  let current: { kind: string; at: number } | null = null;
+  const onStart = (w: { kind: string; attempt: number }) => { current = { kind: w.kind, at: Date.now() }; log.info("work.started", w); };
+  setInterval(() => {
+    if (!current) return;
+    const mins = (Date.now() - current.at) / 60_000;
+    if (mins > (STUCK_MINUTES[current.kind] ?? 20)) {
+      log.warn("work.stuck", { kind: current.kind, minutes: Math.round(mins) });
+      process.exit(1);
+    }
+  }, 60_000).unref();
   while (!stopping) {
     try {
       // Settings first: a Gmail sign-in or job-site key saved a minute ago is used from here on.
@@ -86,11 +101,13 @@ async function main() {
         if (queued || mail || applies) log.info("worker.scheduled", { scans: queued, email_checks: mail, applies });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search, apply });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search, apply, onStart });
+      current = null;
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
       // Counts and timings only, never names or content, so a stuck or failed search can be traced.
       else log[did.ok ? "info" : "warn"]("work.finished", { kind: did.kind, ok: did.ok, seconds: Math.round(did.ms / 1000), attempt: did.attempt, ...(did.result ?? {}), ...(did.error ? { error: did.error } : {}) });
     } catch (e) {
+      current = null;
       log.warn("worker.error", { message: String((e as Error).message ?? e).slice(0, 200) });
       await new Promise((r) => setTimeout(r, IDLE_MS * 4));
     }
