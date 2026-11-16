@@ -47,4 +47,19 @@ describe("answers that mean the same (Yong, 2026-11-15)", () => {
       links: {}, answers: [], resume: null, letter: null } as PacketProfile;
     expect(proposeField({ key: "c", label: "Country*", type: "select", options: ["Canada", "United States", "Mexico"] }, p)).toMatchObject({ answer: "United States", source: "master_profile" });
   });
+  it("fills Workday's Country Phone Code, Phone Device Type and How Did You Hear About Us on its own", () => {
+    const p = { firstName: "Y", lastName: "E", fullName: "Y E", preferredName: "Y", email: null, phone: "919-555-0100", city: "Raleigh", region: "NC", country: "USA",
+      links: {}, answers: [{ id: "a1", key: "heard_about", patterns: ["how did you (hear|learn|find out) about"], text: "", approved: false, stale: true, isApplicantStep: false }],
+      resume: null, letter: null } as PacketProfile;
+    expect(proposeField({ key: "c", label: "Country Phone Code*", type: "select", options: ["Canada (+1)", "United States of America (+1)"] }, p))
+      .toMatchObject({ answer: "United States of America (+1)", source: "master_profile" });
+    expect(proposeField({ key: "n", label: "Phone Number*", type: "tel" }, p)).toMatchObject({ answer: "919-555-0100" });
+    expect(proposeField({ key: "x", label: "Phone Extension", type: "text" }, p)).toMatchObject({ answer: null });
+    expect(proposeField({ key: "t", label: "Phone Device Type*", type: "select", options: ["Home", "Mobile", "Work"] }, p)).toMatchObject({ answer: "Mobile" });
+    expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select", options: ["Agency", "Company Website", "Job Board", "Referral"] }, p))
+      .toMatchObject({ answer: "Job Board" });
+    expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select" }, p).answer).toBe("Job Board");
+    const saved = { ...p, answers: [{ ...p.answers[0]!, text: "Referral", approved: true, stale: false }] };
+    expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select", options: ["Job Board", "Referral"] }, saved)).toMatchObject({ answer: "Referral", source: "answer_bank" });
+  });
 });
