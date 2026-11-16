@@ -55,6 +55,8 @@
       if (!document.querySelector('[data-automation-id="createAccountCheckbox"]').checked) return;
       if (val("password") !== val("verifyPassword")) return;
       S.account = { email: val("email"), password: val("password"), verified: false }; save();
+      // With &quiet=1 the site goes straight back to Sign In and says nothing (Premier, 2026-11-16).
+      if (location.search.indexOf("quiet=1") >= 0) { revealed = false; signInPage(); return; }
       h("<p>We sent a verification email to you. Please check your email to activate your account.</p>");
     });
   }

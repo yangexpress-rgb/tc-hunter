@@ -154,4 +154,14 @@ describe.skipIf(!available)("Workday's newer sign-in page (Sign in with Apple, G
     expect(await wd.signIn("leo@example.test", password)).toBe("ok");
     expect((await wd.page()).title).toBe("My Information");
   }, 60_000);
+
+  it("when the site goes back to Sign In after Create without a word, takes the account as made; signing in says it needs the email", async () => {
+    await wd?.close();
+    wd = await new ServerBrowser({ timeoutMs: 15_000 }).openWorkday!(`${base}/wd/job?v=new&quiet=1`);
+    expect(await wd.start()).toBe("sign_in");
+    expect(await wd.createAccount("leo@example.test", password)).toBe("created");
+    expect(await wd.signIn("leo@example.test", password)).toBe("unverified");
+    expect(await wd.openLink(`${base}/wd/verify?token=xyz`)).toBe(true);
+    expect(await wd.signIn("leo@example.test", password)).toBe("ok");
+  }, 90_000);
 });

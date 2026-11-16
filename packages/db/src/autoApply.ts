@@ -618,12 +618,16 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
   if (!info.email) { await run.end("waiting", "Add your email address to your profile (About you). Workday sites need it for an account.", "site_account"); return "waiting"; }
   if (!deps.vault) { await run.end("waiting", `${app.employer}'s Workday site needs an account, and the locked vault for site passwords isn't set up on this server.`, "site_account"); return "waiting"; }
 
-  const signIn = async (password: string): Promise<"ok" | Status> => {
+  const signIn = async (password: string, mayCreate: boolean): Promise<"ok" | Status> => {
     await run.step(`Signing in to ${app.employer}'s Workday site`);
     const r = await wd.signIn(info.email!, password);
-    if (r === "ok") return "ok";
+    if (r === "ok") {
+      await withApplicant(pool, auto, (c) => c.query("UPDATE site_account SET verified_at = coalesce(verified_at, now()), updated_at = now() WHERE site_host = $1", [tenant]));
+      return "ok";
+    }
     if (r === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
     if (r === "unverified") return verify();
+    if (mayCreate) return "create" as Status;
     await run.shot("stopped", "The sign-in page", wd, deps.cfg);
     await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
     return "waiting";
@@ -643,44 +647,54 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     return "verified" as Status;
   };
 
+  /** Keeps the password before the site sees it, so an account made on a page that doesn't say so is never lost. */
+  const keepPassword = async (password: string) => {
+    const ref = await deps.vault!.put(auto.applicantId, "site_password", tenant, new SecretValue(password));
+    await withApplicant(pool, auto, async (c) => {
+      const dk = await dataKeyFor(c, deps.cfg, auto.applicantId);
+      const row = (await c.query(
+        `INSERT INTO site_account (applicant_id, site_host, login_email_enc, vault_ref, created_by) VALUES (app_applicant_id(), $1, $2, $3, 'automation')
+         ON CONFLICT (applicant_id, site_host) DO UPDATE SET vault_ref = EXCLUDED.vault_ref, login_email_enc = EXCLUDED.login_email_enc, updated_at = now() RETURNING id`,
+        [tenant, encryptField(dk, "site_account.login_email", info.email!), ref])).rows[0];
+      await recordAudit(c, "site_account.created", { objectType: "site_account", objectId: row.id, payload: { site: tenant, by: "standing_answer" } });
+    });
+  };
+  const create = async (password: string, fresh: boolean): Promise<"ok" | Status> => {
+    if (!info.standing) {
+      await run.end("waiting", `${app.employer} uses Workday, which needs an account first. Turn on "Create accounts on employer hiring sites for me" in Settings and TC Hunter makes it, or apply on their site yourself.`, "site_account");
+      return "waiting";
+    }
+    await run.step(`Creating your account on ${app.employer}'s Workday site`);
+    if (fresh) await keepPassword(password);
+    const made = await wd.createAccount(info.email!, password);
+    if (made === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+    if (made === "exists") {
+      await run.end("waiting", `You already have an account on ${app.employer}'s Workday site, and TC Hunter doesn't know its password. Apply there yourself this time.`, "sign_in");
+      return "waiting";
+    }
+    if (made === "failed" || made === "no_terms_box") {
+      await run.shot("stopped", "The create-account page", wd, deps.cfg);
+      await run.end("failed", `TC Hunter couldn't create an account on ${app.employer}'s Workday site. Nothing was sent. Apply there yourself, or try again later.`);
+      return "failed";
+    }
+    if (made === "verify_email") {
+      const v = await verify();
+      if (v !== ("verified" as Status)) return v;
+    }
+    const r = await signIn(password, false);
+    return r === ("verified" as Status) ? signIn(password, false) : r;
+  };
+
   if (info.acct) {
     const secret = await deps.vault.get(auto.applicantId, info.acct.vault_ref);
     if (!secret) { await run.end("waiting", `TC Hunter lost the password for ${app.employer}'s Workday site. Reset it on their site, or apply there yourself.`, "sign_in"); return "waiting"; }
-    const r = await signIn(secret.reveal());
-    if (r === ("verified" as Status)) return signIn(secret.reveal());
+    // An account TC Hunter kept a password for but never saw confirmed may not exist yet: making it is the next try.
+    const r = await signIn(secret.reveal(), !info.acct.verified_at);
+    if (r === ("verified" as Status)) return signIn(secret.reveal(), false);
+    if (r === ("create" as Status)) return create(secret.reveal(), false);
     return r;
   }
-  if (!info.standing) {
-    await run.end("waiting", `${app.employer} uses Workday, which needs an account first. Turn on "Create accounts on employer hiring sites for me" in Settings and TC Hunter makes it, or apply on their site yourself.`, "site_account");
-    return "waiting";
-  }
-  await run.step(`Creating your account on ${app.employer}'s Workday site`);
-  const password = newSitePassword();
-  const made = await wd.createAccount(info.email, password);
-  if (made === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
-  if (made === "exists") {
-    await run.end("waiting", `You already have an account on ${app.employer}'s Workday site, and TC Hunter doesn't know its password. Apply there yourself this time.`, "sign_in");
-    return "waiting";
-  }
-  if (made === "failed" || made === "no_terms_box") {
-    await run.shot("stopped", "The create-account page", wd, deps.cfg);
-    await run.end("failed", `TC Hunter couldn't create an account on ${app.employer}'s Workday site. Nothing was sent. Apply there yourself, or try again later.`);
-    return "failed";
-  }
-  const ref = await deps.vault.put(auto.applicantId, "site_password", tenant, new SecretValue(password));
-  await withApplicant(pool, auto, async (c) => {
-    const dk = await dataKeyFor(c, deps.cfg, auto.applicantId);
-    const row = (await c.query(
-      `INSERT INTO site_account (applicant_id, site_host, login_email_enc, vault_ref, created_by) VALUES (app_applicant_id(), $1, $2, $3, 'automation')
-       ON CONFLICT (applicant_id, site_host) DO UPDATE SET vault_ref = EXCLUDED.vault_ref, login_email_enc = EXCLUDED.login_email_enc, updated_at = now() RETURNING id`,
-      [tenant, encryptField(dk, "site_account.login_email", info.email!), ref])).rows[0];
-    await recordAudit(c, "site_account.created", { objectType: "site_account", objectId: row.id, payload: { site: tenant, by: "standing_answer" } });
-  });
-  if (made === "verify_email") {
-    const v = await verify();
-    if (v !== ("verified" as Status)) return v;
-  }
-  return signIn(password);
+  return create(newSitePassword(), true);
 }
 
 async function waitForLink(deps: ApplyDeps, applicantId: string, mailRef: string | null, tenant: string): Promise<string | null> {

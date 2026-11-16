@@ -94,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -264,8 +264,8 @@ describe("Approve every send", () => {
 class FakeWorkday extends FakePage implements WorkdayPage {
   step = 0;
   account: { email: string; password: string; verified: boolean } | null = null;
-  constructor(private store: { account: FakeWorkday["account"] }) {
-    super({ url: "https://wingtip.wd5.myworkdayjobs.com/en-US/External/job/Remote/Analyst_R1", fields: [], after: "nothing" });
+  constructor(protected store: { account: FakeWorkday["account"] }, url = "https://wingtip.wd5.myworkdayjobs.com/en-US/External/job/Remote/Analyst_R1") {
+    super({ url, fields: [], after: "nothing" });
     this.account = store.account;
   }
   async start() { return "sign_in" as const; }
@@ -325,6 +325,56 @@ describe("Workday", () => {
     const p = (await getPacket(pool, cfg, yong, apps[7]!))!;
     expect(p.state).toBe("submitted");
     expect(p.fields.map((f) => f.label)).toEqual(["First Name *", "Phone Number", "Resume/CV"]);
+  });
+
+  /** A site that goes back to "Sign In" after making the account, without saying so (Premier, 2026-11-16). */
+  class SilentWorkday extends FakeWorkday {
+    constructor(store: { account: FakeWorkday["account"] }, host: string, private makes: boolean[]) { super(store, `https://${host}/en-US/External/job/Remote/Analyst_R1`); }
+    override async createAccount(email: string, password: string) {
+      if (this.makes.shift() ?? true) this.store.account = this.account = { email, password, verified: false };
+      return "failed" as const;
+    }
+  }
+
+  it("keeps the password before pressing Create, so an account the site made without saying so is signed in to next time", async () => {
+    const s2: { account: FakeWorkday["account"] } = { account: null };
+    const host = "alpine.wd1.myworkdayjobs.com";
+    const makes = [true];
+    browser.workday = () => new SilentWorkday(s2, host, makes);
+    applyDeps.email = { vault: applyDeps.vault as MemorySecretStore, cfg, reader: () => ({ ...reader, async accountLink(h: string) { return s2.account ? `https://${h}/en-US/External/activate?verify=abc` : null; } }) };
+    await approveResume(apps[13]!);
+    await requestApply(pool, yong, apps[13]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[13]!)).problem).toMatch(/couldn't create an account/);
+    const acct = (await ownerQuery("SELECT * FROM site_account WHERE site_host = $1", [host])).rows[0];
+    expect(acct.verified_at).toBeNull();
+    expect((await (applyDeps.vault as MemorySecretStore).get(yong.applicantId, acct.vault_ref))!.reveal()).toBe(s2.account!.password);
+    await requestApply(pool, yong, apps[13]!);
+    await runNow();
+    const st = await applyStatus(pool, yong, apps[13]!);
+    expect(st.status).toBe("sent");
+    expect(st.steps.map((x) => x.text).join(" | ")).toMatch(/Signing in.*Gmail.*Confirming the account.*Signing in/);
+  });
+
+  it("and when the site really didn't make it, the next try makes it with that same kept password", async () => {
+    const s3: { account: FakeWorkday["account"] } = { account: null };
+    const host = "bellows.wd1.myworkdayjobs.com";
+    const makes = [false];
+    browser.workday = () => new SilentWorkday(s3, host, makes);
+    applyDeps.email = { vault: applyDeps.vault as MemorySecretStore, cfg, reader: () => ({ ...reader, async accountLink(h: string) { return s3.account ? `https://${h}/en-US/External/activate?verify=abc` : null; } }) };
+    await approveResume(apps[14]!);
+    await requestApply(pool, yong, apps[14]!);
+    await runNow();
+    expect(s3.account).toBeNull();
+    const kept = (await ownerQuery("SELECT vault_ref FROM site_account WHERE site_host = $1", [host])).rows[0];
+    const password = (await (applyDeps.vault as MemorySecretStore).get(yong.applicantId, kept.vault_ref))!.reveal();
+    await requestApply(pool, yong, apps[14]!);
+    await runNow();
+    // The second create is "failed" again on this site, but it made the account: one more try signs in.
+    expect(s3.account!.password).toBe(password);
+    await requestApply(pool, yong, apps[14]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[14]!)).status).toBe("sent");
   });
 });
 
