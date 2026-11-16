@@ -128,7 +128,7 @@ export const WORKDAY = {
 
 /** A strong password for a new employer-site account: 20 characters with every kind most sites ask for. */
 export function newSitePassword(): string {
-  const sets = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnpqrstuvwxyz", "23456789", "!#$%*+-=?@"];
+  const sets = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnpqrstuvwxyz", "23456789", "!@#$%*"];  // symbols every hiring site met so far accepts
   const all = sets.join("");
   const chars = sets.map((s) => s[randomInt(s.length)]!);
   while (chars.length < 20) chars.push(all[randomInt(all.length)]!);
