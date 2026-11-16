@@ -242,9 +242,11 @@ class Run {
     await withApplicant(this.pool, this.ctx, (c) => c.query(
       `UPDATE apply_run SET ${[...sets, "updated_at = now()"].join(", ")}${push} WHERE id = $1`, [this.id, ...vals, ...(stepText ? [stepText] : [])]));
   }
-  step(text: string) { return this.set({ step: text }, text); }
+  step(text: string) { applyLog.info("apply.step", { run: this.id, step: text }); return this.set({ step: text }, text); }
   meta(fields: { ats?: string; form_host?: string; packet_id?: string }) { return this.set(fields); }
   end(status: Status, problem: string | null, waitingFor: string | null = null, stepText?: string) {
+    // Where a run stopped and why, so the logs say it without a screenshot (labels and site messages, no answers).
+    applyLog.info("apply.ended", { run: this.id, status, waiting_for: waitingFor, problem: problem ?? stepText ?? null });
     return this.set({ status, problem, waiting_for: waitingFor, finished_at: status === "waiting" ? null : new Date() }, stepText ?? problem ?? undefined, !!problem && status !== "sent");
   }
   async shot(kind: "form_filled" | "after_submit" | "stopped", caption: string, page: ApplyPage | null, cfg: AppConfig) {
