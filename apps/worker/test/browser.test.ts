@@ -144,4 +144,14 @@ describe.skipIf(!available)("Workday's newer sign-in page (Sign in with Apple, G
     expect(await wd.signIn("leo@example.test", password)).toBe("ok");
     expect((await wd.page()).title).toBe("My Information");
   });
+
+  it("waits for those buttons when they are drawn after the page, and finds the email one by its words", async () => {
+    await wd?.close();
+    wd = await new ServerBrowser({ timeoutMs: 15_000 }).openWorkday!(`${base}/wd/job?v=new&late=1`);
+    expect(await wd.start()).toBe("sign_in");
+    expect(await wd.createAccount("leo@example.test", password)).toBe("verify_email");
+    expect(await wd.openLink(`${base}/wd/verify?token=xyz`)).toBe(true);
+    expect(await wd.signIn("leo@example.test", password)).toBe("ok");
+    expect((await wd.page()).title).toBe("My Information");
+  }, 60_000);
 });

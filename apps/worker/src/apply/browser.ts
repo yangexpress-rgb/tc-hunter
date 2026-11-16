@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
-import { AGREE_CHOICE, matchChoice, sameAnswer, searchTermsFor,
+import { AGREE_CHOICE, createLogger, matchChoice, sameAnswer, searchTermsFor,
   formUrlFor, humanCheckIn, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type PageForm, type PageNow, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { PAGE_SCRIPT } from "./pageScript";
@@ -272,6 +272,10 @@ class PwPage implements ApplyPage {
  * then the form over several pages, ending on Review. Workday marks its parts with
  * data-automation-id names, which stay the same across employers.
  */
+const log = createLogger();
+/** "Sign in with email", "Sign up with email", "Continue with email address", "Use email". */
+const WITH_EMAIL = /^\s*((sign in|sign up|continue|create (an )?account|log ?in) with (your )?e-?mail( address)?|use (your )?e-?mail( address)?)\s*$/i;
+
 class WorkdayPw extends PwPage implements WorkdayPage {
   constructor(browser: Browser, page: Page, private jobUrl: string) { super(browser, page); }
 
@@ -299,12 +303,40 @@ class WorkdayPw extends PwPage implements WorkdayPage {
    */
   private emailChoice() {
     return this.pg.locator("[data-automation-id*='SignInWithEmail' i], [data-automation-id*='signUpWithEmail' i], [data-automation-id*='createAccountWithEmail' i]")
-      .or(this.pg.getByRole("button", { name: /^\s*(sign in|sign up|continue|create (an )?account|log ?in) with (e-?mail|your e-?mail)\s*$|^\s*use (your )?e-?mail\s*$/i }))
-      .or(this.pg.getByRole("link", { name: /^\s*(sign in|sign up|continue|create (an )?account|log ?in) with (e-?mail|your e-?mail)\s*$/i })).first();
+      .or(this.pg.getByRole("button", { name: WITH_EMAIL }))
+      .or(this.pg.getByRole("link", { name: WITH_EMAIL }))
+      .or(this.pg.getByText(WITH_EMAIL))
+      .filter({ visible: true }).first();
   }
+  /** Any sign of the account page: a way in by email, the boxes, or the create-account parts. */
+  private async accountPageReady(ms: number) {
+    const any = this.emailChoice().or(this.box("email")).or(this.id("createAccountLink")).or(this.id("createAccountSubmitButton")).or(this.id("signInSubmitButton")).first();
+    await any.waitFor({ state: "visible", timeout: ms }).catch(() => {});
+  }
+  /**
+   * Chooses email when the page offers Apple / Google / email. Workday draws those buttons a
+   * moment after the page itself, so this waits for them, and presses again if the boxes
+   * don't appear.
+   */
   private async revealEmail() {
-    const b = this.emailChoice();
-    if (await b.isVisible().catch(() => false)) { await b.click({ timeout: 10_000 }).catch(() => b.click({ force: true })); await settle(this.pg, 4000); }
+    await this.accountPageReady(15_000);
+    for (let i = 0; i < 3; i++) {
+      if (await this.box("email").isVisible().catch(() => false)) return;
+      const b = this.emailChoice();
+      if (!(await b.isVisible().catch(() => false))) return;
+      await b.click({ timeout: 10_000, force: i > 0 }).catch(() => b.dispatchEvent("click").catch(() => {}));
+      await settle(this.pg, 4000);
+      await this.box("email").waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+    }
+  }
+  /** What the account page shows, for the worker log when it can't get through (button names only, nothing typed). */
+  private async describe() {
+    return this.pg.evaluate(() => {
+      const seen = (el: Element) => { const r = (el as HTMLElement).getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      const all = [...document.querySelectorAll("button, a, [role=button], input, [data-automation-id]")].filter(seen).slice(0, 60);
+      return all.map((el) => `${el.tagName.toLowerCase()}${el.getAttribute("data-automation-id") ? "#" + el.getAttribute("data-automation-id") : ""}${(el as HTMLInputElement).type && el.tagName === "INPUT" ? "[" + (el as HTMLInputElement).type + "]" : ""}${el.tagName !== "INPUT" ? ":" + (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 40) : ""}`)
+        .filter((x, i, a) => a.indexOf(x) === i).join(" | ").slice(0, 3000);
+    }).catch(() => "");
   }
   /** A box by Workday's own name, else by what it is (some tenants rename them). */
   private box(name: "email" | "password" | "verifyPassword") {
@@ -373,7 +405,10 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     }
     const submit = this.id("createAccountSubmitButton").or(this.pg.getByRole("button", { name: CREATE }).filter({ visible: true })).first();
     await submit.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
-    if (!(await submit.isVisible().catch(() => false)) || !(await this.box("email").isVisible().catch(() => false))) return "failed";
+    if (!(await submit.isVisible().catch(() => false)) || !(await this.box("email").isVisible().catch(() => false))) {
+      log.warn("workday.account_page", { host: new URL(this.pg.url()).host, step: "create", shows: await this.describe() });
+      return "failed";
+    }
     await this.box("email").fill(email);
     await this.box("password").fill(password);
     if (await this.box("verifyPassword").isVisible().catch(() => false)) await this.box("verifyPassword").fill(password);
