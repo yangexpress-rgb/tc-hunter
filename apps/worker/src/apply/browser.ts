@@ -287,7 +287,37 @@ class WorkdayPw extends PwPage implements WorkdayPage {
   }
   private async text() { return this.pg.evaluate(() => document.body?.innerText ?? "").catch(() => ""); }
   private async inForm() { return (await this.has("progressBar")) || (await this.has("pageFooterNextButton")) || (await this.has("bottom-navigation-next-button")); }
-  private async onSignIn() { return (await this.has("signInContent")) || (await this.has("signInSubmitButton")) || (await this.has("createAccountLink")) || (await this.has("createAccountSubmitButton")); }
+  private async onSignIn() {
+    return (await this.has("signInContent")) || (await this.has("signInSubmitButton")) || (await this.has("createAccountLink")) || (await this.has("createAccountSubmitButton"))
+      || (await this.emailChoice().isVisible().catch(() => false));
+  }
+
+  /**
+   * Workday's newer sign-in page offers "Sign in with Apple / Google / email" and only shows the
+   * email and password boxes after "Sign in with email" (the same on the create-account page).
+   * TC Hunter always uses email: it never signs in with someone's Apple or Google account.
+   */
+  private emailChoice() {
+    return this.pg.locator("[data-automation-id*='SignInWithEmail' i], [data-automation-id*='signUpWithEmail' i], [data-automation-id*='createAccountWithEmail' i]")
+      .or(this.pg.getByRole("button", { name: /^\s*(sign in|sign up|continue|create (an )?account|log ?in) with (e-?mail|your e-?mail)\s*$|^\s*use (your )?e-?mail\s*$/i }))
+      .or(this.pg.getByRole("link", { name: /^\s*(sign in|sign up|continue|create (an )?account|log ?in) with (e-?mail|your e-?mail)\s*$/i })).first();
+  }
+  private async revealEmail() {
+    const b = this.emailChoice();
+    if (await b.isVisible().catch(() => false)) { await b.click({ timeout: 10_000 }).catch(() => b.click({ force: true })); await settle(this.pg, 4000); }
+  }
+  /** A box by Workday's own name, else by what it is (some tenants rename them). */
+  private box(name: "email" | "password" | "verifyPassword") {
+    const own = this.id(name);
+    if (name === "email") return own.or(this.pg.locator("input[type=email]:visible, input[autocomplete=email]:visible, input[name*='email' i]:visible")).first();
+    const pw = this.pg.locator("input[type=password]:visible");
+    return name === "password" ? own.or(pw.first()).first() : own.or(pw.nth(1)).first();
+  }
+  private async pressFirst(names: string[], text: RegExp) {
+    for (const n of names) if (await this.has(n)) return this.press(n);
+    const b = this.pg.getByRole("button", { name: text }).filter({ visible: true }).first();
+    await b.click({ timeout: 10_000 }).catch(() => b.click({ force: true }));
+  }
 
   async start(): Promise<"sign_in" | "form" | "human_check" | "closed"> {
     const t = await this.text();
@@ -312,9 +342,15 @@ class WorkdayPw extends PwPage implements WorkdayPage {
 
   async signIn(email: string, password: string): Promise<"ok" | "wrong" | "unverified" | "human_check"> {
     if (await this.has("signInLink")) { await this.press("signInLink"); await settle(this.pg, 4000); }
-    await this.id("email").fill(email);
-    await this.id("password").fill(password);
-    await this.press("signInSubmitButton");
+    else if (!(await this.has("signInSubmitButton")) && !(await this.emailChoice().isVisible().catch(() => false))) {
+      // On the create-account page: "Already have an account? Sign in".
+      const link = this.pg.getByRole("link", { name: /^\s*sign ?in\s*$/i }).or(this.pg.getByRole("button", { name: /^\s*sign ?in\s*$/i })).first();
+      if (await link.isVisible().catch(() => false)) { await link.click().catch(() => {}); await settle(this.pg, 4000); }
+    }
+    await this.revealEmail();
+    await this.box("email").fill(email);
+    await this.box("password").fill(password);
+    await this.pressFirst(["signInSubmitButton"], /^\s*sign ?in\s*$/i);
     for (let i = 0; i < 20; i++) {
       await this.pg.waitForTimeout(1000);
       const t = await this.text();
@@ -327,14 +363,25 @@ class WorkdayPw extends PwPage implements WorkdayPage {
   }
 
   async createAccount(email: string, password: string): Promise<"created" | "verify_email" | "exists" | "human_check" | "no_terms_box" | "failed"> {
-    if (await this.has("createAccountLink")) { await this.press("createAccountLink"); await settle(this.pg, 4000); }
-    if (!(await this.has("createAccountSubmitButton", 8000))) return "failed";
-    await this.id("email").fill(email);
-    await this.id("password").fill(password);
-    if (await this.has("verifyPassword")) await this.id("verifyPassword").fill(password);
+    const CREATE = /^\s*(create (an )?account|sign up|register)\s*$/i;
+    await this.revealEmail();
+    if (!(await this.has("createAccountSubmitButton"))) {
+      const link = (await this.has("createAccountLink")) ? this.id("createAccountLink")
+        : this.pg.getByRole("link", { name: CREATE }).or(this.pg.getByRole("button", { name: CREATE })).filter({ visible: true }).first();
+      if (await link.count()) { await link.click({ timeout: 10_000 }).catch(() => link.click({ force: true })); await settle(this.pg, 4000); }
+      await this.revealEmail();
+    }
+    const submit = this.id("createAccountSubmitButton").or(this.pg.getByRole("button", { name: CREATE }).filter({ visible: true })).first();
+    await submit.waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+    if (!(await submit.isVisible().catch(() => false)) || !(await this.box("email").isVisible().catch(() => false))) return "failed";
+    await this.box("email").fill(email);
+    await this.box("password").fill(password);
+    if (await this.box("verifyPassword").isVisible().catch(() => false)) await this.box("verifyPassword").fill(password);
     // The site's terms box: ticked only because the applicant set the standing answer for employer-site accounts.
-    if (await this.has("createAccountCheckbox")) await this.id("createAccountCheckbox").check({ force: true });
-    await this.press("createAccountSubmitButton");
+    const terms = this.id("createAccountCheckbox").or(this.pg.locator("input[type=checkbox]:visible")).first();
+    if (await terms.count()) await terms.check({ force: true }).catch(() => {});
+    if (await this.has("createAccountSubmitButton")) await this.press("createAccountSubmitButton");
+    else await submit.click({ timeout: 10_000 }).catch(() => submit.click({ force: true }));
     for (let i = 0; i < 20; i++) {
       await this.pg.waitForTimeout(1000);
       const t = await this.text();

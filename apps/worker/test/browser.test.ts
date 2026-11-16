@@ -130,3 +130,18 @@ describe.skipIf(!available)("the server's browser on a Workday-shaped site", () 
     expect((await wd.now()).text).toMatch(/Application Submitted/);
   });
 });
+
+describe.skipIf(!available)("Workday's newer sign-in page (Sign in with Apple, Google or email)", () => {
+  let wd: WorkdayPage;
+  afterAll(async () => { await wd?.close(); });
+  const password = "Bb2!bbbbbbbbbbbbbbbb";
+
+  it("chooses email (never Apple or Google), creates the account and waits for the email; then signs in", async () => {
+    wd = await new ServerBrowser({ timeoutMs: 15_000 }).openWorkday!(`${base}/wd/job?v=new`);
+    expect(await wd.start()).toBe("sign_in");
+    expect(await wd.createAccount("leo@example.test", password)).toBe("verify_email");
+    expect(await wd.openLink(`${base}/wd/verify?token=xyz`)).toBe(true);
+    expect(await wd.signIn("leo@example.test", password)).toBe("ok");
+    expect((await wd.page()).title).toBe("My Information");
+  });
+});
