@@ -587,7 +587,18 @@ class WorkdayPw extends PwPage implements WorkdayPage {
       .replace(/^current step \d+ of \d+/i, "").replace(/\s+/g, " ").trim();
     const nextText = (await this.pg.locator("[data-automation-id='pageFooterNextButton'], [data-automation-id='bottom-navigation-next-button']").first().textContent().catch(() => "")) ?? "";
     const review = /review/i.test(title) || /^\s*submit\s*$/i.test(nextText);
+    if (!review) {
+      // Workday draws the page frame first and its questions a moment later: wait for them.
+      const QUESTION = "[data-automation-id^='formField'] :is(input, textarea, select, button[aria-haspopup='listbox']), input[type=file]";
+      await this.pg.locator(QUESTION).first().waitFor({ state: "attached", timeout: 20_000 }).catch(() => {});
+      await this.pg.waitForTimeout(1000);
+    }
     const form = await this.readForm();
+    // Only the application's own questions: not the site's header (language picker, account menu).
+    const inForm = await Promise.all(form.fields.map((f) => locate(this.pg, f.key).first()
+      .evaluate((el) => !el.closest("header, [data-automation-id='header'], [data-automation-id='utilityButtonBar'], [data-automation-id='navigationContainer']")
+        && !/^(settingsSelector|utilityButton)/.test(el.getAttribute("data-automation-id") ?? "")).catch(() => true)));
+    form.fields = form.fields.filter((_, i) => inForm[i]);
     // Workday's file box is labelled "Upload a file"; it is the resume.
     form.fields = form.fields.map((f) => (f.type === "file" && !/resume|cv|cover/i.test(f.label) ? { ...f, label: "Resume/CV" } : f));
     return { title, review, form };
