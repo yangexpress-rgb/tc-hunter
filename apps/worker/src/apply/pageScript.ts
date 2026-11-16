@@ -186,6 +186,19 @@ export const PAGE_SCRIPT = String.raw`
     return JSON.stringify(pairs);
   }
 
-  window.__tcApply = { isWorkdayList: isWorkdayList, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible };
+  /** What a page shows when Next neither moved on nor showed an error: pop-ups, flagged fields, error parts, buttons, and the top of its text (digits and emails masked). */
+  function stuck() {
+    function vis(e) { var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+    function txt(e) { return clean(e.innerText || e.textContent); }
+    function mask(x) { return String(x).replace(/[^\s@]+@[^\s@]+/g, "[email]").replace(/\d/g, "#"); }
+    var dialog = deepAll("[role=dialog], [role=alertdialog], [data-automation-id*='popup' i], [data-automation-id*='modal' i]").filter(vis).map(txt).filter(Boolean).join(" / ");
+    var invalid = deepAll("[aria-invalid=true]").filter(vis).map(function (e) { var f = e.closest("[data-automation-id^='formField']"); return (f && f.getAttribute("data-automation-id")) || e.getAttribute("aria-label") || e.id || ""; }).filter(Boolean);
+    var parts = deepAll("[data-automation-id*='error' i], [data-automation-id*='alert' i], [data-automation-id*='warning' i]").filter(vis).map(function (e) { return e.getAttribute("data-automation-id") + ": " + txt(e).slice(0, 120); });
+    var buttons = deepAll("button").filter(vis).map(function (e) { return (e.getAttribute("data-automation-id") || "") + "=" + txt(e).slice(0, 30); }).slice(0, 20);
+    var main = document.querySelector("main, [role=main]") || document.body;
+    return { dialog: mask(dialog).slice(0, 400), invalid: invalid.join(" | "), errors: mask(parts.join(" | ")).slice(0, 600), buttons: buttons.join(" | "), text: mask(txt(main)).slice(0, 500) };
+  }
+
+  window.__tcApply = { isWorkdayList: isWorkdayList, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible, stuck: stuck };
 })();
 `;
