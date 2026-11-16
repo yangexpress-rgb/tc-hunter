@@ -175,4 +175,12 @@ describe.skipIf(!available)("Workday's newer sign-in page (Sign in with Apple, G
     expect(await wd.setPassword!(`${base}/wd/reset?token=r1`, password)).toBe(true);
     expect(await wd.signIn("leo@example.test", password)).toBe("ok");
   }, 120_000);
+
+  it("a step bar on the sign-in page isn't mistaken for being signed in: a wrong password is wrong", async () => {
+    await wd?.close();
+    wd = await new ServerBrowser({ timeoutMs: 15_000 }).openWorkday!(`${base}/wd/job?v=new&quiet=1&bar=1`);
+    expect(await wd.start()).toBe("sign_in");
+    expect(await wd.createAccount("leo@example.test", password)).toBe("created");
+    expect(await wd.signIn("leo@example.test", "Not-the-password-1!")).toBe("wrong");
+  }, 120_000);
 });
