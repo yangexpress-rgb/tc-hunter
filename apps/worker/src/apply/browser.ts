@@ -604,17 +604,38 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     return { title, review, form };
   }
 
+  /** Where the form is now: its step bar, else its heading. */
+  private async where() {
+    const bar = (await this.id("progressBarActiveStep").textContent({ timeout: 1000 }).catch(() => "")) ?? "";
+    if (bar.trim()) return bar.replace(/\s+/g, " ").trim();
+    return ((await this.pg.locator("h2").first().textContent({ timeout: 1000 }).catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
+  }
+
   async next(): Promise<{ moved: boolean; errors: string[] }> {
-    const before = (await this.id("progressBarActiveStep").textContent().catch(() => "")) ?? "";
+    const before = await this.where();
     const btn = (await this.has("pageFooterNextButton")) ? "pageFooterNextButton" : "bottom-navigation-next-button";
     await this.press(btn);
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 30; i++) {
       await this.pg.waitForTimeout(1000);
-      const now = (await this.id("progressBarActiveStep").textContent().catch(() => "")) ?? "";
+      const now = await this.where();
       if (now && now !== before) return { moved: true, errors: [] };
       const errs = await this.pg.evaluate(() => (window as any).__tcApply?.errors() ?? []).catch(() => []) as string[];
       if (errs.length && i >= 2) return { moved: false, errors: errs };
     }
+    // Neither moved nor any error shown: say what the page shows (labels and buttons; no typed answers, digits or emails).
+    const shows = await this.pg.evaluate(() => {
+      const vis = (e: Element) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      const t = (e: Element | null) => ((e as HTMLElement | null)?.innerText ?? "").replace(/\s+/g, " ").trim();
+      const dialog = Array.from(document.querySelectorAll("[role=dialog], [role=alertdialog], [data-automation-id*='popup' i], [data-automation-id*='modal' i]")).filter(vis).map(t).filter(Boolean).join(" / ");
+      const invalid = Array.from(document.querySelectorAll("[aria-invalid=true]")).filter(vis).map((e) => e.getAttribute("aria-label") || e.id || e.getAttribute("data-automation-id") || "").filter(Boolean);
+      const buttons = Array.from(document.querySelectorAll("button")).filter(vis).map(t).filter((x) => x && x.length < 40).slice(0, 15);
+      const autos = Array.from(document.querySelectorAll("[data-automation-id*='error' i], [data-automation-id*='alert' i]")).filter(vis).map((e) => `${e.getAttribute("data-automation-id")}: ${t(e).slice(0, 120)}`);
+      return { dialog: dialog.slice(0, 400), invalid, buttons, autos };
+    }).catch(() => null);
+    const mask = (x: string) => x.replace(/[^\s@]+@[^\s@]+/g, "[email]").replace(/\d/g, "#");
+    log.info("workday.next_stuck", { host: new URL(this.pg.url()).host, before, now: await this.where(),
+      dialog: mask(shows?.dialog ?? ""), invalid: (shows?.invalid ?? []).join(" | "), errors: mask((shows?.autos ?? []).join(" | ")).slice(0, 600), buttons: (shows?.buttons ?? []).join(" | ") });
+    if (shows?.dialog) return { moved: false, errors: [shows.dialog.slice(0, 200)] };
     return { moved: false, errors: [] };
   }
 
