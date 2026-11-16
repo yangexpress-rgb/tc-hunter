@@ -68,6 +68,9 @@ function pick(options: string[] | undefined, answer: string): string | null {
   return matchChoice(options, answer);
 }
 
+/** A phone's country code question ("Country Phone Code", "Dialing code"). */
+const PHONE_CODE = /(country|phone) (phone |dial(l?ing) |calling )?code|dial(l?ing) code|calling code|phone country/;
+
 /** The applicant's country: the profile's, else from their state, else the United States (Yong, 2026-11-16: "default to USA"). */
 const countryOf = (p: PacketProfile) => p.country || countryForRegion(p.region) || "United States";
 
@@ -81,7 +84,7 @@ const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefi
   [/^(full |legal )?name$|^your name$|full legal name/, (p) => p.fullName, 0.95, "full_name"],
   [/e-?mail/, (p) => p.email, 0.98, "email"],
   // Workday asks for the phone's country on its own ("Country Phone Code": "United States of America (+1)").
-  [/(country|phone) (phone |dial(l?ing) |calling )?code|dial(l?ing) code|calling code|phone country/, (p) => countryOf(p), 0.9, "country"],
+  [PHONE_CODE, (p) => countryOf(p), 0.9, "country"],
   [/phone|mobile|telephone|cell/, (p) => p.phone, 0.95, "phone"],
   [/linkedin/, (p) => p.links.linkedin, 0.97, "linkedin"],
   [/github/, (p) => p.links.github, 0.97, "github"],
@@ -132,11 +135,14 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     const chosen = pick(f.options, "Mobile") ?? f.options?.find((o) => /mobile|cell/i.test(o)) ?? null;
     if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.9, note: "Your phone number is a mobile." };
   }
-  for (const [re, get, conf] of PROFILE_RULES) {
+  for (const [re, get, conf, kind] of PROFILE_RULES) {
     if (!re.test(label)) continue;
     const v = get(p);
     if (!v) return { ...base, note: "Not in your profile yet." };
-    const chosen = pick(f.options, v);
+    // A country list read from a search box shows only its first few countries (Workday's
+    // "Country Phone Code": Afghanistan to Anguilla); the browser searches it for the country.
+    const partial = kind === "country" && PHONE_CODE.test(label) && !!f.options?.length && f.options.length < 100;
+    const chosen = pick(f.options, v) ?? (partial ? v : null);
     return chosen ? { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: chosen === v ? conf : Math.min(conf, 0.86) }
       : { ...base, note: "Your answer isn't one of the choices." };
   }
