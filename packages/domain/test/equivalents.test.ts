@@ -74,4 +74,10 @@ describe("answers that mean the same (Yong, 2026-11-15)", () => {
     expect(proposeField({ key: "c", label: "Country Phone Code*", type: "select", options: ["Canada (+1)", "United States of America (+1)"] }, p).answer).toBe("United States of America (+1)");
     expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select", options: ["Employee Referral", "Job Posting Site", "Social Media"] }, p).answer).toBe("Job Posting Site");
   });
+  it("answers a Country Phone Code list that shows only its first few countries (Premier)", () => {
+    const p = { firstName: "Y", lastName: "E", fullName: "Y E", preferredName: "Y", email: null, phone: null, city: null, region: null, country: null,
+      links: {}, answers: [], resume: null, letter: null } as PacketProfile;
+    const opts = ["Afghanistan (+93)", "Åland Islands (+358)", "Albania (+355)", "Algeria (+213)", "American Samoa (+1)"];
+    expect(proposeField({ key: "c", label: "Country Phone Code*", type: "select", options: opts }, p)).toMatchObject({ answer: "United States", source: "master_profile" });
+  });
 });
