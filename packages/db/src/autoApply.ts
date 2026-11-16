@@ -638,12 +638,24 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       return "waiting";
     }
     if (mayCreate) return "create" as Status;
+    // Just made the account: some sites refuse sign-in, with the same "wrong password" words,
+    // until its email link is opened (Premier, 2026-11-16). Wait for that email first.
+    if (createdThisRun && !waitedForVerify && info.mail) {
+      waitedForVerify = true;
+      await run.step(`Looking in your Gmail for ${app.employer}'s "verify your account" email`);
+      const link = await waitForLink(deps, auto.applicantId, info.mail, tenant);
+      if (link) {
+        await run.step("Confirming the account with the link from your email");
+        await wd.openLink(link);
+        return signIn(password, false);
+      }
+    }
     if (!recovering) { recovering = true; return recover(password); }
     await run.shot("stopped", "The sign-in page", wd, deps.cfg);
     await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
     return "waiting";
   };
-  let recovering = false, verifiedTries = 0, createdThisRun = false;
+  let recovering = false, verifiedTries = 0, createdThisRun = false, waitedForVerify = false;
   /**
    * The password didn't work on an account the site has for this email (one an earlier try made
    * without keeping its password, or one not yet confirmed): first the "verify your account" email

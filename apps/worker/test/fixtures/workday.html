@@ -74,7 +74,17 @@
       if (val("password") !== val("verifyPassword")) return;
       S.account = { email: val("email"), password: val("password"), verified: false }; save();
       // With &quiet=1 the site goes straight back to Sign In and says nothing (Premier, 2026-11-16).
-      if (location.search.indexOf("quiet=1") >= 0) { revealed = false; signInPage(); return; }
+      if (location.search.indexOf("quiet=1") >= 0) {
+        revealed = false;
+        // With &blank=1 the page is empty for a moment first, then shows a message that fades (Premier).
+        if (location.search.indexOf("blank=1") >= 0) {
+          h("<p>Talent Network</p>");
+          setTimeout(function () { signInPage(); var m = document.createElement("p"); m.id = "fade"; m.textContent = "We sent you an email. Please verify your account."; app.appendChild(m);
+            setTimeout(function () { var f = document.getElementById("fade"); if (f) f.remove(); }, 2500); }, 3500);
+          return;
+        }
+        signInPage(); return;
+      }
       h("<p>We sent a verification email to you. Please check your email to activate your account.</p>");
     });
   }
