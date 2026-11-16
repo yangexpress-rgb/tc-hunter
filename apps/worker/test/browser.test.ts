@@ -109,10 +109,11 @@ describe.skipIf(!available)("the server's browser on a Workday-shaped site", () 
     let pg = await wd.page();
     expect(pg).toMatchObject({ title: "My Information", review: false });
     expect(pg.form.fields.map((f) => [f.key, f.label, f.type, !!f.required, !!f.hasValue])).toEqual([
-      ["#src", "How Did You Hear About Us? *", "select", true, false], ["#fn", "Given Name(s) *", "text", true, false], ["#ln", "Family Name *", "text", true, true],
+      ["#src", "How Did You Hear About Us? *", "select", true, false], ["#pc", "Country Phone Code*", "select", true, false], ["#fn", "Given Name(s) *", "text", true, false], ["#ln", "Family Name *", "text", true, true],
     ]);
     expect(await wd.next()).toMatchObject({ moved: false, errors: ["Errors found: How Did You Hear About Us? is required"] });
-    expect((await wd.fill([{ key: "#src", type: "select", value: "Job Board" }, { key: "#fn", type: "text", value: "Yong" }])).map((r) => r.status)).toEqual(["filled", "filled"]);
+    expect((await wd.fill([{ key: "#src", type: "select", value: "Job Board" }, { key: "#pc", type: "select", value: "USA" }, { key: "#fn", type: "text", value: "Yong" }])).map((r) => r.status))
+      .toEqual(["filled", "filled", "filled"]);
     expect(await wd.next()).toEqual({ moved: true, errors: [] });
     pg = await wd.page();
     expect(pg.title).toBe("My Experience");

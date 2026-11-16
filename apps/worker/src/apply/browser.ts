@@ -195,8 +195,10 @@ class PwPage implements ApplyPage {
       if (ANSWER_YES.test(value.trim())) await loc.check({ force: true }); else await loc.uncheck({ force: true });
       return "filled";
     }
-    if (tag === "button" || role === "combobox" || (await loc.getAttribute("data-automation-id")) === "searchBox") {
-      return this.pickFromList(loc, value, tag === "button");
+    await this.helpers();
+    const wdList = tag === "input" && await loc.evaluate((el) => (window as any).__tcApply.isWorkdayList(el)).catch(() => false);
+    if (tag === "button" || role === "combobox" || wdList) {
+      return this.pickFromList(loc, value, tag === "button", wdList);
     }
     await loc.fill(value);
     await loc.blur().catch(() => {});
@@ -204,7 +206,7 @@ class PwPage implements ApplyPage {
   }
 
   /** Drop-downs drawn by the site (React selects, Workday's lists): open, choose the matching choice. */
-  protected async pickFromList(loc: Locator, value: string, isButton: boolean): Promise<FillResult["status"]> {
+  protected async pickFromList(loc: Locator, value: string, isButton: boolean, enterSearches = false): Promise<FillResult["status"]> {
     const agreeing = AGREEING.test(value.trim());
     // Typing filters the list. Try the answer, then its other names ("USA" finds "United States");
     // for an agreement the site's wording may differ, so look at the whole list.
@@ -214,6 +216,8 @@ class PwPage implements ApplyPage {
       if (!isButton) { await loc.fill(term).catch(() => loc.pressSequentially(term)); }
       await this.pg.waitForTimeout(700);
       const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
+      // Workday's search lists look the typed words up only on Enter.
+      if (enterSearches && term && !(await options.count())) { await loc.press("Enter").catch(() => {}); await this.pg.waitForTimeout(1500); }
       const n = await options.count();
       const texts: string[] = [];
       for (let i = 0; i < n; i++) texts.push(((await options.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
