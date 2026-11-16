@@ -94,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -381,6 +381,30 @@ describe("Workday", () => {
     const acct = (await ownerQuery("SELECT * FROM site_account WHERE site_host = $1", [host])).rows[0];
     expect((await (applyDeps.vault as MemorySecretStore).get(yong.applicantId, acct.vault_ref))!.reveal()).toBe(s4.account!.password);
     expect(s4.account!.password).not.toBe("lost-one");
+  });
+
+  it("no reset email because there was never an account (a create the site didn't finish): it makes the account then, and applies", async () => {
+    const s5: { account: FakeWorkday["account"]; resetFor?: string } = { account: null };
+    const host = "carver.wd1.myworkdayjobs.com";
+    // An earlier run thought it had made and signed in to this account.
+    const vault = applyDeps.vault as MemorySecretStore;
+    const ref = await vault.put(yong.applicantId, "site_password", host, new SecretValue("Kept-but-useless-1!"));
+    await ownerQuery(
+      "INSERT INTO site_account (applicant_id, site_host, login_email_enc, vault_ref, created_by, verified_at) SELECT id, $1, email_enc, $2, 'automation', now() FROM applicant WHERE id = $3",
+      [host, ref, yong.applicantId]);
+    class Carver extends FakeWorkday { override async forgotPassword() { return "sent" as const; } }  // the site says "sent" but sends nothing
+    browser.workday = () => new Carver(s5, `https://${host}/en-US/External/job/Remote/Analyst_R1`);
+    browser.spec = () => ({ url: `https://${host}/en-US/External/job/Remote/Analyst_R1`, fields: [] });
+    applyDeps.email = { vault, cfg, reader: () => ({ ...reader,
+      async accountLink(h: string, _since: Date, kind?: string) { return kind !== "reset" && s5.account ? `https://${h}/en-US/External/activate?verify=abc` : null; } }) };
+    await approveResume(apps[16]!);
+    await requestApply(pool, yong, apps[16]!);
+    await runNow();
+    const st = await applyStatus(pool, yong, apps[16]!);
+    expect(st.steps.map((x) => x.text).join(" | ")).toMatch(/Signing in.*Resetting the password.*password reset email.*Creating your account.*Gmail.*Confirming.*Signing in/);
+    expect(st.status).toBe("sent");
+    const acct = (await ownerQuery("SELECT * FROM site_account WHERE site_host = $1", [host])).rows[0];
+    expect((await vault.get(yong.applicantId, acct.vault_ref))!.reveal()).toBe(s5.account!.password);
   });
 
   it("and when the site really didn't make it, the next try makes it with that same kept password", async () => {
