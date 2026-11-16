@@ -90,6 +90,8 @@ const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefi
   [/github/, (p) => p.links.github, 0.97, "github"],
   [/website|portfolio|personal (site|url)|blog/, (p) => p.links.website, 0.9, "website"],
   [/^country\b|country of residence/, (p) => countryOf(p), 0.9, "country"],
+  // A form with its own State box asks "City" for the city alone.
+  [/^city\*?$/, (p) => p.city, 0.9, "city"],
   [/^city\b|^location\b|current location|where are you (based|located)/, (p) => [p.city, p.region].filter(Boolean).join(", ") || null, 0.88, "city"],
 ];
 
