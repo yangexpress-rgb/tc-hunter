@@ -36,13 +36,29 @@
     }
     h('<div data-automation-id="signInContent"><h2>Sign In</h2><label for="e">Email Address</label><input id="e" data-automation-id="email">' +
       '<label for="p">Password</label><input id="p" type="password" data-automation-id="password">' +
-      '<button data-automation-id="signInSubmitButton">Sign In</button> <a href="#" data-automation-id="createAccountLink">Create Account</a><p id="msg"></p></div>');
+      '<button data-automation-id="signInSubmitButton">Sign In</button> <a href="#" data-automation-id="createAccountLink">Create Account</a>' +
+      ' <a href="#" data-automation-id="forgotPasswordLink">Forgot your password?</a><p id="msg"></p></div>');
     on("createAccountLink", function (e) { e.preventDefault(); createPage(); });
+    on("forgotPasswordLink", function (e) { e.preventDefault(); forgotPage(); });
     on("signInSubmitButton", function () {
       var a = S.account;
       if (!a || a.email !== val("email") || a.password !== val("password")) { document.getElementById("msg").textContent = "Wrong email or password."; return; }
       if (!a.verified) { document.getElementById("msg").textContent = "Please verify your account. We sent you an email."; return; }
       S.step = S.step || 1; save(); formPage();
+    });
+  }
+  function forgotPage() {
+    h('<h2>Forgot Password</h2><label for="fe">Email Address</label><input id="fe" data-automation-id="email">' +
+      '<button data-automation-id="resetPasswordSubmitButton">Submit</button>');
+    on("resetPasswordSubmitButton", function () { S.resetFor = val("email"); save(); h("<p>If an account exists for this email, we've sent instructions to reset your password.</p>"); });
+  }
+  function resetPage() {
+    h('<h2>Reset Password</h2><label for="np">New Password</label><input id="np" type="password"><label for="vp">Verify New Password</label><input id="vp" type="password">' +
+      '<button>Submit</button>');
+    document.querySelector("button").addEventListener("click", function () {
+      var a = document.getElementById("np").value;
+      if (!S.resetFor || a !== document.getElementById("vp").value) return;
+      S.account = { email: S.resetFor, password: a, verified: true }; save(); h("<p>Your password was changed.</p>");
     });
   }
   function createPage() {
@@ -88,7 +104,8 @@
       on("pageFooterNextButton", function () { S.step = 4; S.submitted = (S.submitted || 0) + 1; save(); h("<h2>Application Submitted</h2><p>Thanks for applying!</p>"); });
     }
   }
-  if (location.pathname.indexOf("/verify") >= 0) { if (S.account) { S.account.verified = true; save(); } h("<p>Your account is verified.</p>"); }
+  if (location.pathname.indexOf("/reset") >= 0) resetPage();
+  else if (location.pathname.indexOf("/verify") >= 0) { if (S.account) { S.account.verified = true; save(); } h("<p>Your account is verified.</p>"); }
   else jobPage();
 </script>
 </body></html>

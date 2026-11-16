@@ -73,7 +73,7 @@ export interface MailReader {
    * The "verify your account" link an employer's Workday site emailed, for that site only
    * (hands-free applying, Yong 2026-11-15). Read in memory; only the link is used, nothing is kept.
    */
-  accountLink?(tenantHost: string, since: Date): Promise<string | null>;
+  accountLink?(tenantHost: string, since: Date, kind?: "verify" | "reset"): Promise<string | null>;
 }
 
 const b64url = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
@@ -137,7 +137,7 @@ export class GmailReader implements MailReader {
     return out;
   }
   /** Workday's "verify your account" email for this employer's site: only the link is used, nothing is kept. */
-  async accountLink(tenantHost: string, since: Date): Promise<string | null> {
+  async accountLink(tenantHost: string, since: Date, kind: "verify" | "reset" = "verify"): Promise<string | null> {
     const after = Math.floor(since.getTime() / 1000) - 60;
     const list = await this.get(`/messages?${new URLSearchParams({ q: `from:(myworkday.com OR myworkdayjobs.com OR workday.com) after:${after}`, maxResults: "10" })}`);
     for (const { id } of (list.messages ?? []) as Array<{ id: string }>) {
@@ -145,7 +145,7 @@ export class GmailReader implements MailReader {
       const from = String((m.payload?.headers ?? []).find((x: { name: string }) => x.name.toLowerCase() === "from")?.value ?? "");
       if (!/@([a-z0-9-]+\.)*(myworkday|myworkdayjobs|workday)\.com>?$/i.test(from.trim())) continue;  // only Workday's own mail
       const b = bodyOf(m.payload);
-      const link = b ? verificationLinkIn(b.text, tenantHost) : null;
+      const link = b ? verificationLinkIn(b.text, tenantHost, kind) : null;
       if (link) return link;
     }
     return null;

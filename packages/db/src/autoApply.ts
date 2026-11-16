@@ -626,11 +626,70 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       return "ok";
     }
     if (r === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
-    if (r === "unverified") return verify();
+    if (r === "unverified") {
+      const v = await verify();
+      if (v !== ("verified" as Status)) return v;
+      if (++verifiedTries <= 2) return signIn(password, false);
+      await run.shot("stopped", "The sign-in page", wd, deps.cfg);
+      await run.end("waiting", `${app.employer}'s Workday site still asks to confirm the account after its email link was opened. Open the link yourself, then choose Continue here.`, "email_link");
+      return "waiting";
+    }
     if (mayCreate) return "create" as Status;
+    if (!recovering) { recovering = true; return recover(password); }
     await run.shot("stopped", "The sign-in page", wd, deps.cfg);
     await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
     return "waiting";
+  };
+  let recovering = false, verifiedTries = 0;
+  /**
+   * The password didn't work on an account the site has for this email (one an earlier try made
+   * without keeping its password, or one not yet confirmed): first the "verify your account" email
+   * from the last day, else "Forgot your password?" with the reset email from Gmail and a new
+   * password TC Hunter keeps. Hands-free (Yong, 2026-11-16).
+   */
+  const recover = async (password: string): Promise<"ok" | Status> => {
+    if (info.mail) {
+      await run.step(`Looking in your Gmail for ${app.employer}'s "verify your account" email`);
+      const link = await waitForLink(deps, auto.applicantId, info.mail, tenant, { sinceMs: 24 * 3600_000, once: true });
+      if (link) {
+        await run.step("Confirming the account with the link from your email");
+        await wd.openLink(link);
+        const r = await wd.signIn(info.email!, password);
+        if (r === "ok") {
+          await withApplicant(pool, auto, (c) => c.query("UPDATE site_account SET verified_at = now(), updated_at = now() WHERE site_host = $1", [tenant]));
+          return "ok";
+        }
+        if (r === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+      }
+    }
+    if (!info.mail || !wd.forgotPassword || !wd.setPassword) {
+      await run.shot("stopped", "The sign-in page", wd, deps.cfg);
+      await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. ${info.mail ? "Reset it on their site" : "Connect Gmail in Settings and TC Hunter resets it for you, or reset it on their site"}, or apply there yourself this time.`, "sign_in");
+      return "waiting";
+    }
+    await run.step(`Resetting the password on ${app.employer}'s Workday site ("Forgot your password?")`);
+    const fresh = newSitePassword();
+    const asked = await wd.forgotPassword(info.email!);
+    if (asked === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+    if (asked === "failed") {
+      await run.shot("stopped", "The password reset page", wd, deps.cfg);
+      await run.end("waiting", `TC Hunter couldn't ask ${app.employer}'s Workday site for a password reset. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
+      return "waiting";
+    }
+    await run.step(`Looking in your Gmail for ${app.employer}'s password reset email`);
+    const link = await waitForLink(deps, auto.applicantId, info.mail, tenant, { kind: "reset", sinceMs: 2 * 60_000 });
+    if (!link) {
+      await run.end("waiting", `${app.employer}'s password reset email hasn't arrived yet. Choose Try again in a few minutes and TC Hunter looks again.`, "email_link");
+      return "waiting";
+    }
+    await keepPassword(fresh);
+    await run.step("Setting a new password with the link from your email");
+    if (!(await wd.setPassword(link, fresh))) {
+      await run.shot("stopped", "The new password page", wd, deps.cfg);
+      await run.end("waiting", `TC Hunter couldn't set a new password on ${app.employer}'s Workday site. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
+      return "waiting";
+    }
+    return signIn(fresh, false);
   };
   const verify = async (): Promise<"ok" | Status> => {
     await run.step(`Looking in your Gmail for ${app.employer}'s "verify your account" email`);
@@ -668,10 +727,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     if (fresh) await keepPassword(password);
     const made = await wd.createAccount(info.email!, password);
     if (made === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
-    if (made === "exists") {
-      await run.end("waiting", `You already have an account on ${app.employer}'s Workday site, and TC Hunter doesn't know its password. Apply there yourself this time.`, "sign_in");
-      return "waiting";
-    }
+    if (made === "exists") { recovering = true; return recover(password); }
     if (made === "failed" || made === "no_terms_box") {
       await run.shot("stopped", "The create-account page", wd, deps.cfg);
       await run.end("failed", `TC Hunter couldn't create an account on ${app.employer}'s Workday site. Nothing was sent. Apply there yourself, or try again later.`);
@@ -681,8 +737,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       const v = await verify();
       if (v !== ("verified" as Status)) return v;
     }
-    const r = await signIn(password, false);
-    return r === ("verified" as Status) ? signIn(password, false) : r;
+    return signIn(password, false);
   };
 
   if (info.acct) {
@@ -690,23 +745,23 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     if (!secret) { await run.end("waiting", `TC Hunter lost the password for ${app.employer}'s Workday site. Reset it on their site, or apply there yourself.`, "sign_in"); return "waiting"; }
     // An account TC Hunter kept a password for but never saw confirmed may not exist yet: making it is the next try.
     const r = await signIn(secret.reveal(), !info.acct.verified_at);
-    if (r === ("verified" as Status)) return signIn(secret.reveal(), false);
     if (r === ("create" as Status)) return create(secret.reveal(), false);
     return r;
   }
   return create(newSitePassword(), true);
 }
 
-async function waitForLink(deps: ApplyDeps, applicantId: string, mailRef: string | null, tenant: string): Promise<string | null> {
+async function waitForLink(deps: ApplyDeps, applicantId: string, mailRef: string | null, tenant: string,
+  opts: { kind?: "verify" | "reset"; sinceMs?: number; once?: boolean } = {}): Promise<string | null> {
   if (!deps.email || !mailRef) return null;
   const token = await deps.email.vault.get(applicantId, mailRef);
   if (!token) return null;
   const reader = deps.email.reader(token);
   if (!reader.accountLink) return null;
-  const since = new Date(Date.now() - 15 * 60_000);
-  const until = Date.now() + (deps.emailWaitMs ?? 180_000);
+  const since = new Date(Date.now() - (opts.sinceMs ?? 15 * 60_000));
+  const until = opts.once ? 0 : Date.now() + (deps.emailWaitMs ?? 180_000);
   do {
-    const link = await reader.accountLink(tenant, since).catch(() => null);
+    const link = await reader.accountLink(tenant, since, opts.kind ?? "verify").catch(() => null);
     if (link) return link;
     await sleep(deps.pollMs ? deps.pollMs * 4 : 10_000);
   } while (Date.now() < until);

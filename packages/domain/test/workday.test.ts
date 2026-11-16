@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectJobLink, detectSource, fetchJobLink, fetchSource, findBoard, parseWorkday, SourceRefusedError, type Fetcher, type FetchOpts, type FetchResult } from "../src";
+import { detectJobLink, detectSource, fetchJobLink, fetchSource, findBoard, parseWorkday, SourceRefusedError, verificationLinkIn, type Fetcher, type FetchOpts, type FetchResult } from "../src";
 
 const LIST = (titles: Array<[string, string]>, total = titles.length) => JSON.stringify({
   total, jobPostings: titles.map(([title, path]) => ({ title, externalPath: path, locationsText: "USA-NJ - Parsippany", postedOn: "Posted 3 Days Ago" })),
@@ -65,5 +65,20 @@ describe("Workday careers sites (Yong: an Embecta job on Workday was missed)", (
   it("finds an employer's Workday site from its careers address, or from a careers page that links to it", async () => {
     expect(await findBoard({ name: "Embecta", careersUrl: "https://embecta.wd1.myworkdayjobs.com/embectacareers" }, new Workday())).toMatchObject({ kind: "workday", name: "Embecta" });
     expect(await findBoard({ name: "Embecta", careersUrl: "https://careers.embecta.com/" }, new Workday())).toMatchObject({ kind: "workday", key: "embecta.wd1.myworkdayjobs.com/embecta/embectacareers" });
+  });
+});
+
+describe("links in a Workday site's emails", () => {
+  const host = "premierinc.wd1.myworkdayjobs.com";
+  const verify = `Click to verify: https://${host}/en-US/Careers/activate/abc123 .`;
+  const reset = `Reset your password here: https://${host}/en-US/Careers/passwordreset?token=r9`;
+  it("takes the verify link for a verify, and the reset link for a reset, never one for the other", () => {
+    expect(verificationLinkIn(verify, host)).toBe(`https://${host}/en-US/Careers/activate/abc123`);
+    expect(verificationLinkIn(reset, host)).toBeNull();
+    expect(verificationLinkIn(reset, host, "reset")).toBe(`https://${host}/en-US/Careers/passwordreset?token=r9`);
+    expect(verificationLinkIn(verify, host, "reset")).toBeNull();
+  });
+  it("only from that employer's own Workday site", () => {
+    expect(verificationLinkIn(reset.replace("premierinc", "someoneelse"), host, "reset")).toBeNull();
   });
 });

@@ -439,6 +439,52 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     return (await this.text()).replace(/[^\s@]+@[^\s@]+/g, "[email]").replace(/\s+/g, " ").trim().slice(0, 600);
   }
 
+  async forgotPassword(email: string): Promise<"sent" | "failed" | "human_check"> {
+    const host = new URL(this.pg.url()).host;
+    await this.revealEmail();
+    const link = this.id("forgotPasswordLink").or(this.pg.getByRole("link", { name: /forgot (your )?password/i }))
+      .or(this.pg.getByRole("button", { name: /forgot (your )?password/i })).or(this.pg.getByText(/^\s*forgot (your )?password\??\s*$/i)).filter({ visible: true }).first();
+    if (!(await link.isVisible().catch(() => false))) { log.warn("workday.account_page", { host, step: "forgot", shows: await this.describe(), says: await this.says() }); return "failed"; }
+    await link.click({ timeout: 10_000 }).catch(() => link.click({ force: true }));
+    await settle(this.pg, 4000);
+    await this.box("email").waitFor({ state: "visible", timeout: 8000 }).catch(() => {});
+    if (!(await this.box("email").isVisible().catch(() => false))) { log.warn("workday.account_page", { host, step: "forgot_form", shows: await this.describe(), says: await this.says() }); return "failed"; }
+    await this.box("email").fill(email);
+    await this.pressFirst(["resetPasswordSubmitButton", "forgotPasswordSubmitButton", "passwordResetSubmitButton"], /^\s*(submit|reset( my)? password|send( (reset )?(link|email))?|continue|next)\s*$/i);
+    for (let i = 0; i < 15; i++) {
+      await this.pg.waitForTimeout(1000);
+      const t = await this.text();
+      if (humanCheckIn(t)) return "human_check";
+      if (/sent|check your (email|inbox)|we('ve| have) (sent|emailed)|if (an|the) (account|email)|instructions/i.test(t)) return "sent";
+    }
+    // Some sites just go back to Sign In: the email is on its way all the same.
+    if (await this.onSignIn()) return "sent";
+    log.warn("workday.account_page", { host, step: "forgot_sent", shows: await this.describe(), says: await this.says() });
+    return "failed";
+  }
+
+  async setPassword(url: string, password: string): Promise<boolean> {
+    await this.pg.goto(url, { waitUntil: "domcontentloaded" });
+    await settle(this.pg);
+    const host = new URL(this.pg.url()).host;
+    const pw = this.pg.locator("input[type=password]:visible");
+    await pw.first().waitFor({ state: "visible", timeout: 15_000 }).catch(() => {});
+    const n = await pw.count();
+    if (!n) { log.warn("workday.account_page", { host, step: "reset_link", shows: await this.describe(), says: await this.says() }); return false; }
+    for (let i = 0; i < n; i++) await pw.nth(i).fill(password);
+    await this.pressFirst(["resetPasswordSubmitButton", "changePasswordSubmitButton", "passwordResetSubmitButton", "submitButton"], /^\s*(submit|reset( my)? password|change password|set password|save|continue|sign in|update password)\s*$/i);
+    await settle(this.pg, 6000);
+    const t = await this.text();
+    if (/(must|should) (contain|be at least|include)|doesn'?t match|do not match|invalid|expired/i.test(t) && await pw.first().isVisible().catch(() => false)) {
+      log.warn("workday.account_page", { host, step: "reset_refused", says: await this.says() });
+      return false;
+    }
+    await this.pg.goto(this.jobUrl, { waitUntil: "domcontentloaded" });
+    await settle(this.pg);
+    const s = await this.start();
+    return s === "sign_in" || s === "form";
+  }
+
   async openLink(url: string): Promise<boolean> {
     await this.pg.goto(url, { waitUntil: "domcontentloaded" });
     await settle(this.pg);

@@ -130,7 +130,7 @@ export class GmailImapReader implements MailReader {
     });
   }
 
-  async accountLink(tenantHost: string, since: Date): Promise<string | null> {
+  async accountLink(tenantHost: string, since: Date, kind: "verify" | "reset" = "verify"): Promise<string | null> {
     const after = Math.floor(since.getTime() / 1000) - 60;
     const { simpleParser } = await import("mailparser");
     return this.withMailbox(async (client) => {
@@ -138,7 +138,7 @@ export class GmailImapReader implements MailReader {
         const p = await simpleParser(f.source);
         if (!/@([a-z0-9-]+\.)*(myworkday|myworkdayjobs|workday)\.com>?$/i.test((p.from?.text ?? "").trim())) continue;  // only Workday's own mail
         const body = p.text ?? (typeof p.html === "string" ? p.html : "");
-        const link = body ? verificationLinkIn(body, tenantHost) : null;
+        const link = body ? verificationLinkIn(body, tenantHost, kind) : null;
         if (link) return link;
       }
       return null;
