@@ -75,6 +75,17 @@ export function sameAnswer(a: string, b: string): boolean {
   return false;
 }
 
+/** The country a state or province belongs to ("NC" or "North Carolina" is the United States). */
+export function countryForRegion(region: string | null | undefined): string | null {
+  const r = region?.trim();
+  if (!r) return null;
+  const isCode = /^[A-Z]{2,3}$/.test(r.replace(/\./g, ""));
+  const hits = PLACES.filter(([, , regions]) => regions.some(([name, code]) => isCode ? code === r.replace(/\./g, "") : normAnswer(name) === normAnswer(r)));
+  // A code several countries use ("NC") counts as the United States' (Yong, 2026-11-16: default to the USA).
+  const hit = hits.length === 1 ? hits[0] : hits.find(([codes]) => codes[0] === "US");
+  return hit ? hit[1][0]! : null;
+}
+
 /** The form's own choice for an answer: the same words, then the same meaning, then a choice that starts with the answer. */
 export function matchChoice(options: string[], answer: string): string | null {
   const a = normAnswer(answer);

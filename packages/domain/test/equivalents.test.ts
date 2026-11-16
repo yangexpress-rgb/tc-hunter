@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchChoice, proposeField, sameAnswer, searchTermsFor, type PacketProfile } from "../src";
+import { countryForRegion, matchChoice, proposeField, sameAnswer, searchTermsFor, type PacketProfile } from "../src";
 
 describe("answers that mean the same (Yong, 2026-11-15)", () => {
   it("countries by name or code", () => {
@@ -61,5 +61,17 @@ describe("answers that mean the same (Yong, 2026-11-15)", () => {
     expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select" }, p).answer).toBe("Job Board");
     const saved = { ...p, answers: [{ ...p.answers[0]!, text: "Referral", approved: true, stale: false }] };
     expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select", options: ["Job Board", "Referral"] }, saved)).toMatchObject({ answer: "Referral", source: "answer_bank" });
+  });
+  it("knows the country from the state when the profile has none, and finds a job-posting choice", () => {
+    expect(countryForRegion("NC")).toBe("United States");
+    expect(countryForRegion("North Carolina")).toBe("United States");
+    expect(countryForRegion("")).toBeNull();
+    const p = { firstName: "Y", lastName: "E", fullName: "Y E", preferredName: "Y", email: null, phone: null, city: "Raleigh", region: "NC", country: null,
+      links: {}, answers: [], resume: null, letter: null } as PacketProfile;
+    expect(proposeField({ key: "c", label: "Country Phone Code*", type: "select" }, p)).toMatchObject({ answer: "United States" });
+    expect(proposeField({ key: "c", label: "Country*", type: "select" }, { ...p, region: null })).toMatchObject({ answer: "United States" });
+    expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select", options: ["Agency", "Event"] }, p).answer).toBe("Agency");
+    expect(proposeField({ key: "c", label: "Country Phone Code*", type: "select", options: ["Canada (+1)", "United States of America (+1)"] }, p).answer).toBe("United States of America (+1)");
+    expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select", options: ["Employee Referral", "Job Posting Site", "Social Media"] }, p).answer).toBe("Job Posting Site");
   });
 });
