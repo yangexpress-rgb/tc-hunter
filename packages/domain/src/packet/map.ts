@@ -223,6 +223,35 @@ function standingAnswerFor(f: FormField, step: StepKind, standing: NonNullable<P
   return s.text.trim() ? { ...from, answer: s.text.trim() } : null;
 }
 
+/**
+ * Every question on a page at once. Tick boxes that sit one after another as the choices of one
+ * question (Workday's disability form: "Yes, I have a disability...", "No, I do not...", "I do not
+ * want to answer") are answered together: a personal question's boxes are all the applicant's own,
+ * and with an EEO standing answer only the "I don't want to answer" box is ticked (Premier, 2026-11-17).
+ */
+export function proposeFields(fields: FormField[], p: PacketProfile): ProposedField[] {
+  const out = fields.map((f) => proposeField(f, p));
+  const prefix = (l: string) => (l.includes(": ") ? l.slice(0, l.indexOf(": ")) : "");
+  const choice = (l: string) => (l.includes(": ") ? l.slice(l.indexOf(": ") + 2) : l);
+  for (let i = 0; i < fields.length; ) {
+    let j = i;
+    if (fields[i]!.type === "checkbox") while (j + 1 < fields.length && fields[j + 1]!.type === "checkbox" && prefix(fields[j + 1]!.label) === prefix(fields[i]!.label)) j++;
+    const group = fields.slice(i, j + 1);
+    if (group.length > 1 && group.some((f) => applicantStepFor(f) === "eeo")) {
+      const standing = (p.standing ?? []).find((x) => x.kind === "eeo");
+      const decline = standing ? group.findIndex((f) => DECLINE.test(choice(f.label))) : -1;
+      for (let k = i; k <= j; k++) {
+        const base = out[k]!;
+        out[k] = decline < 0 ? { ...base, answer: null, source: null, sourceRefId: null, confidence: 0, step: "eeo", standingKind: null, note: null }
+          : { ...base, answer: k - i === decline ? "Yes" : "No", source: "standing_answer", sourceRefId: null, confidence: 0.9, step: null, standingKind: "eeo",
+              note: "Answered from your standing answer in Settings: the \"I don't want to answer\" choice." };
+      }
+    }
+    i = j + 1;
+  }
+  return out;
+}
+
 /** Whether a proposed answer will be typed in. Applicant steps and low-confidence answers never are. */
 export const willFill = (f: Pick<ProposedField, "step" | "answer" | "confidence" | "source">) =>
   !f.step && f.answer !== null && (f.source === "applicant_typed" || f.confidence >= FILL_CONFIDENCE);

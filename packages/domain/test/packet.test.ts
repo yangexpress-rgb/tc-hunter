@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ANSWER_PRESETS, applicantStepFor, confirmationIn, FILL_CONFIDENCE, packetHash, proposeField, receiptPdf, willFill, type PacketProfile } from "../src";
+import { ANSWER_PRESETS, applicantStepFor, confirmationIn, FILL_CONFIDENCE, packetHash, proposeField, proposeFields, receiptPdf, willFill, type PacketProfile } from "../src";
 
 const preset = (k: string) => [...ANSWER_PRESETS.find((p) => p.key === k)!.patterns];
 const profile = (over: Partial<PacketProfile> = {}): PacketProfile => ({
@@ -120,5 +120,28 @@ describe("standing answers on drop-downs the site draws itself (Spaulding Ridge,
   });
   it("without the standing answer it stays the applicant's", () => {
     expect(proposeField({ key: "q", label, type: "select", required: true }, profile())).toMatchObject({ answer: null, step: "consent" });
+  });
+});
+
+describe("a personal question asked as separate tick boxes (Premier self-identify, 2026-11-17)", () => {
+  const boxes = [
+    { key: "n", label: "Name*", type: "text" as const, required: true },
+    { key: "a", label: "Yes, I have a disability, or have had one in the past", type: "checkbox" as const },
+    { key: "b", label: "No, I do not have a disability and have not had one in the past", type: "checkbox" as const },
+    { key: "c", label: "I do not want to answer", type: "checkbox" as const },
+  ];
+  it("with an EEO standing answer, ticks only the \"don't want to answer\" box", () => {
+    const got = proposeFields(boxes, profile({ standing: [{ kind: "eeo", text: "Prefer not to say" }] }));
+    expect(got.slice(1).map((f) => [f.answer, f.step, f.source])).toEqual([
+      ["No", null, "standing_answer"], ["No", null, "standing_answer"], ["Yes", null, "standing_answer"]]);
+    expect(got.slice(1).every((f) => willFill(f))).toBe(true);
+  });
+  it("without one, every box of the group stays the applicant's (none is worked out)", () => {
+    const got = proposeFields(boxes, profile());
+    expect(got.slice(1).map((f) => [f.answer, f.step])).toEqual([[null, "eeo"], [null, "eeo"], [null, "eeo"]]);
+  });
+  it("leaves other tick-all-that-apply groups as they were", () => {
+    const jobs = [{ key: "f", label: "Job type: Full-Time", type: "checkbox" as const }, { key: "p", label: "Job type: Part-Time", type: "checkbox" as const }];
+    expect(proposeFields(jobs, profile())).toEqual(jobs.map((f) => proposeField(f, profile())));
   });
 });
