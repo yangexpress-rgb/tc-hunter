@@ -148,7 +148,13 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     return chosen ? { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: chosen === v ? conf : Math.min(conf, 0.86) }
       : { ...base, note: "Your answer isn't one of the choices." };
   }
-  const saved = p.answers.find((a) => !a.isApplicantStep && a.patterns.some((re) => new RegExp(re, "i").test(f.label)));
+  // A number question ("percentage number you are willing to travel") takes only a saved answer with a number
+  // in it, and only that number: "Yes" saved for "open to travel" is not its answer (Premier, 2026-11-17).
+  const numeric = !f.options?.length && f.type !== "checkbox" && NUMBER_QUESTION.test(f.label);
+  const saved = p.answers.find((a) => !a.isApplicantStep && a.patterns.some((re) => new RegExp(re, "i").test(f.label)) && (!numeric || /\d/.test(a.text)));
+  if (saved && numeric && saved.approved && !saved.stale) {
+    return { ...base, answer: saved.text.match(/\d+(?:\.\d+)?/)![0], source: "answer_bank", sourceRefId: saved.id, confidence: 0.9 };
+  }
   // A draft or empty saved answer for "how did you hear" doesn't stop it: the default below answers it.
   if (saved && !(HEARD_ABOUT.test(label) && (!saved.approved || saved.stale || !saved.text.trim() || !pick(f.options, saved.text)))) {
     if (!saved.approved) return { ...base, note: "Your saved answer is still a draft." };
@@ -166,6 +172,8 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   return { ...base, note: "New question. Type your answer." };
 }
 
+/** A question whose box takes a number. */
+export const NUMBER_QUESTION = /\b(percent(age)?|number of|how many)\b/i;
 const HEARD_ABOUT = /how did you (hear|learn|find out) about|where did you (hear|find|see|learn)|how did you find (us|this|out)|^(referral |candidate |application )?source$/;
 /** The choice for a job TC Hunter found online, best first. */
 const HEARD_DEFAULTS = [/^job ?boards?\b/i, /job (boards?|sites?|search|postings?)|online job|posting site|career (site|board)s?/i, /internet|online/i, /^web ?site$/i, /^other\b/i, /\bother\b/i];

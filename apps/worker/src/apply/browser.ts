@@ -144,7 +144,11 @@ class PwPage implements ApplyPage {
     const out: FillResult[] = [];
     for (const it of items) {
       try { out.push({ key: it.key, status: await this.fillOne(it) }); }
-      catch { out.push({ key: it.key, status: "failed" }); }
+      catch (e) {
+        // Why a box couldn't be filled (the site's own words; never the answer).
+        log.info("apply.fill_error", { key: it.key.slice(0, 80), type: it.type, error: String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 200) });
+        out.push({ key: it.key, status: "failed" });
+      }
     }
     return out;
   }
