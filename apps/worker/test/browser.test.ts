@@ -26,6 +26,8 @@ beforeAll(async () => {
     if (url.startsWith("/gh/jobs/1/confirmation")) { submits.push(url); return html("<h1>Thank you for applying!</h1><p>Your confirmation number: GH-55555</p>"); }
     if (url.startsWith("/gh/jobs/1")) return html(fixture("greenhouse.html"));
     if (url.startsWith("/wd/")) return html(fixture("workday.html"));
+    // A box drawn by the page (Workday's way): the real input sits off screen, so a click at its spot misses.
+    if (url.startsWith("/drawn")) return html('<form><fieldset><legend>Job type</legend><div class="box"><input type="checkbox" id="ft" style="position:absolute;left:-9999px;top:-9999px"><span>Full-Time</span></div></fieldset></form>');
     res.writeHead(404).end();
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()));
@@ -191,4 +193,14 @@ describe.skipIf(!available)("Workday's newer sign-in page (Sign in with Apple, G
     expect(await wd.start()).toBe("sign_in");
     expect(await wd.createAccount("leo@example.test", password)).toBe("verify_email");
   }, 120_000);
+});
+
+describe.skipIf(!available)("a tick box drawn by the page", () => {
+  it("ticks it even when its input sits off screen, and says so only when it is ticked", async () => {
+    const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/drawn`);
+    try {
+      expect((await page.fill([{ key: "#ft", type: "checkbox", value: "Yes" }])).map((r) => r.status)).toEqual(["filled"]);
+      expect((await page.readForm()).fields.find((f) => f.key === "#ft")?.hasValue).toBe(true);
+    } finally { await page.close(); }
+  });
 });

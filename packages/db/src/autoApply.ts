@@ -937,9 +937,29 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
         `${f.label} [${f.type}${f.hasValue ? ", had value" : ""}${f.options ? `; ${f.options.length} choices: ${f.options.slice(0, 8).join(" / ")}` : ""}]`).join(" | ").slice(0, 3000) });
       return r.stop;
     }
-    const p = r as Prepared;
+    let p = r as Prepared;
     const items = p.fill.filter((f) => f.key.startsWith(prefix)).map((f) => ({ ...f, key: f.key.slice(prefix.length) }));
     const results = await wd.fill(items);
+    // An answer can open a follow-up question ("Open to travel? Yes" asks what percentage): read the page
+    // again and answer what appeared, the same way (Premier, 2026-11-17).
+    for (let round = 0; round < 2; round++) {
+      const again = await wd.page().catch(() => null);
+      const seen = new Set(pg.form.fields.map((f) => f.key));
+      const added = (again?.form.fields ?? []).filter((f) => !seen.has(f.key));
+      if (!added.length || again?.review) break;
+      pg.form.fields.push(...added);
+      all.push(...added.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
+      for (const f of added) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
+      applyLog.info("workday.follow_up", { run: run.id, page: n, asked: added.map((f) => f.label.slice(0, 80)).join(" | ").slice(0, 600) });
+      const r2 = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache });
+      if ("stop" in r2 && r2.stop) {
+        applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, stopped: true, fields: added.map((f) => `${f.label} [${f.type}]`).join(" | ").slice(0, 3000) });
+        return r2.stop;
+      }
+      p = r2 as Prepared;
+      const keys = new Set(added.map((f) => f.key));
+      results.push(...await wd.fill(p.fill.filter((f) => f.key.startsWith(prefix) && keys.has(f.key.slice(prefix.length))).map((f) => ({ ...f, key: f.key.slice(prefix.length) }))));
+    }
     // What the page asked and what happened to each question (labels and statuses only, no answers).
     applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, fields: pg.form.fields.map((f) => {
       const r = results.find((x) => x.key === f.key);
