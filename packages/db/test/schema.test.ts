@@ -38,8 +38,8 @@ describe("schema", () => {
 
   it("personal fields on the applicant are stored encrypted (bytea), not as text", async () => {
     const r = await ownerQuery(`SELECT column_name, data_type FROM information_schema.columns
-      WHERE table_name = 'applicant' AND column_name IN ('legal_name_enc','email_enc','phone_enc','work_auth_summary_enc','work_auth_structured_enc')`);
-    expect(r.rows).toHaveLength(5);
+      WHERE table_name = 'applicant' AND column_name IN ('legal_name_enc','email_enc','phone_enc','work_auth_summary_enc','work_auth_structured_enc','about_enc')`);
+    expect(r.rows).toHaveLength(6);
     for (const row of r.rows) expect(row.data_type).toBe("bytea");
   });
 

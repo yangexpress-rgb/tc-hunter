@@ -50,6 +50,8 @@ export async function editAction(form: FormData) {
     : op === "toggle_para" ? { op, para: int(form, "para") }
     : op === "move_para" ? { op, para: int(form, "para"), dir }
     : op === "edit_para" ? { op, para: int(form, "para"), text }
+    : op === "toggle_summary" || op === "summary_original" ? { op }
+    : op === "edit_summary" ? { op, text: String(form.get("text") ?? "").slice(0, 2600) }
     : null;
   const { pool, cfg } = app();
   await act(form, async () => { if (!e) throw new Error("TC_BAD_INPUT"); await editDocument(pool, cfg, s, String(form.get("doc")), e); }, "/documents");

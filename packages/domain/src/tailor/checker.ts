@@ -52,6 +52,13 @@ export function factIndex(profile: TailorProfile, posting: TailorPosting): Map<s
   const add = (id: string, kind: string, text: string, verified: boolean, extraNumbers: Array<number | string | null> = [], skillIds: string[] = []) =>
     m.set(id, { id, kind, text, verified, numbers: [...numbersIn(text), ...extraNumbers.filter((x) => x !== null && x !== "").map((x) => numStr(x!))], skillIds });
   const linked = (factId: string) => profile.skills.filter((s) => s.evidenceIds.includes(factId)).map((s) => s.id);
+  // The About, and the length of the career the roles show: "over 20 years" passes only when the roles say so.
+  const ab = profile.about;
+  if (ab && (ab.text.trim() || ab.careerYears)) {
+    const n = ab.careerYears ?? 0;
+    const years = n > 0 ? [n, Math.floor(n / 5) * 5, Math.floor(n / 10) * 10].filter((x) => x > 0) : [];
+    add(ab.id, "about", aboutFactText(ab), true, [...years, ab.since], []);
+  }
   for (const e of profile.experience) {
     const years = [e.start, e.end].filter(Boolean).map((d) => d!.slice(0, 4));
     add(e.id, "experience_item", [e.title, e.employer, e.location, e.start, e.end].filter(Boolean).join(" · "), e.verified, years, linked(e.id));
@@ -67,6 +74,11 @@ export function factIndex(profile: TailorProfile, posting: TailorPosting): Map<s
   // The posting may be cited for its own title and employer only, never for its skills.
   add(posting.id, "posting", `${posting.title} · ${posting.employer}`, true);
   return m;
+}
+
+/** The About as a fact: the applicant's own words, and the career length their roles show. */
+export function aboutFactText(ab: { text: string; careerYears: number | null; since: string | null }): string {
+  return [ab.text.trim(), ab.careerYears && ab.careerYears > 0 && ab.since ? `${ab.careerYears} years of work since ${ab.since}` : ""].filter(Boolean).join("\n");
 }
 
 export function gapTermsFor(gapSkills: string[]): string[] {

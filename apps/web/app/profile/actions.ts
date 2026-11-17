@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
-  removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
+  removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveSummary, fillAboutFromResume, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyAll, verifyFact, verifyRole, requestScan, type FactTable,
 } from "@tc-hunter/db";
 import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
@@ -112,6 +112,18 @@ export async function saveAboutAction(form: FormData) {
     preferredName: g("preferredName"), legalName: g("legalName"), email: g("email"), phone: g("phone"), city: g("city"),
     region: g("region"), country: g("country"), timezone: g("timezone"), workAuthSummary: g("workAuthSummary"), links,
   }));
+}
+
+/** The About on Me (Yong, 2026-11-17): the applicant's own executive summary. */
+export async function saveSummaryAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => saveSummary(app().pool, app().cfg, s, String(form.get("summary") ?? "")), "/profile#about");
+}
+
+/** "Copy from my resume": the summary from the uploaded resume, word for word. */
+export async function fillAboutAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, async () => { if (!(await fillAboutFromResume(app().pool, app().cfg, s))) throw new Error("TC_NO_ABOUT_IN_RESUME"); }, "/profile#about");
 }
 
 // Import ------------------------------------------------------------------------

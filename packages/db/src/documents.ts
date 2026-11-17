@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  buildLetter, buildResume, checkContext, checkLine, decryptField, documentText, exportLeaks, extractText, isStale, renderDocument,
+  buildLetter, buildResume, careerYears, checkContext, checkLine, decryptField, documentText, exportLeaks, extractText, isStale, renderDocument,
   type Blocked, type DocHeader, type Gap, type LetterProposer, type LetterSource, type ResumeProposer, type ResumeSource,
   type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
@@ -48,20 +48,26 @@ export async function loadTailorProfile(c: pg.PoolClient, dk: Buffer): Promise<T
     () => q("SELECT * FROM credential ORDER BY issued_on DESC NULLS LAST"),
     () => q("SELECT id, question_key, answer_text_enc, status, last_reviewed_at FROM answer_bank_item"),
     () => q("SELECT id, title, story_enc, linked_fact_ids, status, last_reviewed_at FROM story_bank_item"),
+    () => q("SELECT id, about_enc FROM applicant WHERE id = app_applicant_id()"),
   ];
   const results: any[][] = [];
   for (const run of queries) results.push(await run());
-  const [items, bullets, skills, evidence, edu, creds, answers, stories] = results as [any[], any[], any[], any[], any[], any[], any[], any[]];
+  const [items, bullets, skills, evidence, edu, creds, answers, stories, me] = results as [any[], any[], any[], any[], any[], any[], any[], any[], any[]];
   const ev = (sid: string) => evidence.filter((e) => e.skill_id === sid)
     .map((e) => e.experience_bullet_id ?? e.experience_item_id ?? e.education_item_id ?? e.credential_id).filter(Boolean);
-  return {
-    experience: items.map((e) => ({
+  const experience: TailorProfile["experience"] = items.map((e) => ({
       id: e.id, employer: e.employer_name, title: e.title, location: e.location, start: ymd(e.start_date)!, end: ymd(e.end_date), type: e.employment_type,
       verified: true,
       bullets: bullets.filter((b) => b.experience_item_id === e.id).map((b) => ({
         id: b.id, itemId: e.id, text: b.text, metricValue: b.metric_value === null ? null : Number(b.metric_value), metricUnit: b.metric_unit, verified: true,
       })),
-    })),
+    }));
+  // The applicant's About (Yong, 2026-11-17), with how long their career is, so a tailored summary can say it.
+  const span = careerYears(experience);
+  const aboutText = me[0]?.about_enc ? decryptField(dk, "applicant.about", me[0].about_enc) : "";
+  return {
+    about: me[0] && (aboutText.trim() || span) ? { id: me[0].id, text: aboutText, careerYears: span?.years ?? null, since: span?.since ?? null } : null,
+    experience,
     skills: skills.map((s) => ({ id: s.id, name: s.canonical_name, aliases: s.aliases ?? [], proficiency: s.proficiency, verified: true, evidenceIds: ev(s.id) })),
     education: edu.map((e) => ({ id: e.id, institution: e.institution, degree: e.degree, field: e.field, start: ymd(e.start_date), end: ymd(e.end_date), honours: e.honours, verified: true })),
     credentials: creds.map((x) => ({ id: x.id, name: x.name, kind: x.kind, issuer: x.issuer, issuedOn: ymd(x.issued_on), verified: true })),
@@ -101,6 +107,7 @@ function claimsOf(source: DocSource) {
     for (const p of source.paragraphs.filter((x) => x.included)) out.push({ section: p.role, ordinal: ++n, text: p.text, type: "paragraph", facts: p.factIds, transform: p.transform });
     return out;
   }
+  if (source.summary?.included) out.push({ section: "summary", ordinal: ++n, text: source.summary.text, type: "summary", facts: source.summary.factIds, transform: source.summary.transform });
   for (const it of source.experience.filter((i) => i.included)) {
     out.push({ section: "experience", ordinal: ++n, text: [it.title, it.employer].filter(Boolean).join(", "), type: "role", facts: [it.itemId], transform: "verbatim" });
     for (const l of it.lines.filter((x) => x.included)) out.push({ section: "experience", ordinal: ++n, text: l.text, type: "bullet", facts: l.factIds, transform: l.transform });
@@ -292,7 +299,8 @@ export type EditOp =
   | { op: "toggle_line"; item: number; line: number } | { op: "move_line"; item: number; line: number; dir: -1 | 1 }
   | { op: "edit_line"; item: number; line: number; text: string } | { op: "use_original"; item: number; line: number }
   | { op: "toggle_item"; item: number } | { op: "toggle_skill"; skillId: string } | { op: "move_skill"; skillId: string; dir: -1 | 1 }
-  | { op: "toggle_para"; para: number } | { op: "move_para"; para: number; dir: -1 | 1 } | { op: "edit_para"; para: number; text: string };
+  | { op: "toggle_para"; para: number } | { op: "move_para"; para: number; dir: -1 | 1 } | { op: "edit_para"; para: number; text: string }
+  | { op: "toggle_summary" } | { op: "edit_summary"; text: string } | { op: "summary_original" };
 
 const move = <T>(a: T[], i: number, dir: number) => { const j = i + dir; if (i < 0 || j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j]!, a[i]!]; };
 
@@ -316,7 +324,25 @@ export async function editDocument(pool: pg.Pool, cfg: AppConfig, session: Sessi
     if (s.kind === "resume") {
       const it = "item" in e ? s.experience[e.item] : undefined;
       const ln = it && "line" in e ? it.lines[e.line] : undefined;
+      const sum = s.summary;
       switch (e.op) {
+        case "toggle_summary": if (!sum) throw new DomainError("TC_NOT_FOUND"); sum.included = !sum.included; break;
+        case "summary_original": {
+          // Back to the applicant's own About, as it is in their profile now.
+          const about = (await loadTailorProfile(c, await dataKeyFor(c, cfg, session.applicantId))).about;
+          if (!sum || !about?.text.trim()) throw new DomainError("TC_NOT_FOUND");
+          sum.text = about.text.trim(); sum.original = about.text; sum.factIds = [about.id]; sum.transform = "verbatim"; sum.included = true;
+          break;
+        }
+        case "edit_summary": {
+          if (!sum) throw new DomainError("TC_NOT_FOUND");
+          // The applicant's wording is checked against the facts the summary cites, and their About.
+          const about = (await loadTailorProfile(c, await dataKeyFor(c, cfg, session.applicantId))).about;
+          const facts = [...new Set([...sum.factIds, ...(about ? [about.id] : [])])];
+          const r = await check(e.text, facts);
+          if (r.ok) { sum.text = r.text; sum.factIds = facts; sum.transform = r.transform; sum.included = true; }
+          break;
+        }
         case "toggle_item": if (!it) throw new DomainError("TC_NOT_FOUND"); it.included = !it.included; break;
         case "toggle_line": if (!ln) throw new DomainError("TC_NOT_FOUND"); ln.included = !ln.included; break;
         case "move_line": if (!it) throw new DomainError("TC_NOT_FOUND"); move(it.lines, e.line, e.dir); break;

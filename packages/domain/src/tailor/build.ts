@@ -2,7 +2,8 @@ import { canonicalSkill, findSkills, sameSkill } from "../jobs/skills";
 import { words } from "../jobs/text";
 import { checkContext, checkLine, type CheckContext } from "./checker";
 import type {
-  Blocked, Gap, LetterParagraph, LetterProposal, LetterSource, ResumeItem, ResumeLine, ResumeProposal, ResumeSource, TailorPosting, TailorProfile,
+  Blocked, Gap, LetterParagraph, LetterProposal, LetterSource, ResumeItem, ResumeLine, ResumeProposal, ResumeSource, ResumeSummary, TailorPosting, TailorProfile,
+  TExperience,
 } from "./types";
 
 /**
@@ -41,6 +42,46 @@ export function gapsFor(profile: TailorProfile, posting: TailorPosting): Gap[] {
 }
 
 const lineCost = (text: string) => Math.max(1, Math.ceil(text.length / CHARS_PER_LINE));
+
+/** Kinds of role that count as years of work (not internships, projects, coursework or volunteering). */
+const WORK_TYPES = new Set(["full_time", "part_time", "contract", "other"]);
+/** Whole years since the first paid role started, and that year. Null with no paid roles. */
+export function careerYears(experience: Array<Pick<TExperience, "start" | "type">>, today = new Date()): { years: number; since: string } | null {
+  const starts = experience.filter((e) => WORK_TYPES.has(e.type) && e.start).map((e) => e.start).sort();
+  if (!starts.length) return null;
+  const [y, m] = starts[0]!.split("-").map(Number) as [number, number];
+  const months = (today.getFullYear() - y) * 12 + (today.getMonth() + 1 - (m || 1));
+  const years = Math.floor(months / 12);
+  return years > 0 ? { years, since: String(y) } : null;
+}
+
+/** Longest About used as is, when Claude doesn't write one: the first paragraph, cut at a sentence. */
+const SUMMARY_MAX = 700;
+function ownSummary(text: string): { text: string; trimmed: boolean } {
+  const t = text.trim();
+  const first = t.split(/\n\s*\n/)[0]!.replace(/\s*\n\s*/g, " ").trim();
+  if (first.length <= SUMMARY_MAX) return { text: first, trimmed: first !== t };
+  const cut = first.slice(0, SUMMARY_MAX);
+  const end = cut.lastIndexOf(". ");
+  return { text: (end > 200 ? cut.slice(0, end + 1) : cut).trim(), trimmed: true };
+}
+
+/**
+ * The About at the top of the resume: Claude's version for this job when it passes the checker,
+ * otherwise the applicant's own About (its first paragraph). Nothing when there is neither.
+ */
+export function buildSummary(profile: TailorProfile, proposal: Pick<ResumeProposal, "summary">, ctx: CheckContext, blocked: Blocked[]): ResumeSummary | null {
+  const about = profile.about?.text.trim() ? profile.about : null;
+  const p = proposal.summary;
+  if (p && p.text?.trim()) {
+    const r = checkLine(p.text, p.fact_ids ?? [], ctx);
+    if (r.ok) return { factIds: p.fact_ids, text: r.text, original: about?.text ?? "", transform: r.transform, included: true };
+    blocked.push({ text: r.text, factIds: p.fact_ids ?? [], reason: r.reason, terms: r.terms });
+  }
+  if (!about) return null;
+  const own = ownSummary(about.text);
+  return { factIds: [about.id], text: own.text, original: about.text, transform: own.trimmed ? "selected" : "verbatim", included: true };
+}
 
 export function buildResume(profile: TailorProfile, posting: TailorPosting, proposal: ResumeProposal, targetPages = 2): ResumeDraft {
   const ctx = checkContext(profile, posting);
@@ -96,9 +137,11 @@ export function buildResume(profile: TailorProfile, posting: TailorPosting, prop
   const leftOut = (l: ResumeLine) => l.factIds.some((f) => out.has(f));
   for (const sk of skills) if (out.has(sk.skillId)) sk.included = false;
 
+  const summary = buildSummary(profile, proposal, ctx, blocked);
+
   // Fit the target length by selection: every role keeps its best line, then the most relevant lines until the pages are full.
   const shownItems = items.filter((it) => it.included);
-  let budget = targetPages * LINES_PER_PAGE - 6 - 4 - (education.length ? 3 + education.length * 2 : 0) - (credentials.length ? 3 + credentials.length : 0) - shownItems.length * 3;
+  let budget = targetPages * LINES_PER_PAGE - 6 - 4 - (summary ? 3 + lineCost(summary.text) : 0) - (education.length ? 3 + education.length * 2 : 0) - (credentials.length ? 3 + credentials.length : 0) - shownItems.length * 3;
   for (const it of items) for (const l of it.lines) l.included = false;
   // Lines the feedback left out stay in the list, switched off, so they can be switched back on.
   for (const it of shownItems) { const first = it.lines.find((l) => !leftOut(l)); if (first && budget > 0) { first.included = true; budget -= lineCost(first.text); } }
@@ -106,7 +149,7 @@ export function buildResume(profile: TailorProfile, posting: TailorPosting, prop
   for (const { l } of rest) { if (budget - lineCost(l.text) < 0) continue; l.included = true; budget -= lineCost(l.text); }
 
   const source: ResumeSource = {
-    v: 1, kind: "resume", target: { postingId: posting.id, title: posting.title, employer: posting.employer }, targetPages,
+    v: 1, kind: "resume", target: { postingId: posting.id, title: posting.title, employer: posting.employer }, targetPages, summary,
     experience: items, skills, education, credentials,
   };
   return { source, blocked, gaps: gapsFor(profile, posting) };
@@ -144,6 +187,7 @@ export function buildLetter(profile: TailorProfile, posting: TailorPosting, prop
 export function documentText(source: ResumeSource | LetterSource): string {
   if (source.kind === "letter") return source.paragraphs.filter((p) => p.included).map((p) => p.text).join("\n");
   return [
+    ...(source.summary?.included ? [source.summary.text] : []),
     ...source.experience.filter((i) => i.included).flatMap((i) => [i.title, i.employer ?? "", ...i.lines.filter((l) => l.included).map((l) => l.text)]),
     source.skills.filter((s) => s.included).map((s) => s.name).join(", "),
     ...source.education.map((e) => [e.institution, e.degree, e.field].filter(Boolean).join(" ")),

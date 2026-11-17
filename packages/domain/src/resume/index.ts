@@ -9,6 +9,7 @@ export * from "./honesty";
 export * from "./pii";
 export * from "./extract";
 export * from "./linkedin";
+export * from "./about";
 export { ClaudeResumeParser, unplacedLines, type ReadTrace } from "./claudeParser";
 
 /**

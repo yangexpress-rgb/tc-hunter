@@ -27,6 +27,11 @@ function resumeBlocks(s: ResumeSource, h: DocHeader): Block[] {
   const b: Block[] = [{ t: "name", text: h.name }];
   const c = contactLine(h);
   if (c) b.push({ t: "contact", text: c });
+  if (s.summary?.included && s.summary.text.trim()) {
+    b.push({ t: "heading", text: "Summary" });
+    for (const p of s.summary.text.split(/\n+/).filter((x) => x.trim())) b.push({ t: "para", text: p.trim() });
+    b.push({ t: "gap" });
+  }
   const items = s.experience.filter((i) => i.included);
   if (items.length) {
     b.push({ t: "heading", text: "Experience" });

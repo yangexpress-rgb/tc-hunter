@@ -6,7 +6,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { ClaudeResumeParser, READER_PROMPT, readResume, RulesResumeParser, RulesRequirementsReader, SourceRefusedError, type Fetcher } from "@tc-hunter/domain";
 import {
   duplicateFlags, exportMyData, getResumeFile, listResumeFiles, readResumeFile, redigestResumeFile, runDigest, runNextWork, storeResumeFile,
-  verifyFact, withApplicant, getReaderInstructions, saveReaderInstructions, getReaderPrompt, getReaderPromptVersion, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, deleteResumeFile, importParsedResume, profileDuplicates, removeProfileDuplicates, type AppConfig, type DigestDeps, type Session, type WorkDeps,
+  verifyFact, withApplicant, getProfile, saveSummary, fillAboutFromResume, loadTailorProfile, dataKeyFor, getReaderInstructions, saveReaderInstructions, getReaderPrompt, getReaderPromptVersion, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, deleteResumeFile, importParsedResume, profileDuplicates, removeProfileDuplicates, type AppConfig, type DigestDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
@@ -93,6 +93,31 @@ describe("resume digest", () => {
     expect(await count(yong, "experience_item")).toBe(5);
     expect(await count(yong, "experience_item", "verification = 'verified'")).toBe(0);
     expect(d.importBatchId).toBeTruthy();
+  });
+
+  it("fills the About on Me from the resume's summary, word for word, and never over the applicant's own", async () => {
+    // Yong, 2026-11-17: an About section on Me, prefilled from the uploaded resume.
+    const p = await getProfile(pool, cfg, yong);
+    expect(p.about.summary).toBe("Operations lead who turns messy processes into simple systems.");
+    expect(p.about.summarySource).toBe("resume");
+    const raw = (await ownerQuery("SELECT about_enc FROM applicant WHERE id = $1", [yong.applicantId])).rows[0].about_enc as Buffer;
+    expect(raw.includes(Buffer.from("messy processes"))).toBe(false);
+    await saveSummary(pool, cfg, yong, "  Operations leader who turns messy processes into simple, measurable systems.\r\n\n\n\nCRM and vendor programs.  ");
+    expect(await fillAboutFromResume(pool, cfg, yong)).toBe(false);
+    const q = await getProfile(pool, cfg, yong);
+    expect(q.about.summary).toBe("Operations leader who turns messy processes into simple, measurable systems.\n\nCRM and vendor programs.");
+    expect(q.about.summarySource).toBe("applicant");
+    // Tailoring sees it as a fact it can cite, with the career length the roles show.
+    const t = await withApplicant(pool, { userAccountId: yong.userAccountId, applicantId: yong.applicantId, actor: "applicant" },
+      async (c) => loadTailorProfile(c, await dataKeyFor(c, cfg, yong.applicantId)));
+    expect(t.about).toMatchObject({ id: yong.applicantId, text: q.about.summary, since: "2018" });
+    expect(t.about!.careerYears).toBeGreaterThanOrEqual(8);
+    // Leo's profile is his own: nothing of Yong's About.
+    expect((await getProfile(pool, cfg, leo)).about.summary).not.toContain("measurable");
+    // Cleared, it can be copied from the resume again.
+    await saveSummary(pool, cfg, yong, "");
+    expect(await fillAboutFromResume(pool, cfg, yong)).toBe(true);
+    expect((await getProfile(pool, cfg, yong)).about.summary).toBe("Operations lead who turns messy processes into simple systems.");
   });
 
   it("the same resume in another format adds nothing that's already there", async () => {

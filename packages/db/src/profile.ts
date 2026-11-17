@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  decryptField, encryptField, LINKEDIN_URL, normaliseLinkedInUrl, evidenceCoach, isStale, unwrapDataKey, GOAL_LEVELS, GOAL_TYPES, TIME_FRAMES, type CoachCounts, type Goal, type Nudge, type ParsedResume,
+  decryptField, encryptField, LINKEDIN_URL, normaliseAbout, normaliseLinkedInUrl, evidenceCoach, isStale, unwrapDataKey, GOAL_LEVELS, GOAL_TYPES, TIME_FRAMES, type CoachCounts, type Goal, type Nudge, type ParsedResume,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
@@ -128,7 +128,9 @@ export async function discardImport(pool: pg.Pool, session: Session, batchId: st
 
 export interface ProfileData {
   about: { preferredName: string; legalName: string; email: string; phone: string; city: string; region: string; country: string;
-    timezone: string; workAuthSummary: string; links: Record<string, string> };
+    timezone: string; workAuthSummary: string; links: Record<string, string>;
+    /** The About: an executive summary of who they are (Yong, 2026-11-17). Empty until filled. */
+    summary: string; summarySource: "resume" | "linkedin" | "applicant" | null; summaryUpdatedAt: Date | null };
   experience: Array<Record<string, any> & { bullets: Array<Record<string, any>> }>;
   education: Array<Record<string, any>>;
   skills: Array<Record<string, any> & { evidence: Array<Record<string, any>> }>;
@@ -154,6 +156,7 @@ export async function getProfile(pool: pg.Pool, cfg: AppConfig, session: Session
         preferredName: a.preferred_name, legalName: dec("applicant.legal_name", a.legal_name_enc), email: dec("applicant.email", a.email_enc),
         phone: dec("applicant.phone", a.phone_enc), city: a.city ?? "", region: a.region ?? "", country: a.country ?? "", timezone: a.timezone,
         workAuthSummary: dec("applicant.work_auth_summary", a.work_auth_summary_enc), links: a.links ?? {},
+        summary: dec("applicant.about", a.about_enc), summarySource: a.about_source ?? null, summaryUpdatedAt: a.about_updated_at ?? null,
       },
       experience: items.map((i) => ({ ...i, bullets: bullets.filter((b) => b.experience_item_id === i.id) })),
       education: (await c.query("SELECT * FROM education_item ORDER BY end_date DESC NULLS FIRST")).rows,
@@ -294,6 +297,17 @@ export async function saveAbout(pool: pg.Pool, cfg: AppConfig, session: Session,
        enc("applicant.phone", a.phone), a.city?.trim() || null, a.region?.trim() || null, a.country?.trim() || null,
        a.timezone?.trim() || "UTC", enc("applicant.work_auth_summary", a.workAuthSummary), JSON.stringify(a.links ?? {})],
     );
+  });
+}
+
+/** Saves the applicant's About as they wrote it. Empty clears it (it can then be filled from a resume again). */
+export async function saveSummary(pool: pg.Pool, cfg: AppConfig, session: Session, text: string): Promise<void> {
+  const t = normaliseAbout(text);
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const dk = await dataKeyFor(c, cfg, session.applicantId);
+    await c.query("UPDATE applicant SET about_enc = $2, about_source = $3, about_updated_at = now(), updated_at = now() WHERE id = $1",
+      [session.applicantId, t ? encryptField(dk, "applicant.about", t) : null, t ? "applicant" : null]);
+    await recordAudit(c, "profile.about_saved", { objectType: "applicant", objectId: session.applicantId, payload: { chars: t.length } });
   });
 }
 

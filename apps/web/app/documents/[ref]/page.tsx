@@ -174,6 +174,7 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
           <a href="/profile/import">Add your resume</a> or <a href="/profile/experience">a role</a>, then go back to the job and press "Prepare a fresh draft".</p>
       ) : null}
       <p className="muted">Showing {shown} of your {total} lines, to fit about {s.targetPages} {s.targetPages === 1 ? "page" : "pages"}. Names, dates and numbers come straight from your profile.</p>
+      <SummaryBlock d={d} s={s} here={here} editable={editable} />
       <h2>Experience</h2>
       {s.experience.map((it, ii) => (
         <article key={it.itemId} className={`doc-item${it.included ? "" : " is-off"}`}>
@@ -222,6 +223,34 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
       {s.education.length ? (<><h2>Education</h2><ul>{s.education.map((e) => <li key={e.id}>{[e.degree, e.field].filter(Boolean).join(", ")}{e.degree || e.field ? ", " : ""}{e.institution}{e.end ? ` (${monthYear(e.end)})` : ""}</li>)}</ul></>) : null}
       {s.credentials.length ? (<><h2>Certifications</h2><ul>{s.credentials.map((c) => <li key={c.id}>{[c.name, c.issuer].filter(Boolean).join(", ")}</li>)}</ul></>) : null}
     </section>
+  );
+}
+
+/** The About at the top of the resume (Yong, 2026-11-17): written for this job from the profile's facts. */
+function SummaryBlock({ d, s, here, editable }: { d: DocumentView; s: ResumeSource; here: string; editable: boolean }) {
+  const sum = s.summary;
+  if (!sum) {
+    return editable ? <p className="muted">No summary at the top: your profile has no About yet. <a href="/profile#about">Add your About</a>, then make a new version.</p> : null;
+  }
+  return (
+    <div className={`doc-para${sum.included ? "" : " is-off"}`}>
+      <h2>Summary</h2>
+      {sum.text.split(/\n+/).filter((x) => x.trim()).map((p, i) => <p key={i}>{p}</p>)}
+      {sum.transform === "rephrased" ? <span className="chip">Written for this job</span> : sum.transform === "selected" ? <span className="chip">First part of your About</span> : null}
+      {editable ? (
+        <span className="line-tools">
+          <form action={editAction}>{hidden(d, here, { op: "toggle_summary" })}<button className="small secondary">{sum.included ? "Leave out" : "Put back"}</button></form>
+          {sum.transform !== "verbatim" && sum.original.trim() ? <form action={editAction}>{hidden(d, here, { op: "summary_original" })}<button className="small secondary">Use my About</button></form> : null}
+          <details className="mini"><summary>Edit</summary>
+            <form action={editAction} className="inline-form">{hidden(d, here, { op: "edit_summary" })}
+              <label>Wording<textarea name="text" rows={5} defaultValue={sum.text} maxLength={2600} /></label>
+              <button className="small">Save</button>
+            </form>
+            <p className="hint">Titles, employers, numbers and years must match your About or the roles it rests on. To change a fact, change your profile.</p>
+          </details>
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -291,6 +320,18 @@ function ChangesPane({ d, here }: { d: DocumentView; here: string }) {
         </div>
       ) : null}
 
+      {s.kind === "resume" && s.summary ? (
+        <div className="card">
+          <h2>Summary</h2>
+          {!s.summary.included ? <p><span className="chip">Left out</span> <span className="muted">{s.summary.text}</span></p>
+            : s.summary.transform === "rephrased" ? (<>
+              <span className="chip">Written for this job</span>
+              {s.summary.original.trim() ? <div className="diff-old">Your About: {s.summary.original}</div> : <div className="diff-old">You have no About yet, so this was written from your roles and skills.</div>}
+              <div className="diff-new">This version: {s.summary.text}</div>
+            </>)
+            : <><span className="chip">{s.summary.transform === "selected" ? "First part of your About" : "Same"}</span> {s.summary.text}</>}
+        </div>
+      ) : null}
       {s.kind === "resume" ? (
         <div className="card">
           <h2>Your lines in this version</h2>

@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  ANSWER_PRESETS, contactFromResume, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor,
+  aboutFromResume, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor,
   type ProfileField, type ResumeFileKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -23,15 +23,19 @@ import { asApplicant, dataKeyFor } from "./profile";
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Fills empty profile details (name, email, phone, city, LinkedIn, GitHub, website) from the newest uploaded resume. Returns what it filled. */
+/**
+ * Fills empty profile details (name, email, phone, city, LinkedIn, GitHub, website, About) from the
+ * newest uploaded resume. Returns what it filled. The About is the resume's own summary, word for
+ * word (Yong, 2026-11-17); once the applicant has an About it is never replaced from a file.
+ */
 export async function fillProfileFromResume(c: pg.PoolClient, cfg: AppConfig, applicantId: string): Promise<string[]> {
-  const a = (await c.query("SELECT legal_name_enc, preferred_name, email_enc, phone_enc, city, region, links FROM applicant WHERE id = $1", [applicantId])).rows[0];
+  const a = (await c.query("SELECT legal_name_enc, preferred_name, email_enc, phone_enc, city, region, links, about_enc FROM applicant WHERE id = $1", [applicantId])).rows[0];
   if (!a) return [];
   const links = (a.links ?? {}) as Record<string, string>;
   const has = (re: RegExp) => Object.entries(links).some(([k, v]) => re.test(k) || re.test(String(v)));
   const want = {
     name: !a.legal_name_enc, email: !a.email_enc, phone: !a.phone_enc, city: !a.city,
-    linkedin: !has(/linkedin/i), github: !has(/github/i), website: !has(/^(website|portfolio|site|web)$/i),
+    linkedin: !has(/linkedin/i), github: !has(/github/i), website: !has(/^(website|portfolio|site|web)$/i), about: !a.about_enc,
   };
   if (!Object.values(want).some(Boolean)) return [];
   const files = (await c.query(
@@ -39,12 +43,21 @@ export async function fillProfileFromResume(c: pg.PoolClient, cfg: AppConfig, ap
   if (!files.length) return [];
   const dk = await dataKeyFor(c, cfg, applicantId);
   const found: ReturnType<typeof contactFromResume> = { links: {} };
+  let about: { text: string; source: "resume" | "linkedin" } | null = null;
   for (const f of files) {
     let text = "";
     try {
       const bytes = open(dk, f.content_enc, "file:resume_file.content");
-      text = f.file_kind === "zip" ? parseLinkedInExport(bytes).sourceText : await extractText(f.file_kind as ResumeFileKind, bytes);
+      if (f.file_kind === "zip") {
+        const li = parseLinkedInExport(bytes);
+        text = li.sourceText;
+        if (!about && li.about) about = { text: li.about, source: "linkedin" };
+      } else text = await extractText(f.file_kind as ResumeFileKind, bytes);
     } catch { continue; }
+    if (!about && f.file_kind !== "zip") {
+      const t = aboutFromResume(text);
+      if (t) about = { text: t, source: f.kind === "linkedin" ? "linkedin" : "resume" };
+    }
     const k = contactFromResume(text);
     found.name ??= k.name; found.email ??= k.email; found.phone ??= k.phone;
     if (!found.city && k.city) { found.city = k.city; found.region = k.region; }
@@ -66,6 +79,11 @@ export async function fillProfileFromResume(c: pg.PoolClient, cfg: AppConfig, ap
   const add: Record<string, string> = {};
   for (const k of ["linkedin", "github", "website"] as const) if (want[k] && found.links[k]) { add[k] = found.links[k]!.slice(0, 300); filled.push(k); }
   if (Object.keys(add).length) await c.query("UPDATE applicant SET links = links || $2::jsonb, updated_at = now() WHERE id = $1", [applicantId, JSON.stringify(add)]);
+  if (want.about && about) {
+    await c.query("UPDATE applicant SET about_enc = $2, about_source = $3, about_updated_at = now(), updated_at = now() WHERE id = $1 AND about_enc IS NULL",
+      [applicantId, enc("about", normaliseAbout(about.text)), about.source]);
+    filled.push("about");
+  }
   if (filled.length) await recordAudit(c, "profile.filled_from_resume", { objectType: "applicant", objectId: applicantId, payload: { fields: filled.join(",") } });
   return filled;
 }
@@ -148,4 +166,9 @@ export async function saveWorkAuthAnswer(pool: pg.Pool, cfg: AppConfig, session:
     }
     await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: session.applicantId, payload: { field: preset.key, where: "saved_answers" } });
   });
+}
+
+/** "Copy from my resume" on Me: fills the About (and any other empty detail) from the uploaded resume. True when an About was found. */
+export async function fillAboutFromResume(pool: pg.Pool, cfg: AppConfig, session: Session): Promise<boolean> {
+  return withApplicant(pool, asApplicant(session), async (c) => (await fillProfileFromResume(c, cfg, session.applicantId)).includes("about"));
 }

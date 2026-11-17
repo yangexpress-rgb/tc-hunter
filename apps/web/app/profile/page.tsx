@@ -1,4 +1,4 @@
-import { coachNudges, getProfile, listGoals, profileDuplicates } from "@tc-hunter/db";
+import { coachNudges, getProfile, listGoals, listResumeFiles, profileDuplicates } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -7,7 +7,8 @@ import { TopBar } from "@/components/TopBar";
 import { AwardsSection, CertificationsSection, EducationSection, ExperienceSections, LanguagesSection, SkillsSection } from "@/components/profile/sections";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { saveAboutAction } from "./actions";
+import { EditDialog } from "@/components/profile/EditDialog";
+import { fillAboutAction, saveAboutAction, saveSummaryAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +19,8 @@ export const dynamic = "force-dynamic";
 export default async function ProfilePage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, profile, nudges, goals, copies] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
-    listGoals(pool, session), profileDuplicates(pool, session)]);
+  const [{ saved, error, params }, profile, nudges, goals, copies, files] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
+    listGoals(pool, session), profileDuplicates(pool, session), listResumeFiles(pool, session)]);
   const targets: string[] = [...new Set(goals.flatMap((g) => g.roles))];
   const a = profile.about;
   return (
@@ -36,8 +37,10 @@ export default async function ProfilePage(props: PageProps) {
         </section>
       ) : null}
 
-      <section className="card" id="about">
-        <h2>About you</h2>
+      <AboutSection text={a.summary} source={a.summarySource} hasResume={files.length > 0} />
+
+      <section className="card" id="details">
+        <h2>Contact and basics</h2>
         <form action={saveAboutAction} className="fields">
           <input type="hidden" name="back" value="/profile" />
           <label>Name we call you<input name="preferredName" defaultValue={a.preferredName} required /></label>
@@ -69,12 +72,62 @@ export default async function ProfilePage(props: PageProps) {
 
       <Details summary="How your information is kept">
         <p>{t("settings.privacy")}</p>
-        <p>Your name, contact details and work authorisation are stored locked with a key that belongs to you alone.</p>
+        <p>Your name, contact details, About and work authorisation are stored locked with a key that belongs to you alone.</p>
       </Details>
       <Advanced>
         <AdvancedRow label="Imports" value={String(profile.imports.length)} />
-        <AdvancedRow label="Encrypted fields" value="legal name, email, phone, work authorisation" />
+        <AdvancedRow label="Encrypted fields" value="legal name, email, phone, work authorisation, About" />
       </Advanced>
     </>
+  );
+}
+
+const SOURCE_NOTE: Record<string, string> = {
+  resume: "Copied word for word from your uploaded resume. Edit it to make it yours.",
+  linkedin: "Copied word for word from your LinkedIn file. Edit it to make it yours.",
+};
+
+/**
+ * About (Yong, 2026-11-17), as on LinkedIn: a short executive summary of who you are, the value
+ * you bring and your main experience. Each tailored resume opens with a version of it written
+ * for that job, from your profile's facts only.
+ */
+function AboutSection({ text, source, hasResume }: { text: string; source: string | null; hasResume: boolean }) {
+  const paragraphs = text.split(/\n+/).filter((p) => p.trim());
+  return (
+    <section className="card profile-section" id="about">
+      <header className="section-head">
+        <h2>About</h2>
+        <EditDialog icon="pencil" label="Edit About" title="Edit About">
+          <form action={saveSummaryAction} className="stack">
+            <input type="hidden" name="back" value="/profile#about" />
+            <label>About
+              <textarea name="summary" rows={12} maxLength={2600} defaultValue={text}
+                placeholder="Senior technology leader with 20 years in digital transformation and IT delivery at global companies. Known for…" />
+            </label>
+            <p className="hint">A few sentences in business language: who you are (your level, field and the scale you work at), the value you bring,
+              and your main experience and expertise, with a result or two. Up to 2,600 characters, like LinkedIn. Each tailored resume
+              starts with a version of this written for that job, using only what your profile says.</p>
+            <button>Save</button>
+          </form>
+        </EditDialog>
+      </header>
+      {paragraphs.length ? (
+        <>
+          {paragraphs.map((p, i) => <p key={i}>{p}</p>)}
+          {source && SOURCE_NOTE[source] ? <p className="muted small">{SOURCE_NOTE[source]}</p> : null}
+        </>
+      ) : (
+        <>
+          <p className="muted">No About yet. Write a short summary of who you are, the value you bring and your main experience, using the pencil.</p>
+          {hasResume ? (
+            <form action={fillAboutAction}>
+              <input type="hidden" name="back" value="/profile#about" />
+              <button className="secondary">Copy the summary from my resume</button>
+            </form>
+          ) : null}
+        </>
+      )}
+    </section>
   );
 }
