@@ -437,6 +437,15 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
         "UPDATE job_source SET health = $2, health_reason = $3, failures = failures + 1, last_checked_at = now() WHERE id = $1",
         [s.id, health, `${reason}: ${detail}`.slice(0, 300)]));
       notes.push({ source: s.name, note: PLAIN_REFUSAL[reason] ?? PLAIN_REFUSAL.unreachable! });
+      // A careers page that turns automated readers away (Cognizant, SAP) or isn't there any more:
+      // the employer's jobs are often also on a hiring system we can read, so look for it.
+      if (again && s.kind === "careers_page" && (reason === "refused" || reason === "robots" || reason === "not_found")) {
+        const better = await repair(s);
+        if (better) {
+          notes.push({ source: s.name, note: `Its careers page couldn't be read, so we now read ${better.url} instead.` });
+          await readBoard(better, false);
+        }
+      }
     }
   };
 

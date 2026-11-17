@@ -77,7 +77,9 @@ export class PoliteFetcher implements Fetcher {
         signal: ctl.signal, redirect: "follow", ...(post ? { method: "POST", body: JSON.stringify(extra.body) } : {}),
       });
       const text = await r.text();
-      if (text.length > (this.opts.maxBytes ?? 5_000_000)) throw new SourceRefusedError("too_big", `${text.length} bytes`);
+      // Job feeds of big employers (Databricks on Greenhouse, Veeva on Lever) run past 5 MB; web pages stay capped lower.
+      const cap = this.opts.maxBytes ?? (accept === "application/json" ? 40_000_000 : 5_000_000);
+      if (text.length > cap) throw new SourceRefusedError("too_big", `${text.length} bytes`);
       return { status: r.status, text, url: r.url || url, contentType: r.headers.get("content-type") ?? "" };
     } catch (e) {
       if (e instanceof SourceRefusedError) throw e;

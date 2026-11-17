@@ -57,7 +57,9 @@ describe("Workday careers sites (Yong: an Embecta job on Workday was missed)", (
     const f = new Workday();
     const spec = detectSource("https://embecta.wd1.myworkdayjobs.com/embectacareers", "Embecta")!;
     const r = await fetchSource(spec, f, (t) => /\bvp\b|it\b/i.test(t), 25, ["VP Information Technology"]);
-    expect(f.calls[0]!.body).toEqual({ appliedFacets: {}, limit: 20, offset: 0, searchText: "VP Information Technology" });
+    // First how many jobs the site lists in all, then the search for the goal's title.
+    expect(f.calls[0]!.body).toEqual({ appliedFacets: {}, limit: 20, offset: 0, searchText: "" });
+    expect(f.calls[1]!.body).toEqual({ appliedFacets: {}, limit: 20, offset: 0, searchText: "VP Information Technology" });
     expect(r.postings.map((p) => [p.title, p.employer])).toEqual([["VP, Commercial and G&A IT", "embecta"]]);
     expect(r.complete).toBe(false);
   });
