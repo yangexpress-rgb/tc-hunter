@@ -280,10 +280,16 @@ const Verdicts = z.object({
 
 const VERIFY_SYSTEM = `You check answers someone proposed for a job application against the applicant's own facts. You are the last check before an answer is typed into a real application, so be strict.
 
-For each proposed answer: find the fact that supports it and copy the supporting words exactly, character for character, from that fact's text. Mark it supported only when those words, read plainly, give that answer for that question (for a date worked out from "2 weeks from next Monday", quote the saved answer). Mark it unsupported when the answer goes beyond the facts, picks something common rather than something stated, raises a skill level, or rests on a fact about someone or something else. Naming a fact is not enough: the quote must be its words.`;
+For each proposed answer: find the fact that supports it and copy the supporting words exactly, character for character, from that fact's text. Mark it supported only when those words, read plainly, give that answer for that question (for a date worked out from "2 weeks from next Monday", quote the saved answer). Mark it unsupported when the answer goes beyond the facts, picks something common rather than something stated, raises a skill level, or rests on a fact about someone or something else. Naming a fact is not enough: the quote must be its words.
+
+The facts list every role the applicant has held and every school they attended, with dates. So an answer can also follow from that complete list:
+- "Have you worked for <employer>?" is supported as No when none of their roles is at that employer (or a clear variant of its name). Quote their most recent role as it is written in the work history.
+- "Are you currently enrolled / still in school?" is supported as No when every education row has an end date before today. Quote the latest education row's end date.
+- "Are you currently employed?" is supported as Yes when a role has no end date ("present"). Quote that role.
+These follow from the full record, not from a guess. Anything else that rests only on something being absent (a skill, a language, a tool, a certification) is NOT supported: mark it unsupported.`;
 
 export class ClaudeAnswerInferrer implements AnswerInferrer {
-  readonly version = `answers-claude-2:${ANSWER_MODEL}`;
+  readonly version = `answers-claude-3:${ANSWER_MODEL}`;
   constructor(private client: Anthropic = new Anthropic()) {}
 
   private async ask<T extends z.ZodTypeAny>(schema: T, system: string, content: string, maxTokens: number): Promise<z.infer<T>> {
