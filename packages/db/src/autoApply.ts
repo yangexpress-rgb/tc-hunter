@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice, START_QUESTION, startDateFrom, startDatePart,
   type AnswerInferrer, type InferFacts, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -235,6 +235,12 @@ export interface ApplyDeps {
 /** What was worked out for a question this run, by its words and choices (Workday asks page by page). */
 export type InferCache = Map<string, { answer: string; basis: string } | null>;
 const cacheKey = (f: FormField) => `${f.label}|${(f.options ?? []).join("/")}`;
+/**
+ * A start-date box their saved answer would fill with its words ("2 weeks from next Monday") rather than
+ * a date: the date is worked out instead.
+ */
+const savedWordsForDate = (f: FormField, p: { source: string | null; answer: string | null }) =>
+  p.source === "answer_bank" && f.type !== "checkbox" && !f.options?.length && START_QUESTION.test(f.label) && !/^[\d\s/.-]+$/.test(p.answer ?? "");
 /** Kinds of question never worked out for the applicant: statements, consents, signatures, diversity. */
 const NEVER_INFER = new Set(["eeo", "signature", "consent", "attestation"]);
 
@@ -243,7 +249,7 @@ const NEVER_INFER = new Set(["eeo", "signature", "consent", "attestation"]);
  * from them. Contact details are not sent. Returns answers by question key.
  */
 async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, fields: FormField[], cache: InferCache) {
-  const out = new Map<string, { answer: string; basis: string }>();
+  const out = new Map<string, { answer: string; basis: string; replace?: boolean }>();
   if (!deps.inferrer) return out;
   const gathered = await withApplicant(pool, auto, async (c) => {
     const { profile } = await packetProfile(c, deps.cfg, auto.applicantId, app.match_id);
@@ -251,7 +257,7 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
     const open = fields.filter((f) => {
       if (f.type === "file") return false;
       const p = proposeField(f, profile);
-      if (willFill(p)) return false;
+      if (willFill(p) && !savedWordsForDate(f, p)) return false;
       if (p.step && (NEVER_INFER.has(p.step) || (p.step === "work_auth" && !workAuthSaved))) return false;
       return true;
     });
@@ -276,17 +282,26 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   if (!gathered) return out;
   const ask: InferQuestion[] = [];
   const { facts } = gathered;
+  const startSaid = facts.saved.find((a) => /start date|available to start/i.test(a.question))?.answer;
+  const startDate = startSaid ? startDateFrom(startSaid, facts.today) : null;
+  const start = startDate ? { date: startDate, said: startSaid! } : null;
   for (const f of gathered.open) {
     const hit = cache.get(cacheKey(f));
     if (hit !== undefined) { if (hit) out.set(f.key, hit); continue; }
     // A degree question is settled by their education rows directly (an MBA is a Master's).
     const degree = f.options?.length && DEGREE_QUESTION.test(f.label.trim()) ? degreeChoice(f.options, facts.education.map((e) => e.degree)) : null;
     if (degree) { out.set(f.key, degree); cache.set(cacheKey(f), degree); continue; }
+    // A start date is worked out from their saved answer by the calendar, not by judgement ("2 weeks from next Monday").
+    if (start && f.type !== "checkbox" && !f.options?.length && START_QUESTION.test(f.label)) {
+      const a = { answer: startDatePart(f.label, start.date), basis: `Your start date: ${start.said.slice(0, 60)}`, replace: true };
+      out.set(f.key, a); continue;
+    }
     ask.push({ key: f.key, label: f.label, type: f.type, options: f.options });
   }
   // What the answers could be worked out from, as counts only (never the facts themselves).
   applyLog.info("apply.infer_facts", { goals: facts.goals.length, work: facts.work.length, education: facts.education.length,
     with_degree: facts.education.filter((e) => e.degree?.trim()).length, saved: facts.saved.length, resume: !!facts.resumeText,
+    start_saved: !!startSaid, start_read: !!start,
     from_education: gathered.open.length - ask.length });
   if (ask.length) {
     const got = await deps.inferrer.infer(ask, facts).catch((e) => {
@@ -525,7 +540,7 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
   const fields = cleanForm(form.fields);
   const prefilled = opts.prefilled ?? new Set<string>();
   const inferred = await inferAnswers(pool, auto, deps, app, fields.filter((f) => !prefilled.has(f.key)), opts.inferCache ?? new Map()).catch((e) => {
-    applyLog.warn("apply.infer_failed", { error: String(e).slice(0, 200) }); return new Map<string, { answer: string; basis: string }>();
+    applyLog.warn("apply.infer_failed", { error: String(e).slice(0, 200) }); return new Map<string, { answer: string; basis: string; replace?: boolean }>();
   });
   const result = await withApplicant(pool, auto, async (c) => {
     // Reuse the packet for this exact form once it is approved. One still waiting for review is made again,

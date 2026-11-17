@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptInferred, degreeChoice, DEGREE_QUESTION, type InferQuestion } from "../src";
+import { acceptInferred, degreeChoice, DEGREE_QUESTION, START_QUESTION, startDateFrom, startDatePart, type InferQuestion } from "../src";
 
 describe("answers worked out from the profile: only ones that fit the question", () => {
   const qs: InferQuestion[] = [
@@ -43,5 +43,27 @@ describe("the degree question, from the applicant's education rows", () => {
   it("knows a degree question by its words", () => {
     for (const l of ["Degree*", "Degree", "Highest level of education", "Education level", "Highest Degree Obtained"]) expect(DEGREE_QUESTION.test(l)).toBe(true);
     for (const l of ["Field of Study", "School or University*", "Do you have a degree in nursing?"]) expect(DEGREE_QUESTION.test(l)).toBe(false);
+  });
+});
+
+describe("the start date, from the saved answer by the calendar (Yong, 2026-11-17)", () => {
+  it("counts '2 weeks from next Monday' from the Monday after today, never today", () => {
+    expect(startDateFrom("2 weeks from next Monday", "2026-11-17")).toBe("2026-12-07"); // Tue → Mon 23rd + 14
+    expect(startDateFrom("2 weeks from next Monday", "2026-11-16")).toBe("2026-12-07"); // a Monday → the next one
+    expect(startDateFrom("Two weeks from next monday.", "2026-11-22")).toBe("2026-12-07");
+    expect(startDateFrom("2 weeks", "2026-11-17")).toBe("2026-12-01");
+    expect(startDateFrom("30 days notice", "2026-11-17")).toBe("2026-12-17");
+    expect(startDateFrom("Immediately", "2026-11-17")).toBe("2026-11-17");
+    expect(startDateFrom("2027-01-04", "2026-11-17")).toBe("2027-01-04");
+    expect(startDateFrom("1/4/2027", "2026-11-17")).toBe("2027-01-04");
+    expect(startDateFrom("Negotiable", "2026-11-17")).toBeNull();
+  });
+  it("gives the Month, Day or Year part a form asks for", () => {
+    const q = "When will you be available to start employment?";
+    expect(START_QUESTION.test(q)).toBe(true);
+    expect(startDatePart(`${q}: Month`, "2026-12-07")).toBe("12");
+    expect(startDatePart(`${q}: Day`, "2026-12-07")).toBe("7");
+    expect(startDatePart(`${q}: Year`, "2026-12-07")).toBe("2026");
+    expect(startDatePart("Start date", "2026-12-07")).toBe("12/07/2026");
   });
 });
