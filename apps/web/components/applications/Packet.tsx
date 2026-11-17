@@ -305,7 +305,8 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
 
       {p.state !== "submitted" && !p.outcomeUnknown ? (
         <ul className="plain packet-fields">
-          {p.fields.map((f) => (
+          {/* The questions waiting on the applicant come first: a long Workday form has dozens of rows (Yong, 2026-11-17). */}
+          {[...p.fields.filter((f) => f.required && !f.willFill), ...p.fields.filter((f) => !(f.required && !f.willFill))].map((f) => (
             <li key={f.id} className={f.required && !f.willFill ? "packet-field yours" : "packet-field"}>
               <div className="packet-q">{f.label}</div>
               {f.step === "work_auth" ? (
