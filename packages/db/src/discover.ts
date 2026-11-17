@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { companyKey, findBoard, goalLevelLabel, noBoardReason, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
+import { companyKey, findBoardOrAsk, goalLevelLabel, type CareersLookup, noBoardReason, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
@@ -19,6 +19,11 @@ export interface DiscoverDeps {
   perGoal?: number;
   /** Employers to look up in one run, at most (default 30). Lookups are cached for a month. */
   maxLookups?: number;
+  /**
+   * Where an employer lists its jobs when its name doesn't lead to a board (Claude, when set up).
+   * Asked for the companies named in a goal, and for a followed board that lists no jobs.
+   */
+  careers?: CareersLookup;
 }
 
 const asApplicant = (s: Session): RequestContext => ({ userAccountId: s.userAccountId, applicantId: s.applicantId, actor: "applicant" });
@@ -84,12 +89,13 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
     if (!cached) {
       if (checked >= limit && !namedKeys.has(key)) { notes.push(`Left ${idea.name} for next time (looked up ${limit} employers this round).`); continue; }
       checked++;
-      const spec = await findBoard(idea, fetcher);
+      // A company the person named is worth asking about when its name leads nowhere (Salesforce's jobs are on Workday).
+      const { spec, careersUrl } = await findBoardOrAsk(idea, fetcher, namedKeys.has(key) ? deps.careers : undefined);
       sourceId = await withApplicant(pool, ctx, async (c) => {
         const id = spec ? await upsertSource(c, spec) : null;
         await c.query(`INSERT INTO employer_board (company_key, name, job_source_id, note, checked_at) VALUES ($1, $2, $3, $4, now())
           ON CONFLICT (company_key) DO UPDATE SET name = EXCLUDED.name, job_source_id = EXCLUDED.job_source_id, note = EXCLUDED.note, checked_at = now()`,
-          [key, idea.name, id, id ? null : noBoardReason(idea)]);
+          [key, idea.name, id, id ? null : noBoardReason({ careersUrl })]);
         return id;
       });
       if (!spec) notes.push(`No public job board found for ${idea.name}.`);

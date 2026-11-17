@@ -50,20 +50,20 @@ describe("is it the same job?", () => {
 
 describe("finding it on the employer's site", () => {
   it("finds the employer's own board by its name and returns the posting there, never touching LinkedIn", async () => {
-    const f = new Sites({ [GH_LIST]: '{"jobs":[]}', [`${GH_LIST}?content=true`]: gh([{ id: 7, title: "VP, Digital Products & Technology", location: "Venice, CA" }, { id: 8, title: "Brand Manager", location: "Venice, CA" }]) });
+    const f = new Sites({ [GH_LIST]: '{"jobs":[{"id":1}]}', [`${GH_LIST}?content=true`]: gh([{ id: 7, title: "VP, Digital Products & Technology", location: "Venice, CA" }, { id: 8, title: "Brand Manager", location: "Venice, CA" }]) });
     const r = await findOnEmployerSite({ employer: "Dollar Shave Club", title: "VP, Digital Products and Technology", location: "Venice, California" }, f);
     expect(r).toMatchObject({ found: true, url: "https://job-boards.greenhouse.io/dollarshaveclub/jobs/7", title: "VP, Digital Products & Technology" });
   });
 
   it("asks where to look when the usual board names don't answer", async () => {
-    const f = new Sites({ "https://boards-api.greenhouse.io/v1/boards/dsc/jobs": '{"jobs":[]}', "https://boards-api.greenhouse.io/v1/boards/dsc/jobs?content=true": gh([{ id: 9, title: "VP, Digital Products and Technology", location: "Remote" }]) });
+    const f = new Sites({ "https://boards-api.greenhouse.io/v1/boards/dsc/jobs": '{"jobs":[{"id":1}]}', "https://boards-api.greenhouse.io/v1/boards/dsc/jobs?content=true": gh([{ id: 9, title: "VP, Digital Products and Technology", location: "Remote" }]) });
     const lookup: CareersLookup = { version: "test", async find() { return { boards: [{ kind: "greenhouse", token: "dsc" }], careersUrl: null }; } };
     expect(await findOnEmployerSite({ employer: "Dollar Shave Club", title: "VP, Digital Products and Technology", location: null }, f)).toMatchObject({ found: false, reason: /it couldn't find Dollar Shave Club's careers site/ });
     expect(await findOnEmployerSite({ employer: "Dollar Shave Club", title: "VP, Digital Products and Technology", location: null }, f, { lookup })).toMatchObject({ found: true, url: "https://job-boards.greenhouse.io/dollarshaveclub/jobs/9" });
   });
 
   it("says why when the job isn't there", async () => {
-    const f = new Sites({ [GH_LIST]: '{"jobs":[]}', [`${GH_LIST}?content=true`]: gh([{ id: 8, title: "VP, Digital Marketing", location: "Venice, CA" }]) });
+    const f = new Sites({ [GH_LIST]: '{"jobs":[{"id":1}]}', [`${GH_LIST}?content=true`]: gh([{ id: 8, title: "VP, Digital Marketing", location: "Venice, CA" }]) });
     const r = await findOnEmployerSite({ employer: "Dollar Shave Club", title: "VP, Digital Products and Technology", location: "Venice, CA" }, f);
     expect(r.found).toBe(false);
     if (!r.found) expect(r.reason).toMatch(/"VP, Digital Products and Technology" isn't on Dollar Shave Club's careers site \(boards\.greenhouse\.io\) now/);

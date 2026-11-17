@@ -674,7 +674,7 @@ describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
   const board = "https://boards-api.greenhouse.io/v1/boards/dollarshaveclub/jobs";
   const sites: Fetcher = { async get(url: string) {
     if (/linkedin|indeed/.test(url)) throw new Error("fetched LinkedIn");
-    const text = url === board ? '{"jobs":[]}' : url === `${board}?content=true`
+    const text = url === board ? '{"jobs":[{"id":1}]}' : url === `${board}?content=true`
       ? JSON.stringify({ jobs: [{ id: 41, title: "Operations Analyst", location: { name: "Remote, US" }, absolute_url: "https://job-boards.greenhouse.io/dollarshaveclub/jobs/41", content: "Reports" }] }) : undefined;
     if (text === undefined) throw new SourceRefusedError("not_found", url);
     return { status: 200, text, url, contentType: "application/json" };

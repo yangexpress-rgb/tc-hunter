@@ -114,6 +114,12 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
       if (page.length < 20 || offset + 20 >= Number(r.total ?? 0)) break;
     }
   }
+  // How many jobs the whole site lists, not only those the searches found.
+  let listed = list.size;
+  if (terms.length) {
+    const all = JSON_OR((await f.get(`${api}/jobs`, { headers: WORKDAY_HEADERS, body: { appliedFacets: {}, limit: 1, offset: 0, searchText: "" } })).text, "Workday");
+    listed = Math.max(listed, Number(all.total ?? 0) || 0);
+  }
   const related = [...list.values()].filter((j) => wanted(String(j.title ?? "")));
   const postings: RawPosting[] = [];
   for (const j of related.slice(0, maxDetails)) {
@@ -122,7 +128,7 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
       if (!(e instanceof SourceRefusedError) || e.reason !== "not_found") throw e;
     }
   }
-  return { postings, complete: false, checked: list.size, notes: related.length > maxDetails ? [`Read the first ${maxDetails} related jobs only.`] : [] };
+  return { postings, complete: false, checked: list.size, listed, notes: related.length > maxDetails ? [`Read the first ${maxDetails} related jobs only.`] : [] };
 }
 
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -242,6 +248,8 @@ export interface SourceFetchResult {
   /** True when this is the whole current list, so anything missing has closed. */
   complete: boolean;
   checked: number;
+  /** How many jobs the source lists in all, whether or not they fit. 0 means it lists none. */
+  listed: number;
   notes: string[];
 }
 
@@ -259,17 +267,17 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
     case "greenhouse": {
       const r = JSON_OR((await f.get(`https://boards-api.greenhouse.io/v1/boards/${key}/jobs?content=true`)).text, "Greenhouse");
       const jobs = (r.jobs ?? []) as Obj[];
-      return { postings: jobs.map((j) => readGreenhouseJob(j, spec.name)), complete: true, checked: jobs.length, notes: [] };
+      return { postings: jobs.map((j) => readGreenhouseJob(j, spec.name)), complete: true, checked: jobs.length, listed: jobs.length, notes: [] };
     }
     case "lever": {
       const r = JSON_OR((await f.get(`https://api.lever.co/v0/postings/${key}?mode=json`)).text, "Lever");
       const jobs = (Array.isArray(r) ? r : []) as Obj[];
-      return { postings: jobs.map((j) => readLeverJob(j, spec.name)), complete: true, checked: jobs.length, notes: [] };
+      return { postings: jobs.map((j) => readLeverJob(j, spec.name)), complete: true, checked: jobs.length, listed: jobs.length, notes: [] };
     }
     case "ashby": {
       const r = JSON_OR((await f.get(`https://api.ashbyhq.com/posting-api/job-board/${key}?includeCompensation=true`)).text, "Ashby");
       const jobs = ((r.jobs ?? []) as Obj[]).filter((j) => j.isListed !== false);
-      return { postings: jobs.map((j) => readAshbyJob(j, spec.name)), complete: true, checked: jobs.length, notes: [] };
+      return { postings: jobs.map((j) => readAshbyJob(j, spec.name)), complete: true, checked: jobs.length, listed: jobs.length, notes: [] };
     }
     case "smartrecruiters": {
       const list: Obj[] = [];
@@ -285,7 +293,7 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
         const d = JSON_OR((await f.get(`https://api.smartrecruiters.com/v1/companies/${key}/postings/${encodeURIComponent(String(j.id))}`)).text, "SmartRecruiters");
         postings.push(readSmartRecruitersJob(d, spec.name));
       }
-      return { postings, complete: false, checked: list.length, notes: want.length < list.filter((j) => wanted(String(j.name ?? ""))).length ? ["Read the first 25 related jobs only."] : [] };
+      return { postings, complete: false, checked: list.length, listed: list.length, notes: want.length < list.filter((j) => wanted(String(j.name ?? ""))).length ? ["Read the first 25 related jobs only."] : [] };
     }
     case "workday": return fetchWorkday(spec, f, wanted, maxDetails, terms);
     case "careers_page": {
@@ -302,10 +310,10 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
         complete = false;
       }
       postings = postings.map((p) => ({ ...p, employer: p.employer || spec.name }));
-      return { postings, complete, checked: postings.length, notes: postings.length ? [] : ["No job listings we can read were found on this page."] };
+      return { postings, complete, checked: postings.length, listed: postings.length, notes: postings.length ? [] : ["No job listings we can read were found on this page."] };
     }
     default:
-      return { postings: [], complete: false, checked: 0, notes: [] };
+      return { postings: [], complete: false, checked: 0, listed: 0, notes: [] };
   }
 }
 
