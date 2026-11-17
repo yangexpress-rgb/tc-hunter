@@ -31,6 +31,7 @@ beforeAll(async () => {
       '<fieldset><legend>Open to travel?</legend><div><input type="radio" name="travel" id="ty" value="1" style="position:absolute;left:-9999px"><label for="ty">Yes</label>' +
       '<input type="radio" name="travel" id="tn" value="2" style="position:absolute;left:-9999px"><label for="tn">No</label></div></fieldset>' +
       '<label for="pct">Percentage</label><input id="pct" type="text">' +
+      '<div data-automation-id="formField-rel"><label>Are you open to relocation?*</label><button type="button" aria-haspopup="listbox" id="rel" aria-labelledby="rel rq">No</button><span id="rq">Required</span></div>' +
       '<label for="num">Percentage you are willing to travel</label><input id="num" type="text">' +
       '<script>document.getElementById("num").addEventListener("change", function (e) { if (!/^\\d+$/.test(e.target.value)) e.target.value = ""; });' +
       'document.getElementById("pct").addEventListener("change", function (e) { if (!window.typed) { window.typed = 1; e.target.value = ""; } });</script></form>');
@@ -208,7 +209,9 @@ describe.skipIf(!available)("tick boxes, radio buttons and blanks drawn or reset
       expect((await page.fill([{ key: "#ft", type: "checkbox", value: "Yes" }, { key: "radio:travel", type: "radio", value: "Yes" }, { key: "#pct", type: "text", value: "25" }, { key: "#num", type: "text", value: "Up to 25%" }])).map((r) => r.status))
         .toEqual(["filled", "filled", "filled", "filled"]);
       const form = await page.readForm();
-      expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#ft", "radio:travel", "#pct", "#num"]);
+      // A list button already showing an answer is still named by its question, not by "No Required".
+      expect(form.fields.find((f) => f.key === "#rel")?.label).toBe("Are you open to relocation?*");
+      expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#ft", "radio:travel", "#pct", "#rel", "#num"]);
     } finally { await page.close(); }
   });
 });
