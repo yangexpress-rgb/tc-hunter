@@ -19,7 +19,7 @@ import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./
  * one press of Submit. The real browser runs against local pages in apps/worker/test.
  */
 
-interface FakeSpec { url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
+interface FakeSpec { growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
 
 class FakePage implements ApplyPage {
   values = new Map<string, string>();
@@ -31,6 +31,8 @@ class FakePage implements ApplyPage {
   async readForm(): Promise<PageForm> {
     // "more" questions appear once the first answers are in (a form that grows as you answer).
     const fields = this.fills.length && this.spec.more ? [...this.spec.fields, ...this.spec.more] : this.spec.fields;
+    // A dropdown that lists more choices once it has been opened (Greenhouse's new forms): same questions, new shape.
+    if (this.fills.length && this.spec.growOptions) return { url: this.spec.url, fields: fields.map((f) => ({ ...f, options: f.options ? [...f.options, "Other"] : f.options, hasValue: this.values.has(f.key) })), captcha: !!this.spec.captcha, humanCheck: false };
     return { url: this.spec.url, fields: fields.map((f) => ({ ...f, hasValue: this.values.has(f.key) })), captcha: !!this.spec.captcha, humanCheck: false };
   }
   async fill(items: FillItem[]) {
@@ -95,7 +97,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Dollar Shave Club", "Nowhere Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Dollar Shave Club", "Nowhere Co", "Choices Co"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: ["Dollar Shave Club", "Nowhere Co"].includes(emp) ? `https://www.linkedin.com/jobs/view/${emp.length}` : `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -260,6 +262,24 @@ describe("Approve every send", () => {
     await runNow();
     expect((await applyStatus(pool, yong, apps[6]!)).status).toBe("sent");
     expect(browser.clicks).toBe(clicks + 1);
+    await saveApplyMode(pool, cfg, yong, "hands_free");
+  });
+
+  it("dropdowns that list more choices after filling aren't new questions: approved answers lead to the send, not another approval", async () => {
+    await saveApplyMode(pool, cfg, yong, "approve_each");
+    browser.spec = () => ({ url: GH(8), fields: BASE, after: "thanks", growOptions: true });
+    const ref = apps.at(-1)!;
+    await approveResume(ref);
+    await requestApply(pool, yong, ref);
+    await runNow();
+    expect(await applyStatus(pool, yong, ref)).toMatchObject({ status: "waiting", waitingFor: "approve_answers" });
+    const p = (await getPacket(pool, cfg, yong, ref))!;
+    await approvePacket(pool, yong, p.id, p.hash, "rk-grow-1");
+    await continueAfterAnswers(pool, yong, ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s).toMatchObject({ status: "waiting", waitingFor: "approve_send" });
+    expect(s.steps.map((x) => x.text).join("\n")).not.toMatch(/More questions appeared/);
     await saveApplyMode(pool, cfg, yong, "hands_free");
   });
 });
@@ -660,7 +680,7 @@ describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
     await saveApplyMode(pool, cfg, yong, "hands_free");
     applyDeps = { ...applyDeps, fetcher: sites };
     browser.spec = () => ({ url: "https://job-boards.greenhouse.io/dollarshaveclub/jobs/41", fields: BASE, after: "thanks" });
-    const ref = apps.at(-2)!;
+    const ref = apps.at(-3)!;
     await approveResume(ref);
     await runNow();
     const s = await applyStatus(pool, yong, ref);
@@ -675,7 +695,7 @@ describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
 
   it("no match on the employer's site: it says why, in red, and leaves it to the applicant", async () => {
     const opened = browser.opened.length;
-    const ref = apps.at(-1)!;
+    const ref = apps.at(-2)!;
     await approveResume(ref);
     await runNow();
     const s = await applyStatus(pool, yong, ref);
