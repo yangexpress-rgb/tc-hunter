@@ -9,6 +9,7 @@ import {
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
+import { runF9 } from "./evalF9";
 
 const log = createLogger();
 const cfg = loadConfig();
@@ -77,6 +78,10 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stoppi
 async function main() {
   log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", answers: apply?.inferrer?.version ?? "off", answers_effort: apply?.inferrer ? smart.effort : undefined, essays: apply?.drafter?.version ?? "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
   if (!apply?.inferrer) log.warn("worker.smart_answers_off", { reason: smart.problem ?? "apply browser off" });
+  // The F9 answer eval, once, when TC_EVAL_F9=1 is set on the server (it uses the server's own key).
+  if (process.env.TC_EVAL_F9 === "1" && smart.on) {
+    runF9(log).catch((e) => log.warn("eval.f9_failed", { message: String((e as Error)?.message ?? e).slice(0, 300) }));
+  }
   // One worker: anything still marked running was cut off by the last restart or update.
   try {
     const n = await recoverInterruptedWork(pool);

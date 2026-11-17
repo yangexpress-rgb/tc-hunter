@@ -180,7 +180,9 @@ the database's public address from Railway and a one-off copy of the vault onto 
   The worker's startup log line `worker.started` names the model in `answers`.
 - **Answer quality (F9):** `fixtures/f9` holds 22 real application questions with the answers a fixture
   profile supports. `npm test` checks the pipeline against them; `ANTHROPIC_API_KEY=... npm run eval:f9`
-  runs the real model and must score at least 85% right with nothing made up. Run it before and after
+  runs the real model and must score at least 85% right with nothing made up. On the server, set
+  `TC_EVAL_F9=1` and the worker runs it once at startup with its own key and logs `eval.f9_score` and one
+  `eval.f9_row` per question; remove the variable afterwards. Run it before and after
   any prompt, pipeline or model change.
 - **Health check:** `https://<your-railway-domain>/api/health` answers `ok`.
 
