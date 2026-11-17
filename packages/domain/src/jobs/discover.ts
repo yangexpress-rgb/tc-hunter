@@ -79,14 +79,20 @@ export function tokenGuesses(name: string): string[] {
 
 const parse = (text: string): unknown => { try { return JSON.parse(text); } catch { return null; } };
 
-/** Does this board answer with job data? Unknown boards answer 404 (or, on SmartRecruiters, an empty list). */
+/**
+ * Does this board answer with jobs? Unknown boards answer 404, but some answer with an empty
+ * list (Greenhouse and SmartRecruiters do, for any name). An empty board is never counted: it
+ * is usually someone else's, or an old one, and the employer posts its jobs elsewhere
+ * (Yong, 2026-11-17: Salesforce showed as connected with 0 jobs; its jobs are on Workday).
+ */
 export function boardAnswer(kind: AtsKind, text: string): boolean {
   const j = parse(text) as Record<string, any> | unknown[] | null;
   if (!j) return false;
+  const some = (x: unknown) => Array.isArray(x) && x.length > 0;
   switch (kind) {
-    case "greenhouse": return Array.isArray((j as Record<string, any>).jobs);
-    case "lever": return Array.isArray(j);
-    case "ashby": return Array.isArray((j as Record<string, any>).jobs);
+    case "greenhouse": return some((j as Record<string, any>).jobs);
+    case "lever": return some(j);
+    case "ashby": return some((j as Record<string, any>).jobs);
     case "smartrecruiters": return Number((j as Record<string, any>).totalFound ?? 0) > 0;
   }
 }
@@ -94,12 +100,18 @@ export function boardAnswer(kind: AtsKind, text: string): boolean {
 /**
  * Finds an employer's public job board. Tries the proposer's own tokens first, then
  * our guesses from the name, one kind of board at a time. Returns null when none answers.
+ * `skip` holds boards ("kind:key") already known not to list the employer's jobs.
  */
-export async function findBoard(idea: Pick<CompanyIdea, "name" | "boards" | "careersUrl">, f: Fetcher): Promise<SourceSpec | null> {
+export async function findBoard(idea: Pick<CompanyIdea, "name" | "boards" | "careersUrl">, f: Fetcher, skip: Set<string> = new Set()): Promise<SourceSpec | null> {
+  const spec = await findBoardRaw(idea, f, skip);
+  return spec && !skip.has(`${spec.kind}:${spec.key}`) ? spec : null;
+}
+
+async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careersUrl">, f: Fetcher, skip: Set<string>): Promise<SourceSpec | null> {
   const tries: Array<[AtsKind, string]> = [];
   for (const b of idea.boards ?? []) if (KINDS.includes(b.kind) && /^[a-z0-9_.-]{2,60}$/i.test(b.token)) tries.push([b.kind, b.token.toLowerCase()]);
   for (const t of tokenGuesses(idea.name)) for (const k of KINDS) tries.push([k, t]);
-  const seen = new Set<string>();
+  const seen = new Set<string>(skip);
   for (const [kind, token] of tries) {
     const id = `${kind}:${token}`;
     if (seen.has(id)) continue;
@@ -128,6 +140,27 @@ export async function findBoard(idea: Pick<CompanyIdea, "name" | "boards" | "car
     } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
   }
   return null;
+}
+
+/** Looks up where an employer lists its jobs when the usual board names don't answer (Claude, when set up). */
+export interface CareersLookup {
+  readonly version: string;
+  find(employer: string): Promise<Pick<CompanyIdea, "boards" | "careersUrl"> | null>;
+}
+
+/**
+ * An employer's board, asking `lookup` where it lists its jobs when our guesses from the
+ * name find nothing (for example Salesforce, whose jobs are on salesforce.wd12.myworkdayjobs.com).
+ */
+export async function findBoardOrAsk(idea: Pick<CompanyIdea, "name" | "boards" | "careersUrl">, f: Fetcher, lookup?: CareersLookup, skip: Set<string> = new Set()): Promise<{ spec: SourceSpec | null; careersUrl: string | null }> {
+  const spec = await findBoard(idea, f, skip);
+  if (spec || !lookup) return { spec, careersUrl: idea.careersUrl ?? null };
+  const more = await lookup.find(idea.name).catch(() => null);
+  if (!more || (!more.boards?.length && !more.careersUrl)) return { spec: null, careersUrl: idea.careersUrl ?? null };
+  // Only what the lookup adds is tried: the name guesses already failed.
+  const tried = new Set([...skip, ...tokenGuesses(idea.name).flatMap((t) => KINDS.map((k) => `${k}:${t}`))]);
+  const found = await findBoard({ name: idea.name, boards: more.boards, careersUrl: more.careersUrl ?? idea.careersUrl }, f, tried);
+  return { spec: found, careersUrl: more.careersUrl ?? idea.careersUrl ?? null };
 }
 
 /**

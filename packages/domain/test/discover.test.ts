@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardAnswer, companyKey, findBoard, noBoardReason, noBoardSentence, unreadableCareersSystem, SourceRefusedError, tokenGuesses, type Fetcher, type FetchResult } from "../src";
+import { boardAnswer, companyKey, findBoard, findBoardOrAsk, noBoardReason, noBoardSentence, unreadableCareersSystem, SourceRefusedError, tokenGuesses, type Fetcher, type FetchResult } from "../src";
 
 class Boards implements Fetcher {
   calls: string[] = [];
@@ -22,7 +22,11 @@ describe("finding employers' job boards", () => {
   });
 
   it("only counts a board that answers with job data", () => {
-    expect(boardAnswer("greenhouse", '{"jobs":[]}')).toBe(true);
+    // An empty board is someone else's or an old one (Salesforce: an empty board, its jobs are on Workday).
+    expect(boardAnswer("greenhouse", '{"jobs":[]}')).toBe(false);
+    expect(boardAnswer("greenhouse", '{"jobs":[{"id":1}]}')).toBe(true);
+    expect(boardAnswer("lever", "[]")).toBe(false);
+    expect(boardAnswer("ashby", '{"jobs":[]}')).toBe(false);
     expect(boardAnswer("lever", '{"ok":false,"error":"Document not found"}')).toBe(false);
     expect(boardAnswer("smartrecruiters", '{"totalFound":0,"content":[]}')).toBe(false);
     expect(boardAnswer("smartrecruiters", '{"totalFound":3,"content":[]}')).toBe(true);
@@ -30,7 +34,7 @@ describe("finding employers' job boards", () => {
   });
 
   it("tries the suggested board first, then guesses from the name, and returns the board that answers", async () => {
-    const f = new Boards({ "https://api.lever.co/v0/postings/northwind-traders?mode=json&limit=1": "[]" });
+    const f = new Boards({ "https://api.lever.co/v0/postings/northwind-traders?mode=json&limit=1": '[{"id":"x"}]' });
     const spec = await findBoard({ name: "Northwind Traders", boards: [{ kind: "ashby", token: "nwt" }] }, f);
     expect(spec).toMatchObject({ kind: "lever", key: "northwind-traders", name: "Northwind Traders", url: "https://jobs.lever.co/northwind-traders" });
     expect(f.calls[0]).toBe("https://api.ashbyhq.com/posting-api/job-board/nwt");
@@ -50,6 +54,19 @@ describe("finding employers' job boards", () => {
     const f = new Boards({ "https://contoso.example/careers": page });
     expect(await findBoard({ name: "Zz", careersUrl: "https://contoso.example/careers" }, f)).toMatchObject({ kind: "careers_page", name: "Zz" });
     expect(await findBoard({ name: "Zz", careersUrl: "https://www.linkedin.com/company/zz/jobs" }, new Boards({}))).toBeNull();
+  });
+
+  it("skips an empty board and asks where the employer really lists its jobs (its Workday site)", async () => {
+    const wd = "https://salesforce.wd12.myworkdayjobs.com/wday/cxs/salesforce/External_Career_Site/jobs";
+    const f = new Boards({ "https://boards-api.greenhouse.io/v1/boards/salesforce/jobs": '{"jobs":[]}', [wd]: '{"total":1200,"jobPostings":[{"title":"x"}]}' });
+    const asked: string[] = [];
+    const lookup = { version: "t", find: async (n: string) => { asked.push(n); return { boards: [], careersUrl: "https://salesforce.wd12.myworkdayjobs.com/External_Career_Site" }; } };
+    const r = await findBoardOrAsk({ name: "Salesforce" }, f, lookup);
+    expect(asked).toEqual(["Salesforce"]);
+    expect(r.spec).toMatchObject({ kind: "workday", key: "salesforce.wd12.myworkdayjobs.com/salesforce/External_Career_Site", name: "Salesforce" });
+    // The board it already follows isn't offered again.
+    const again = await findBoardOrAsk({ name: "Salesforce" }, f, lookup, new Set(["workday:salesforce.wd12.myworkdayjobs.com/salesforce/External_Career_Site"]));
+    expect(again.spec).toBeNull();
   });
 
   it("names the hiring system behind a careers site we can't read, and says so plainly", () => {

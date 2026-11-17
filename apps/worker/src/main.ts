@@ -38,7 +38,9 @@ const digest = {
 };
 // Finding places to look (Yong, 2026-11-14): Claude suggests employers for each goal when set up;
 // otherwise only the companies the person named are looked up. Every board is checked before it's followed.
-const discover = { proposer: resumeReaderName() === "claude" && process.env.TC_COMPANY_FINDER !== "rules" ? new ClaudeCompanyProposer() : new NamedCompaniesOnly() };
+const proposer = resumeReaderName() === "claude" && process.env.TC_COMPANY_FINDER !== "rules" ? new ClaudeCompanyProposer() : new NamedCompaniesOnly();
+// Claude also says where an employer lists its jobs when its name leads nowhere, or its board lists none (Yong, 2026-11-17).
+const discover = { proposer, careers: proposer instanceof ClaudeCompanyProposer ? new ClaudeCareersLookup() : undefined };
 // Job-search sites (Yong, 2026-11-14): searched first for every goal; each turns on when its free key is set,
 // in Settings (read again every minute, so a new key works without a restart) or as a Railway variable.
 let search = searchSites(process.env).sites;
@@ -65,7 +67,7 @@ const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
   inferrer: smartAnswersStatus().on ? new ClaudeAnswerInferrer() : undefined,
   drafter: smartAnswersStatus().on ? new ClaudeEssayDrafter() : undefined,
   // Jobs from LinkedIn or Indeed are applied for on the employer's own site (Yong, 2026-11-17); Claude says where to look when board names don't answer.
-  careers: discover.proposer instanceof ClaudeCompanyProposer ? new ClaudeCareersLookup() : undefined,
+  careers: discover.careers,
 };
 const smart = smartAnswersStatus();
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);

@@ -23,9 +23,26 @@ const WHY: Record<string, string> = {
 };
 const why = (reason: string | null) => WHY[String(reason ?? "").split(":")[0]!.trim()] ?? "It didn't answer as expected.";
 const KIND: Record<string, string> = {
-  job_search: "Job search site", greenhouse: "Company jobs page", lever: "Company jobs page", ashby: "Company jobs page",
-  smartrecruiters: "Company jobs page", workday: "Company jobs page (Workday)", careers_page: "Company careers page", pasted_link: "Pasted links",
+  job_search: "Job search site", greenhouse: "Company jobs page (Greenhouse)", lever: "Company jobs page (Lever)", ashby: "Company jobs page (Ashby)",
+  smartrecruiters: "Company jobs page (SmartRecruiters)", workday: "Company jobs page (Workday)", careers_page: "Company careers page", pasted_link: "Pasted links",
 };
+/** An address without https:// and www., for showing where a source is read from. */
+const shortUrl = (u: string | null) => { try { const x = new URL(String(u)); return `${x.hostname.replace(/^www\./, "")}${x.pathname.replace(/\/$/, "")}`; } catch { return ""; } };
+
+/**
+ * A source that answered but brought in nothing is not a success (Yong, 2026-11-17: Salesforce showed
+ * "connected" with 0 jobs). What it means, and what to do, depends on the kind of source.
+ */
+function noJobsAdvice(s: { name: string; kind: string; url: string; origin: string; last_listed: number | null }): { reason: string; link?: { href: string; label: string } } {
+  if (s.url === "https://www.linkedin.com/jobs/") return { reason: "No jobs came in from LinkedIn's alert emails last time. Check that your LinkedIn job alerts are on and sent to the Gmail connected here.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } };
+  if (s.kind === "job_search") return { reason: "It found no jobs for your goals' roles and places. Broader role names or more places in your goals usually help.", link: { href: "/profile/goals", label: "Edit your goals" } };
+  if (s.kind === "pasted_link") return { reason: "None of the links pasted here are open now." };
+  return {
+    reason: `${shortUrl(s.url)} answered, but lists no jobs, so it's probably not where ${s.name} posts them. We'll look for ${s.name}'s real careers site with the next search. `
+      + `If you know it, add it below: big employers often use Workday, with an address like ${companyKey(s.name).replace(/ /g, "") || "company"}.wd1.myworkdayjobs.com/Careers.`,
+    link: { href: "#add", label: "Add its jobs page" },
+  };
+}
 
 
 /**
@@ -49,7 +66,7 @@ export default async function SourcesPage(props: PageProps) {
   const HOME: Record<string, string> = { adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com" };
   // One row per source for the status table: job sites (on or not), LinkedIn alerts, and every followed page.
   // Everything on this page is one table (Yong, 2026-11-15): job sites, LinkedIn alerts, companies named, found and added by you.
-  type StatusRow = { key: string; name: string; detail?: string; kind: string; status: string; last: Date | null; jobs: number; reason: string;
+  type StatusRow = { key: string; name: string; detail?: string; kind: string; status: string; last: Date | null; jobs: number; reason: string; listed?: number | null;
     link?: { href: string; label: string }; action?: { id: string; label: string } };
   const covers = new Map(sites.map((x) => [HOME[x.id], x.covers]));
   const kindOf = (s: (typeof sources)[number]) => s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : s.origin === "search" ? "Job search site"
@@ -63,12 +80,18 @@ export default async function SourcesPage(props: PageProps) {
       const never = !s.last_checked_at;
       const failed = !never && s.health !== "ok";
       const kind = kindOf(s);
+      const where = s.kind !== "job_search" && s.kind !== "pasted_link" ? [KIND[s.kind] && kind !== KIND[s.kind] ? KIND[s.kind] : null, shortUrl(s.url)].filter(Boolean).join(" · ") : "";
       const detail = s.origin === "search" ? covers.get(s.url) ?? (s.url === "https://www.linkedin.com/jobs/" ? "Jobs from LinkedIn's alert emails in your Gmail" : undefined)
-        : s.origin === "found" ? [s.reason, s.goal_id && names.get(s.goal_id) ? `for ${names.get(s.goal_id)}` : null].filter(Boolean).join(" · ") || undefined
-        : KIND[s.kind] && kind !== KIND[s.kind] ? KIND[s.kind] : undefined;
-      return { key: s.id, name: s.name, detail, kind,
-        status: never ? "Not searched yet" : failed ? "Failed" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
-        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : "",
+        : [s.origin === "found" ? s.reason : null, s.origin === "found" && s.goal_id && names.get(s.goal_id) ? `for ${names.get(s.goal_id)}` : null, where].filter(Boolean).join(" · ") || undefined;
+      // Answered, but nothing came in: it lists no jobs at all, or (older searches) none came in.
+      const empty = !never && !failed && (s.last_listed === 0 || (s.last_listed == null && s.open_jobs === 0));
+      const noneFit = !never && !failed && !empty && s.open_jobs === 0 && (s.last_listed ?? 0) > 0;
+      const advice = empty ? noJobsAdvice(s) : null;
+      return { key: s.id, name: s.name, detail, kind, listed: s.last_listed,
+        status: never ? "Not searched yet" : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
+        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : advice ? advice.reason
+          : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.` : "",
+        link: advice?.link,
         action: { id: s.id, label: s.origin === "you" ? "Stop following" : "Don't use" } };
     }),
     ...named.filter((n) => !namedWithSource.has(n.key)).map((n) => ({ key: `named-${n.key}`, name: n.name, kind: "Company you named",
@@ -78,21 +101,22 @@ export default async function SourcesPage(props: PageProps) {
       reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
   ];
   const KINDS = [...new Set(table.map((r) => r.kind))].sort();
-  const STATUSES = ["Succeeded", "Failed", "Can't read", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
+  const STATUSES = ["Succeeded", "None fit yet", "No jobs found", "Failed", "Can't read", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
   const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
   const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
   const fQ = (params.q ?? "").slice(0, 60);
-  const COLS = [["name", "Source"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
+  const COLS = [["name", "Source"], ["detail", "Description"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
   const BACK = "/jobs/sources#status";
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "status") as (typeof COLS)[number][0];
   const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
-  const RANK: Record<string, number> = { Failed: 0, "Can't read": 0.5, Off: 1, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
+  const RANK: Record<string, number> = { Failed: 0, "No jobs found": 0.3, "Can't read": 0.5, Off: 1, "None fit yet": 3.5, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
   const val = (r: StatusRow): string | number => sortBy === "status" ? RANK[r.status] ?? 9 : sortBy === "last" ? r.last ? new Date(r.last).getTime() : -1
-    : sortBy === "jobs" ? r.jobs : String(r[sortBy]).toLowerCase();
-  const shown = table.filter((r) => (!fKind || r.kind === fKind) && (!fStatus || r.status === fStatus) && (!fQ || r.name.toLowerCase().includes(fQ.toLowerCase())))
+    : sortBy === "jobs" ? r.jobs : String(r[sortBy] ?? "").toLowerCase();
+  const shown = table.filter((r) => (!fKind || r.kind === fKind) && (!fStatus || r.status === fStatus) && (!fQ || `${r.name} ${r.detail ?? ""}`.toLowerCase().includes(fQ.toLowerCase())))
     .sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : a.name.localeCompare(b.name)) * (dir === "asc" ? 1 : -1); });
-  const bad = (st: string) => st === "Failed" || st === "Off" || st === "Can't read";
+  const bad = (st: string) => st === "Failed" || st === "Off" || st === "Can't read" || st === "No jobs found";
   const failedCount = table.filter((r) => r.status === "Failed" || r.status === "Can't read").length;
+  const emptyCount = table.filter((r) => r.status === "No jobs found").length;
   const href = (over: Record<string, string>) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries({ kind: fKind, status: fStatus, q: fQ, ...over })) if (v) p.set(k, v);
@@ -121,13 +145,13 @@ export default async function SourcesPage(props: PageProps) {
         <form method="get" action="/jobs/sources#status" className="fields">
           <label>Kind<select name="kind" defaultValue={fKind}><option value="">All</option>{KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
           <label>Status<select name="status" defaultValue={fStatus}><option value="">All</option>{STATUSES.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
-          <label>Name<input name="q" defaultValue={fQ} placeholder="e.g. Adzuna" /></label>
+          <label>Name or description<input name="q" defaultValue={fQ} placeholder="e.g. Cognizant" /></label>
           {sortBy !== "status" ? <input type="hidden" name="sort" value={sortBy} /> : null}
           {params.dir ? <input type="hidden" name="dir" value={dir} /> : null}
           <button className="small">Filter</button>
           {fKind || fStatus || fQ ? <a href="/jobs/sources#status">Clear</a> : null}
         </form>
-        <p className="muted small">{shown.length} of {table.length} sources{failedCount ? <> · <span className="error">{failedCount} failed or can't be read</span></> : null}</p>
+        <p className="muted small">{shown.length} of {table.length} sources{failedCount ? <> · <span className="error">{failedCount} failed or can't be read</span></> : null}{emptyCount ? <> · <span className="error">{emptyCount} found no jobs</span></> : null}</p>
         <div className="table-wrap">
           <table className="report jobs-matrix">
             <thead><tr>
@@ -142,7 +166,8 @@ export default async function SourcesPage(props: PageProps) {
             <tbody>
               {shown.map((r) => (
                 <tr key={r.key}>
-                  <td className="wrap">{r.name}{r.detail ? <div className="muted small">{r.detail}</div> : null}</td>
+                  <td className="wrap"><strong>{r.name}</strong></td>
+                  <td className="wrap muted small">{r.detail ?? ""}</td>
                   <td>{r.kind}</td>
                   <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
                   <td>{r.last ? ago(r.last) : "Never"}</td>
@@ -155,7 +180,7 @@ export default async function SourcesPage(props: PageProps) {
                     </form>) : null}</td>
                 </tr>
               ))}
-              {shown.length === 0 ? <tr><td colSpan={7} className="muted">No sources match these filters.</td></tr> : null}
+              {shown.length === 0 ? <tr><td colSpan={8} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>

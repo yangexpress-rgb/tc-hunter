@@ -123,3 +123,40 @@ describe("the app finds where to look, from the goals", () => {
     expect(status).toEqual({ Fabrikam: [true, null], Globex: [false, "system:Taleo"] });
   });
 });
+
+describe("a source that answers but lists no jobs (Yong, 2026-11-17: Salesforce showed connected with 0 jobs)", () => {
+  const WD = "https://initech.wd5.myworkdayjobs.com/wday/cxs/initech/Careers";
+  /** Initech's Greenhouse board is empty; its jobs are on Workday. */
+  const sites: Fetcher = { async get(url: string, o?: { body?: unknown }): Promise<FetchResult> {
+    const ok = (x: unknown) => ({ status: 200, text: JSON.stringify(x), url, contentType: "application/json" });
+    if (url.startsWith("https://boards-api.greenhouse.io/v1/boards/initech/jobs")) return ok({ jobs: [] });
+    if (url === `${WD}/jobs`) {
+      const search = String((o?.body as { searchText?: string })?.searchText ?? "");
+      return ok({ total: 2, jobPostings: search && !/operations/i.test(search) ? [] : [{ title: "Operations Analyst", externalPath: "/job/Austin/Operations-Analyst_R1" }, { title: "Chef", externalPath: "/job/Austin/Chef_R2" }] });
+    }
+    if (url === `${WD}/job/Austin/Operations-Analyst_R1`) return ok({ jobPostingInfo: { title: "Operations Analyst", jobReqId: "R1", location: "Austin, TX", jobDescription: "<p>Run SQL reports for operations.</p>" }, hiringOrganization: { name: "Initech" } });
+    throw new SourceRefusedError("not_found", url);
+  } };
+
+  it("isn't a success: it's looked up again and the employer's real careers site is followed instead", async () => {
+    const zoe = (await newApplicant(pool, cfg, "Zoe")).session;
+    await saveGoal(pool, zoe, goal({ roles: ["Operations Analyst"] }));
+    await followSource(pool, zoe, "https://boards.greenhouse.io/initech", "Initech");
+    const asked: string[] = [];
+    const careers = { version: "test", async find(n: string) { asked.push(n); return { boards: [], careersUrl: "https://initech.wd5.myworkdayjobs.com/Careers" }; } };
+    await requestScan(pool, zoe);
+    while (await runNextWork(pool, { ...deps, fetcher: sites, discover: { proposer: { version: "named-only-test", async propose() { return []; } }, careers } })) { /* drain */ }
+    expect(asked).toEqual(["Initech"]);
+    const sources = await listSources(pool, zoe);
+    expect(sources.map((s) => [s.name, s.kind, s.origin, s.last_listed, s.open_jobs])).toEqual([["Initech", "workday", "you", 2, 1]]);
+  });
+
+  it("without anywhere better to look, it stays, marked as listing no jobs", async () => {
+    const ann = (await newApplicant(pool, cfg, "Ann")).session;
+    await saveGoal(pool, ann, goal({ roles: ["Operations Analyst"] }));
+    await followSource(pool, ann, "https://boards.greenhouse.io/initech", "Initech");
+    await requestScan(pool, ann);
+    while (await runNextWork(pool, { ...deps, fetcher: sites })) { /* drain */ }
+    expect((await listSources(pool, ann)).filter((s) => s.name === "Initech").map((s) => [s.kind, s.health, s.last_listed, s.open_jobs])).toEqual([["greenhouse", "ok", 0, 0]]);
+  });
+});

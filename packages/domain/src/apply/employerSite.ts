@@ -1,4 +1,4 @@
-import { findBoard, type CompanyIdea } from "../jobs/discover";
+import { findBoard, type CareersLookup } from "../jobs/discover";
 import { SourceRefusedError, type Fetcher } from "../jobs/fetcher";
 import { fetchSource, isNoFetchHost, unreadableCareersSystem } from "../jobs/sources";
 import type { RawPosting, SourceSpec } from "../jobs/types";
@@ -11,11 +11,6 @@ import type { RawPosting, SourceSpec } from "../jobs/types";
  * used: the same title, in a place that fits. Anything less and the applicant applies themselves.
  */
 
-/** Looks up where an employer lists its jobs when the usual board names don't answer (Claude, when set up). */
-export interface CareersLookup {
-  readonly version: string;
-  find(employer: string): Promise<Pick<CompanyIdea, "boards" | "careersUrl"> | null>;
-}
 
 export interface EmployerJobQuery { employer: string; title: string; location: string | null }
 

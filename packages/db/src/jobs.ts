@@ -3,7 +3,7 @@ import { runEmailCheck, type EmailDeps } from "./email";
 import {
   companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
-  SourceRefusedError, titleIsRelated, levelOf, searchQueries, type SearchSite, type SearchSiteId,
+  SourceRefusedError, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -360,7 +360,31 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   const siteCount = queries.length ? (deps.search ?? []).length : 0;
   const total = sources.length + siteCount;
   let done = 0;
-  const readBoard = async (s: Record<string, any>) => {
+  // A board that answers but lists no jobs is usually not where the employer posts them. Up to
+  // five a search are looked up again (Claude says where, when set up) and the real one followed instead.
+  let repairs = 0;
+  const repair = async (s: Record<string, any>): Promise<Record<string, any> | null> => {
+    if (s.kind === "pasted_link" || s.kind === "job_search" || repairs >= 5) return null;
+    repairs++;
+    let spec: SourceSpec | null = null;
+    try { spec = (await findBoardOrAsk({ name: s.name }, deps.fetcher, deps.discover?.careers, new Set([`${s.kind}:${s.source_key}`]))).spec; } catch (e) {
+      if (!(e instanceof SourceRefusedError)) throw e;
+    }
+    if (!spec) return null;
+    return withApplicant(pool, ctx, async (c) => {
+      const id = await upsertSource(c, { ...spec!, name: s.name });
+      if (id === s.id) return null;
+      await c.query("UPDATE employer_board SET job_source_id = $2, note = NULL, checked_at = now() WHERE job_source_id = $1", [s.id, id]);
+      const f = (await c.query("SELECT origin, goal_id, reason FROM applicant_job_source WHERE job_source_id = $1", [s.id])).rows[0];
+      await c.query(
+        `INSERT INTO applicant_job_source (applicant_id, job_source_id, origin, goal_id, reason) VALUES (app_applicant_id(), $1, $2, $3, $4)
+         ON CONFLICT (applicant_id, job_source_id) DO UPDATE SET muted = false, updated_at = now()`, [id, f?.origin ?? "found", f?.goal_id ?? null, f?.reason ?? null]);
+      await c.query("UPDATE applicant_job_source SET muted = true, updated_at = now() WHERE job_source_id = $1", [s.id]);
+      await recordAudit(c, "source.replaced", { objectType: "job_source", objectId: id, payload: { from: s.kind, to: spec!.kind } });
+      return (await c.query("SELECT * FROM job_source WHERE id = $1", [id])).rows[0] ?? null;
+    });
+  };
+  const readBoard = async (s: Record<string, any>, again = true): Promise<void> => {
     await progress(`Reading ${s.name}`, done++, total);
     if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
@@ -384,9 +408,16 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
           const gone = await closeMissing(c, s.id, got.postings.map((p) => p.externalId));
           closed += gone.closed; events.push(...gone.eventIds);
         }
-        await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now() WHERE id = $1", [s.id]);
+        await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now(), last_listed = $2 WHERE id = $1", [s.id, got.listed]);
       });
       for (const n of got.notes) notes.push({ source: s.name, note: n });
+      if (got.listed === 0 && again) {
+        const better = await repair(s);
+        if (better) {
+          notes.push({ source: s.name, note: `Its old jobs page listed no jobs, so we now read ${better.url} instead.` });
+          await readBoard(better, false);
+        }
+      }
     } catch (e) {
       const reason = e instanceof SourceRefusedError ? e.reason : "unreachable";
       const detail = e instanceof SourceRefusedError ? e.detail : (e as Error).message;
@@ -414,10 +445,11 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     if (follow.muted) { done++; continue; }
     await progress(`Searching ${site.name}`, done++, total);
     try {
-      let taken = 0;
+      let taken = 0, listed = 0;
       for (const q of queries) {
         const found = (await site.search(q, deps.fetcher)).filter((p) => p.title && p.employer && p.descriptionText && titleIsRelated(p.title, targets));
         checked += found.length;
+        listed += found.length;
         // At most 15 a search and 60 a site each scan, best first as the site ranks them: each new job is read once.
         const take = found.slice(0, Math.min(15, 60 - taken));
         taken += take.length;
@@ -431,7 +463,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
         if (taken >= 60) break;
       }
       searched++;
-      await withApplicant(pool, ctx, (c) => c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now() WHERE id = $1", [follow.id]));
+      await withApplicant(pool, ctx, (c) => c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now(), last_listed = $2 WHERE id = $1", [follow.id, listed]));
     } catch (e) {
       const reason = e instanceof SourceRefusedError ? e.reason : "unreachable";
       const detail = e instanceof SourceRefusedError ? e.detail : (e as Error).message;
@@ -556,7 +588,7 @@ export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: 
 
 export async function listSources(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.last_success_at, s.last_checked_at, f.origin, f.reason, f.goal_id,
+    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }
