@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildLetter, buildResume, checkContext, checkLine, documentText, exportLeaks, extractText, numbersIn, renderDocument,
-  RulesLetterProposer, RulesResumeProposer, sameSkill, type ResumeProposal, type TailorPosting, type TailorProfile,
+  ClaudeLetterProposer, RulesLetterProposer, RulesResumeProposer, sameSkill, type ResumeProposal, type TailorPosting, type TailorProfile,
 } from "../src";
 
 const FX = join(__dirname, "..", "..", "..", "fixtures", "f4");
@@ -134,5 +134,60 @@ describe("selection and cover letter", () => {
     expect(d.notes).toEqual([]);
     const r = await renderDocument(d.source, header, new Date("2026-11-14T00:00:00Z"));
     expect(await extractText("docx", r.docx)).toContain("Dear Example Corp hiring team,");
+  });
+});
+
+describe("why-me cover letter (Claude writer)", () => {
+  const analysis = {
+    needs: [{ need: "modernize the sales stack", proof_ids: ["b-1"], strength: "strong" as const }, { need: "run the platform on containers", proof_ids: [], strength: "none" as const }],
+    thesis: "Sam has already moved a sales team onto Salesforce and made its approvals faster.",
+    differentiators: ["pairs CRM delivery with process redesign"],
+  };
+  const para = (role: string, text: string, fact_ids: string[]) => ({ role, text, fact_ids });
+  const good = { analysis, paragraphs: [
+    para("opening", `The ${posting.title} role needs someone who can modernize how sales works, and I have done exactly that.`, ["job-1", "b-1"]),
+    para("fit", "I led a CRM migration from a legacy system to Salesforce for 400 users.", ["b-1"]),
+    para("standout", "I also cut quote turnaround by 12% by redesigning the approval workflow.", ["b-2"]),
+    para("closing", `I would welcome a conversation about the ${posting.title} role.`, ["job-1"]),
+  ] };
+
+  const fake = (outs: unknown[]) => {
+    const calls: any[] = [];
+    const client = { beta: { messages: { parse: async (req: any) => { calls.push(req); return { stop_reason: "end_turn", parsed_output: outs[calls.length - 1] }; } } } };
+    return { client: client as any, calls };
+  };
+
+  it("analyzes the job, sends the description, and argues fit with notes for the applicant", async () => {
+    const { client, calls } = fake([good]);
+    const withDesc = { ...posting, descriptionText: "You will own the sales platform roadmap." };
+    const { proposal, meta } = await new ClaudeLetterProposer(client).propose(profile, withDesc);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].system).toMatch(/why is this applicant the right person for this role/);
+    expect(calls[0].messages[0].content).toContain("<job_description>You will own the sales platform roadmap.</job_description>");
+    expect(calls[0].messages[0].content).toContain('"kind":"skill"');
+    expect(meta.prompt_version).toBe("letter-claude-2");
+    const d = buildLetter(profile, withDesc, proposal);
+    expect(d.blocked).toEqual([]);
+    expect(d.source.paragraphs.map((p) => p.role)).toEqual(["opening", "fit", "standout", "closing"]);
+    expect(d.source.paragraphs[2]!.text).toContain("12%");
+    expect(d.notes[0]).toBe(`The case this letter makes: ${analysis.thesis}`);
+    expect(d.notes[1]).toMatch(/modernize the sales stack \(strong proof\); run the platform on containers \(no proof in your profile\)/);
+  });
+
+  it("sends paragraphs the checker would remove back once, with the reason", async () => {
+    const bad = { analysis, paragraphs: [good.paragraphs[0]!, para("fit", "I ran Kubernetes clusters for 400 users.", ["b-1"]), ...good.paragraphs.slice(2)] };
+    const { client, calls } = fake([bad, good]);
+    const { proposal } = await new ClaudeLetterProposer(client).propose(profile, posting);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].messages[2].content).toMatch(/Paragraph 2 would be removed: it names a gap skill \(Kubernetes/);
+    expect(buildLetter(profile, posting, proposal).blocked).toEqual([]);
+  });
+
+  it("keeps the first draft when the repair is no better, and the builder still removes the bad paragraph", async () => {
+    const bad = { analysis, paragraphs: [good.paragraphs[0]!, para("fit", "I ran Kubernetes clusters.", ["b-1"])] };
+    const { client } = fake([bad, bad]);
+    const d = buildLetter(profile, posting, (await new ClaudeLetterProposer(client).propose(profile, posting)).proposal);
+    expect(d.blocked.map((b) => b.reason)).toEqual(["gap_skill"]);
+    expect(documentText(d.source)).not.toMatch(/kubernetes/i);
   });
 });

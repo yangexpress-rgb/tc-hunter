@@ -40,7 +40,9 @@ export interface TailorPosting {
 }
 
 /** One line a proposer suggests: the facts it rests on and the wording. `{metric}` stands for the cited bullet's own number. */
-export interface ProposedLine { fact_ids: string[]; text: string; role?: "opening" | "evidence" | "motivation" | "closing" }
+/** Letter paragraph roles. "fit" argues one of the job's top needs with proof; "standout" is what sets the applicant apart. "evidence" is the plain rules writer's retelling. */
+export type LetterRole = "opening" | "fit" | "standout" | "evidence" | "motivation" | "closing";
+export interface ProposedLine { fact_ids: string[]; text: string; role?: LetterRole }
 export interface AliasProposal { skill_id: string; alias: string }
 
 export interface ResumeProposal {
@@ -51,7 +53,13 @@ export interface ResumeProposal {
   /** Roles, lines or skills (by id) to leave out, when the applicant's feedback asks for it. Leaving out is always safe. */
   leave_out?: string[];
 }
-export interface LetterProposal { paragraphs: ProposedLine[] }
+/** The writer's reading of the job, shown to the applicant as notes (never printed in the letter). */
+export interface LetterAnalysis {
+  needs: Array<{ need: string; proof_ids: string[]; strength: "strong" | "partial" | "none" }>;
+  thesis: string;
+  differentiators: string[];
+}
+export interface LetterProposal { paragraphs: ProposedLine[]; analysis?: LetterAnalysis }
 
 export interface GenerationMeta { proposer: string; model?: string; prompt_version?: string; /** False when feedback was given but this proposer can't follow free text. */ feedback_applied?: boolean }
 
@@ -86,7 +94,7 @@ export interface ResumeSource {
   credentials: Array<{ id: string; name: string; issuer: string | null; issuedOn: string | null }>;
 }
 
-export interface LetterParagraph { factIds: string[]; text: string; role: "opening" | "evidence" | "motivation" | "closing"; transform: Transform; included: boolean }
+export interface LetterParagraph { factIds: string[]; text: string; role: LetterRole; transform: Transform; included: boolean }
 export interface LetterSource {
   v: 1; kind: "letter";
   target: { postingId: string; title: string; employer: string };
