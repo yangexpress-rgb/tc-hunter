@@ -567,6 +567,15 @@ export async function resolveOutcome(pool: pg.Pool, session: Session, appRef: st
     } else {
       await c.query("UPDATE application_packet SET state = 'packet_ready_for_review' WHERE id = $1", [k.id]);
     }
+    // The server browser's run that was waiting on this answer ends with it, so the page shows Try again
+    // (or Sent) instead of the question it already answered (Yong, 2026-11-17).
+    await c.query(
+      `UPDATE apply_run SET status = $2, problem = $3, waiting_for = NULL, finished_at = coalesce(finished_at, now()), updated_at = now(),
+              steps = steps || jsonb_build_array(jsonb_build_object('at', now(), 'text', $4::text))
+        WHERE id = (SELECT id FROM apply_run WHERE application_id = $1 AND status = 'unclear' ORDER BY created_at DESC LIMIT 1)`,
+      [k.application_id, wentThrough ? "sent" : "failed",
+        wentThrough ? null : "You said it didn't go through, so nothing was sent. Choose Try again and TC Hunter fills in their form again for you to approve.",
+        wentThrough ? "You said it went through." : "You said it didn't go through."]);
     await recordAudit(c, "packet.outcome_resolved", { objectType: "application_packet", objectId: k.id,
       payload: { application_ref: k.app_ref, applicant_says: wentThrough ? "went_through" : "did_not" } });
     return { state: wentThrough ? "submitted" : "packet_ready_for_review" };
