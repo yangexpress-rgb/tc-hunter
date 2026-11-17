@@ -20,6 +20,8 @@ describe("answers worked out from the profile: only ones that fit the question",
       { key: "c", answer: "12", basis: "2 weeks from next Monday" },
     ]);
     expect(acceptInferred(qs, [{ key: "d", answer: "Yes", confidence: 0.6, basis: "maybe" }])).toEqual([]);
+    expect(acceptInferred([{ key: "p", label: "Please provide the percentage number that you are willing to travel.*", type: "text" }],
+      [{ key: "p", answer: "Up to 25%", confidence: 0.9, basis: "Your saved answer" }])).toEqual([{ key: "p", answer: "25", basis: "Your saved answer" }]);
     expect(acceptInferred(qs, [{ key: "d", answer: "Yes", confidence: 0.9, basis: " " }])).toEqual([]);
     expect(acceptInferred(qs, [{ key: "zz", answer: "Yes", confidence: 0.9, basis: "x" }])).toEqual([]);
   });
