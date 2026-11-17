@@ -109,7 +109,7 @@ export default async function SourcesPage(props: PageProps) {
   const fQ = (params.q ?? "").slice(0, 60);
   const COLS = [["name", "Source"], ["detail", "Description"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
   const BACK = "/jobs/sources#status";
-  const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "status") as (typeof COLS)[number][0];
+  const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "name") as (typeof COLS)[number][0];
   const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
   const RANK: Record<string, number> = { Failed: 0, "No jobs found": 0.3, "Can't read": 0.5, Off: 1, "None fit yet": 3.5, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
   const val = (r: StatusRow): string | number => sortBy === "status" ? RANK[r.status] ?? 9 : sortBy === "last" ? r.last ? new Date(r.last).getTime() : -1
@@ -149,7 +149,7 @@ export default async function SourcesPage(props: PageProps) {
           <label>Kind<select name="kind" defaultValue={fKind}><option value="">All</option>{KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
           <label>Status<select name="status" defaultValue={fStatus}><option value="">All</option>{STATUSES.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
           <label>Name or description<input name="q" defaultValue={fQ} placeholder="e.g. Cognizant" /></label>
-          {sortBy !== "status" ? <input type="hidden" name="sort" value={sortBy} /> : null}
+          {sortBy !== "name" ? <input type="hidden" name="sort" value={sortBy} /> : null}
           {params.dir ? <input type="hidden" name="dir" value={dir} /> : null}
           <button className="small">Filter</button>
           {fKind || fStatus || fQ ? <a href="/jobs/sources#status">Clear</a> : null}
@@ -170,7 +170,8 @@ export default async function SourcesPage(props: PageProps) {
               {shown.map((r) => (
                 <tr key={r.key}>
                   <td className="wrap"><strong>{r.name}</strong></td>
-                  <td className="wrap muted small">{r.detail ?? ""}</td>
+                  {/* One line to save space; press it to read the rest (Yong, 2026-11-17). */}
+                  <td className="muted small">{r.detail ? <details className="more one-line"><summary title="Show all">{r.detail}</summary></details> : null}</td>
                   <td>{r.kind}</td>
                   <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
                   <td>{r.last ? ago(r.last) : "Never"}</td>
