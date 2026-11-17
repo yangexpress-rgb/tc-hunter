@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS,
+  type AnswerInferrer, type InferFacts, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -11,7 +12,7 @@ import type { AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
 import { exportDocument } from "./documents";
 import type { EmailDeps } from "./email";
-import { attachReceipt, cleanForm, createPacket, settleUnclear } from "./assist";
+import { attachReceipt, cleanForm, createPacket, packetProfile, settleUnclear } from "./assist";
 import { approveSubmission, consumeSubmissionKey, DomainError, recordSubmitted } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
 import { tz, weeklyBudget } from "./tracker";
@@ -227,6 +228,65 @@ export interface ApplyDeps {
   pollMs?: number;
   /** Wait before opening a Workday job again after the site's own error (shorter in tests). */
   siteRetryMs?: number;
+  /** Works out answers from the applicant's goals, history and saved answers (Yong, 2026-11-17). */
+  inferrer?: AnswerInferrer;
+}
+
+/** What was worked out for a question this run, by its words and choices (Workday asks page by page). */
+export type InferCache = Map<string, { answer: string; basis: string } | null>;
+const cacheKey = (f: FormField) => `${f.label}|${(f.options ?? []).join("/")}`;
+/** Kinds of question never worked out for the applicant: statements, consents, signatures, diversity. */
+const NEVER_INFER = new Set(["eeo", "signature", "consent", "attestation"]);
+
+/**
+ * Questions TC Hunter has no sure answer for, worked out from the applicant's own facts when they follow
+ * from them. Contact details are not sent. Returns answers by question key.
+ */
+async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, fields: FormField[], cache: InferCache) {
+  const out = new Map<string, { answer: string; basis: string }>();
+  if (!deps.inferrer) return out;
+  const gathered = await withApplicant(pool, auto, async (c) => {
+    const { profile } = await packetProfile(c, deps.cfg, auto.applicantId, app.match_id);
+    const workAuthSaved = profile.answers.some((a) => a.isApplicantStep && a.approved && !a.stale && a.text.trim());
+    const open = fields.filter((f) => {
+      if (f.type === "file") return false;
+      const p = proposeField(f, profile);
+      if (willFill(p)) return false;
+      if (p.step && (NEVER_INFER.has(p.step) || (p.step === "work_auth" && !workAuthSaved))) return false;
+      return true;
+    });
+    if (!open.length) return null;
+    const goals = (await c.query("SELECT employment_types, roles, locations, workplace_types, time_frame FROM hunt_goal WHERE active ORDER BY created_at")).rows
+      .map((g) => ({ employmentTypes: g.employment_types, roles: g.roles, locations: g.locations, workplaceTypes: g.workplace_types, timeFrame: g.time_frame }));
+    const day = (d: Date | string | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);
+    const work = (await c.query("SELECT employer_name, title, start_date, end_date, employment_type FROM experience_item ORDER BY start_date DESC")).rows
+      .map((w) => ({ employer: w.employer_name, title: w.title, start: day(w.start_date)!, end: day(w.end_date), type: w.employment_type }));
+    const education = (await c.query("SELECT institution, degree, field, start_date, end_date FROM education_item ORDER BY start_date DESC NULLS LAST")).rows
+      .map((e) => ({ school: e.institution, degree: e.degree, field: e.field, start: day(e.start_date), end: day(e.end_date) }));
+    const presetLabel = new Map<string, string>(ANSWER_PRESETS.map((p) => [p.key, p.label]));
+    const saved = profile.answers.filter((a) => a.approved && !a.stale && a.text.trim())
+      .map((a) => ({ question: presetLabel.get(a.key) ?? a.key.replace(/^custom:/, ""), answer: a.text.slice(0, 500) }));
+    const home = [profile.city, profile.region, profile.country].filter(Boolean).join(", ") || null;
+    return { open, facts: { today: new Date().toISOString().slice(0, 10), employer: app.employer, jobTitle: app.title, goals, home, work, education, saved } satisfies InferFacts };
+  });
+  if (!gathered) return out;
+  const ask: InferQuestion[] = [];
+  for (const f of gathered.open) {
+    const hit = cache.get(cacheKey(f));
+    if (hit !== undefined) { if (hit) out.set(f.key, hit); continue; }
+    ask.push({ key: f.key, label: f.label, type: f.type, options: f.options });
+  }
+  if (ask.length) {
+    const got = await deps.inferrer.infer(ask, gathered.facts);
+    for (const q of ask) {
+      const a = got.find((x) => x.key === q.key);
+      const f = gathered.open.find((x) => x.key === q.key)!;
+      cache.set(cacheKey(f), a ? { answer: a.answer, basis: a.basis } : null);
+      if (a) out.set(q.key, { answer: a.answer, basis: a.basis });
+    }
+    applyLog.info("apply.inferred", { asked: ask.length, answered: got.length, by: deps.inferrer.version });
+  }
+  return out;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -445,10 +505,13 @@ interface Prepared { stop?: undefined; packetId: string; fill: FillItem[]; requi
  * Returns what to type, or why it stopped.
  */
 async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, mode: ApplyMode,
-  run: Run, form: PageForm, ats: Ats, opts: { workdayPage?: boolean; prefilled?: Set<string> } = {}): Promise<Prepared | { stop: Status }> {
+  run: Run, form: PageForm, ats: Ats, opts: { workdayPage?: boolean; prefilled?: Set<string>; inferCache?: InferCache } = {}): Promise<Prepared | { stop: Status }> {
   const keyPrefix = "";
   const fields = cleanForm(form.fields);
   const prefilled = opts.prefilled ?? new Set<string>();
+  const inferred = await inferAnswers(pool, auto, deps, app, fields.filter((f) => !prefilled.has(f.key)), opts.inferCache ?? new Map()).catch((e) => {
+    applyLog.warn("apply.infer_failed", { error: String(e).slice(0, 200) }); return new Map<string, { answer: string; basis: string }>();
+  });
   const result = await withApplicant(pool, auto, async (c) => {
     // Reuse the packet for this exact form once it is approved. One still waiting for review is made again,
     // so a new standing answer or profile change counts; answers the applicant typed are kept.
@@ -458,7 +521,7 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
           AND state IN ('approved_to_apply','filling','waiting_for_applicant','ready_to_submit') AND submission_key_used_at IS NULL
         ORDER BY version DESC LIMIT 1`, [app.id, fp])).rows[0];
     if (!k) {
-      const made = await createPacket(c, deps.cfg, auto.applicantId, app, form.url, fields, { keepTyped: true, ats });
+      const made = await createPacket(c, deps.cfg, auto.applicantId, app, form.url, fields, { keepTyped: true, ats, inferred });
       k = { id: made.packetId, state: "packet_ready_for_review" };
     }
     await c.query("UPDATE apply_run SET packet_id = $2 WHERE id = $1", [run.id, k.id]);
@@ -828,6 +891,7 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
   // Page by page: every page's questions go into one packet (keys carry the page number).
   const all: FormField[] = [];
   const prefilledAll = new Set<string>();
+  const inferCache: InferCache = new Map();
   for (let n = 1; n <= 12; n++) {
     const pg = await wd.page();
     if (pg.form.humanCheck || pg.form.captcha) { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
@@ -836,7 +900,7 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     const prefix = `p${n}|`;
     all.push(...pg.form.fields.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
     for (const f of pg.form.fields) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
-    const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll });
+    const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache });
     if ("stop" in r && r.stop) {
       // What the page asked, with the site's own choices, so a stop can be explained from the logs (no answers).
       applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, stopped: true, fields: pg.form.fields.map((f) =>
