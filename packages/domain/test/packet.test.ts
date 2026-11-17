@@ -17,6 +17,16 @@ const profile = (over: Partial<PacketProfile> = {}): PacketProfile => ({
   ...over,
 });
 
+describe("number questions (Premier, 2026-11-17)", () => {
+  const travel = (text: string) => profile({ answers: [{ id: "t1", key: "custom:Open to travel", patterns: ["travel"], text, approved: true, stale: false, isApplicantStep: false }] });
+  const q = { key: "p", label: "Please provide the percentage number that you are willing to travel.*", type: "text" as const };
+  it("takes only the number from a saved answer, and never a saved answer without one", () => {
+    expect(proposeField(q, travel("Yes, up to 25%"))).toMatchObject({ answer: "25", source: "answer_bank" });
+    expect(proposeField(q, travel("Yes"))).toMatchObject({ answer: null, source: null });
+    expect(proposeField({ key: "o", label: "Are you open to travel?", type: "select", options: ["Yes", "No"] }, travel("Yes"))).toMatchObject({ answer: "Yes" });
+  });
+});
+
 describe("proposing answers (design 5.5)", () => {
   it("fills profile facts, approved saved answers and approved documents, each with its source", () => {
     const p = profile();

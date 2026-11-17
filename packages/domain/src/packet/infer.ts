@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { matchChoice } from "./equivalents";
-import type { FieldType } from "./map";
+import { NUMBER_QUESTION, type FieldType } from "./map";
 
 /**
  * Working out an application question's answer from what the applicant already told TC Hunter
@@ -58,7 +58,7 @@ export function acceptInferred(questions: InferQuestion[], raw: Array<{ key: str
       answer = chosen;
     } else if (answer.length > 500) continue;
     // A number question ("percentage number you are willing to travel") takes just the number.
-    else if (/\b(percent(age)?|number of|how many)\b/i.test(q.label) && /\d/.test(answer)) answer = answer.match(/\d+(?:\.\d+)?/)![0];
+    else if (NUMBER_QUESTION.test(q.label) && /\d/.test(answer)) answer = answer.match(/\d+(?:\.\d+)?/)![0];
     out.push({ key: q.key, answer, basis: r.basis.trim().slice(0, 200) });
   }
   return out;
