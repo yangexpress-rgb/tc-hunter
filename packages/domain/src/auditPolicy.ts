@@ -46,6 +46,7 @@ export const AUDIT_ALLOWED_KEYS = {
   "apply.requested": ["application_ref"],
   "profile.imported": ["kind", "parser", "rows"],
   "profile.filled_from_resume": ["fields"],
+  "profile.about_saved": ["chars"],
   "profile.answer_kept": ["field", "where"],
   "resume.stored": ["kind", "file_kind", "bytes"],
   "resume.digested": ["run", "parser", "added", "same", "similar"],

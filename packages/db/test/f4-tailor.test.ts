@@ -7,7 +7,7 @@ import {
   type Fetcher, type ProposeOptions, type ResumeProposer, type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, approveDocument, confirmAlias, editDocument, exportDocument, getDocument, listDocuments, markDiffViewed,
+  addEvidence, addFact, saveSummary, approveDocument, confirmAlias, editDocument, exportDocument, getDocument, listDocuments, markDiffViewed,
   newVersion, remakeDocument, requestLink, requestTailor, reviseDocument, runNextWork, savePreferences, tailorReadiness, tailorWork, listMatches, verifyAll,
   type AppConfig, type Session, type WorkDeps,
 } from "../src";
@@ -292,5 +292,29 @@ describe("making a draft again from the latest profile (Yong, 2026-11-15)", () =
     const d = (await getDocument(pool, cfg, leo, after.public_ref))!;
     expect(d.meta.feedback).toBeUndefined();
     expect(d.versions[1]).toMatchObject({ ref: before.public_ref, status: "superseded" });
+  });
+
+  it("opens the resume with the applicant's About, and edits to it are checked like any line", async () => {
+    // Yong, 2026-11-17: an About on Me, and a summary at the top of each resume written for the job.
+    await saveSummary(pool, cfg, yong, "Solutions lead who ships CRM programs that sales teams actually use.");
+    await requestTailor(pool, yong, jobRef, ["resume"]);
+    await drain();
+    const latest = (await listDocuments(pool, yong, jobRef)).find((d) => d.type === "tailored_resume")!;
+    const d = (await getDocument(pool, cfg, yong, latest.public_ref))!;
+    if (d.source.kind !== "resume") throw new Error("not a resume");
+    expect(d.source.summary).toMatchObject({ text: "Solutions lead who ships CRM programs that sales teams actually use.", factIds: [yong.applicantId], transform: "verbatim", included: true });
+    const claims = await ownerQuery("SELECT section, rendered_text FROM document_claim WHERE document_id = $1 ORDER BY ordinal LIMIT 1", [d.id]);
+    expect(claims.rows[0]).toMatchObject({ section: "summary" });
+    await expect(editDocument(pool, cfg, yong, d.id, { op: "edit_summary", text: "Expert solutions lead who ships CRM programs." }))
+      .rejects.toThrow("TC_CLAIM_BLOCKED_PROFICIENCY_RAISE");
+    await expect(editDocument(pool, cfg, yong, d.id, { op: "edit_summary", text: "Solutions lead with 30 years shipping CRM programs." }))
+      .rejects.toThrow("TC_CLAIM_BLOCKED_NUMBER_MISMATCH");
+    await editDocument(pool, cfg, yong, d.id, { op: "edit_summary", text: "Solutions lead who ships CRM programs sales teams actually use." });
+    await editDocument(pool, cfg, yong, d.id, { op: "toggle_summary" });
+    let e = (await getDocument(pool, cfg, yong, latest.public_ref))!;
+    expect(e.source.kind === "resume" && e.source.summary).toMatchObject({ text: "Solutions lead who ships CRM programs sales teams actually use.", transform: "rephrased", included: false });
+    await editDocument(pool, cfg, yong, d.id, { op: "summary_original" });
+    e = (await getDocument(pool, cfg, yong, latest.public_ref))!;
+    expect(e.source.kind === "resume" && e.source.summary).toMatchObject({ text: "Solutions lead who ships CRM programs that sales teams actually use.", transform: "verbatim", included: true });
   });
 });

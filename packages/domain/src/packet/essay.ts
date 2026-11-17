@@ -41,7 +41,7 @@ export function checkEssay(paragraphs: ProposedLine[], ctx: CheckContext, postin
     const r = checkLine(p.text, p.fact_ids, ctx);
     if (r.ok) kept.push({ text: r.text, factIds: p.fact_ids }); else blocked++;
   }
-  const evidence = kept.some((k) => k.factIds.some((id) => id !== postingId && ["experience_bullet", "experience_item", "story", "answer"].includes(ctx.facts.get(id)?.kind ?? "")));
+  const evidence = kept.some((k) => k.factIds.some((id) => id !== postingId && ["experience_bullet", "experience_item", "story", "answer", "about"].includes(ctx.facts.get(id)?.kind ?? "")));
   if (!kept.length || !evidence) return null;
   let text = "";
   for (const k of kept) {
@@ -69,6 +69,7 @@ Rules you must never break:
 - Never claim a skill listed under "gaps".
 - Reasons for wanting this job or employer come only from the applicant's approved answers and stories ("motivation" facts). With none, don't invent a reason: write about what their experience brings to the job instead.
 - A "describe a time" question is answered from one approved story or the bullets of one role.
+- "Tell us about yourself" or "summarise your background": start from the applicant's About (the "about" fact, their own executive summary), in first person, and support it with their roles and bullets.
 - 1 to 3 short paragraphs per question, first person, plain and specific, no flattery, no clichés.
 - If the facts don't give enough to answer a question honestly, return no paragraphs for it.`;
 
@@ -78,10 +79,11 @@ export class ClaudeEssayDrafter implements EssayDrafter {
 
   async draft(questions: EssayQuestion[], profile: TailorProfile, posting: TailorPosting): Promise<EssayDraft[]> {
     if (!questions.length) return [];
-    const facts = profile.experience.filter((e) => e.verified).flatMap((e) => [
+    const about = profile.about?.text.trim() ? [{ id: profile.about.id, kind: "about", text: profile.about.text }] : [];
+    const facts = [...about, ...profile.experience.filter((e) => e.verified).flatMap((e) => [
       { id: e.id, kind: "role", text: [e.title, e.employer].filter(Boolean).join(" at ") },
       ...e.bullets.filter((b) => b.verified).map((b) => ({ id: b.id, kind: "bullet", role_id: e.id, text: b.metricValue !== null ? b.text.replace(String(b.metricValue), "{metric}") : b.text })),
-    ]);
+    ])];
     const skills = profile.skills.filter((s) => s.verified).map((s) => ({ id: s.id, name: s.name, level: s.proficiency ?? "not stated" }));
     const motivation = [
       ...profile.answers.filter((a) => a.approved && MOTIVATION_KEYS.includes(a.key)).map((a) => ({ id: a.id, kind: "answer", text: a.text })),

@@ -207,6 +207,7 @@ export const L1 = {
 
   // Errors (every error code maps to one of these)
   "error.generic": "Something went wrong on our side. Your information is safe. Please try again.",
+  "error.no_about_in_resume": "We couldn't find a summary in your uploaded resume. Write your About here instead, or upload a resume that has one.",
   "error.not_found": "We couldn't find that. It may have been removed.",
   "error.document_locked": "This version is approved and can't be changed. Make a new version instead.",
   "error.diff_not_viewed": "Look over the changes before you approve this version.",
@@ -331,6 +332,7 @@ export const ERROR_MESSAGES: Record<string, L1Key> = {
   TC_STEP_UP_FAILED: "settings.confirm.failed",
   TC_TOO_MANY_TRIES: "signin.locked",
   TC_SOURCE_NOT_SUPPORTED: "error.source",
+  TC_NO_ABOUT_IN_RESUME: "error.no_about_in_resume",
 };
 
 /** Layer 1 sentence for any error. Technical detail belongs in Layer 3 only. */

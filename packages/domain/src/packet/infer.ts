@@ -48,6 +48,8 @@ export interface InferFacts {
   saved: Array<{ id: string; question: string; answer: string }>;
   /** Their approved stories (situation, task, action, result). */
   stories: Array<{ id: string; title: string; text: string }>;
+  /** Their About: their own executive summary of who they are, their value and main experience. */
+  about?: string | null;
   /** Their approved resume for this job, contact details taken out. */
   resumeText?: string | null;
   /** Their own uploaded resume in full, contact details taken out. */
@@ -187,7 +189,7 @@ export interface FactText { id: string; kind: string; text: string }
 
 const KIND_LABEL: Record<string, string> = {
   job: "The job", today: "Today's date", home: "Where you live", goal: "Your goals", work: "Your work history", bullet: "Your experience",
-  skill: "Your skills", education: "Your education", credential: "Your certifications", saved: "Your saved answer", story: "Your story", resume: "Your resume for this job", master_resume: "Your resume",
+  about: "Your About", skill: "Your skills", education: "Your education", credential: "Your certifications", saved: "Your saved answer", story: "Your story", resume: "Your resume for this job", master_resume: "Your resume",
 };
 
 /** Every fact in the pack as plain text, by the id the model cites. */
@@ -197,6 +199,7 @@ export function factTexts(f: InferFacts): Map<string, FactText> {
   add("job", "job", `${f.jobTitle} at ${f.employer}`);
   add("today", "today", f.today);
   add("home", "home", f.home);
+  add("about", "about", f.about);
   for (const g of f.goals) add(g.id, "goal", [g.employmentTypes.join(", "), g.roles.join(", "), g.locations.join(", "), g.workplaceTypes.join(", "), g.timeFrame].filter(Boolean).join(" · "));
   for (const w of f.work) add(w.id, "work", [`${w.title}${w.employer ? ` at ${w.employer}` : ""}`, `${w.start} to ${w.end ?? "present"}`, w.type, w.location].filter(Boolean).join(" · "));
   for (const b of f.bullets) add(b.id, "bullet", b.text);
@@ -247,7 +250,7 @@ const Output = z.object({
 
 const SYSTEM = `You answer job application questions for an applicant, using only facts the applicant gave. You are filling in their application, so every answer must be true for them.
 
-The facts: their goals, where they live, every role they held with what they did in it (bullets), their skills with the level they stated, education, certifications, saved answers, approved stories, their resume tailored for this job and their full resume. Read all of it before answering. Each fact has an id.
+The facts: their goals, where they live, their About (their own summary of who they are), every role they held with what they did in it (bullets), their skills with the level they stated, education, certifications, saved answers, approved stories, their resume tailored for this job and their full resume. Read all of it before answering. Each fact has an id.
 
 Rules:
 - Answer only when the facts state it or it follows directly from them. Otherwise answer null. Never guess and never pick an answer just because it is common. Gaps stay gaps.

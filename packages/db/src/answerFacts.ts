@@ -72,6 +72,8 @@ export async function answerEvidence(c: pg.PoolClient, dk: Buffer, profile: Pack
     credentials: tailor.credentials.map((x) => ({ id: x.id, name: x.name, kind: x.kind, issuer: x.issuer, issuedOn: x.issuedOn })),
     saved,
     stories: tailor.stories.filter((s) => s.approved && s.text.trim()).map((s) => ({ id: s.id, title: s.title, text: s.text.slice(0, SAVED_ANSWER_CAP * 2) })),
+    // Their About, as they wrote it (contact details taken out, as for the resumes).
+    about: tailor.about?.text.trim() ? tailor.about.text.replace(EMAIL, "").replace(PHONE, "").replace(LINKS, "").trim() : null,
     resumeText, masterResumeText,
   };
   return { facts, tailor, posting };

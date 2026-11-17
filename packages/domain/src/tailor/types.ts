@@ -20,7 +20,16 @@ export interface TCredential { id: string; name: string; kind: string; issuer: s
 export interface TAnswer { id: string; key: string; text: string; approved: boolean }
 export interface TStory { id: string; title: string; text: string; linkedFactIds: string[]; approved: boolean }
 
+/**
+ * The applicant's About (Yong, 2026-11-17): their own executive summary, plus how long their
+ * career is (worked out from their roles), so a tailored summary can say "over 20 years" only
+ * when the roles show it. `id` is the applicant's id, so a line can cite it like any other fact.
+ */
+export interface TAbout { id: string; text: string; careerYears: number | null; since: string | null }
+
 export interface TailorProfile {
+  /** Optional so older callers and fixtures keep working; empty About = null. */
+  about?: TAbout | null;
   experience: TExperience[];
   education: TEducation[];
   credentials: TCredential[];
@@ -46,6 +55,8 @@ export interface ProposedLine { fact_ids: string[]; text: string; role?: LetterR
 export interface AliasProposal { skill_id: string; alias: string }
 
 export interface ResumeProposal {
+  /** The About at the top of the resume, written for this job from the cited facts. */
+  summary?: ProposedLine | null;
   lines: ProposedLine[];
   /** Skills to list, most relevant first (ids from the profile). */
   skill_ids?: string[];
@@ -84,10 +95,14 @@ export interface ResumeItem {
   itemId: string; employer: string | null; title: string; location: string | null; start: string; end: string | null; type: string;
   included: boolean; lines: ResumeLine[];
 }
+/** The About at the top of a tailored resume: checked like every other line. `original` is the applicant's own About. */
+export interface ResumeSummary { factIds: string[]; text: string; original: string; transform: Transform; included: boolean }
 export interface ResumeSource {
   v: 1; kind: "resume";
   target: { postingId: string; title: string; employer: string };
   targetPages: number;
+  /** Missing on resumes made before the About existed. */
+  summary?: ResumeSummary | null;
   experience: ResumeItem[];
   skills: Array<{ skillId: string; name: string; included: boolean }>;
   education: Array<{ id: string; institution: string; degree: string | null; field: string | null; end: string | null; honours: string | null }>;

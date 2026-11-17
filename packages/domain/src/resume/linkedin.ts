@@ -57,7 +57,7 @@ export function linkedinSourceText(files: Map<string, string>): string {
   return [...files.values()].join("\n");
 }
 
-export function parseLinkedInExport(zip: Buffer): { parsed: ParsedResume; sourceText: string } {
+export function parseLinkedInExport(zip: Buffer): { parsed: ParsedResume; sourceText: string; about: string | null } {
   const files = new Map<string, string>();
   for (const e of readZip(zip)) {
     const base = e.name.split("/").pop()!;
@@ -104,5 +104,7 @@ export function parseLinkedInExport(zip: Buffer): { parsed: ParsedResume; source
   return {
     parsed: { contact: { links: [] }, experience, education, skills, credentials, awards, parser: LINKEDIN_PARSER_VERSION, notes },
     sourceText: linkedinSourceText(files),
+    // The profile's About, as the applicant wrote it on LinkedIn (Profile.csv, "Summary").
+    about: csv("profile.csv").map((r) => (r["Summary"] ?? "").trim()).find((x) => x.length > 0) ?? null,
   };
 }
