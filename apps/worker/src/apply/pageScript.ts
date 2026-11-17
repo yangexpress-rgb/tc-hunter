@@ -196,7 +196,7 @@ export const PAGE_SCRIPT = String.raw`
     var parts = deepAll("[data-automation-id*='error' i], [data-automation-id*='alert' i], [data-automation-id*='warning' i]").filter(vis).map(function (e) { return e.getAttribute("data-automation-id") + ": " + txt(e).slice(0, 120); });
     var buttons = deepAll("button").filter(vis).map(function (e) { return (e.getAttribute("data-automation-id") || "") + "=" + txt(e).slice(0, 30); }).slice(0, 20);
     var main = document.querySelector("main, [role=main]") || document.body;
-    return { dialog: mask(dialog).slice(0, 400), invalid: invalid.join(" | "), errors: mask(parts.join(" | ")).slice(0, 600), buttons: buttons.join(" | "), text: mask(txt(main)).slice(0, 500) };
+    return { dialog: mask(dialog).slice(0, 400), invalid: invalid.join(" | "), errors: mask(parts.join(" | ")).slice(0, 600), buttons: mask(buttons.join(" | ")), text: mask(txt(main)).slice(0, 500) };
   }
 
   window.__tcApply = { isWorkdayList: isWorkdayList, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible, stuck: stuck };
