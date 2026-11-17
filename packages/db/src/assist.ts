@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
 import {
-  ADAPTERS, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, looksConfirmed, packetHash, proposeField, receiptPdf, willFill,
+  ADAPTERS, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, looksConfirmed, packetHash, proposeFields, receiptPdf, willFill,
   type Ats, type FormField, type PacketProfile, type ProposedField, type StandingKind, type StepKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -182,8 +182,9 @@ export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId
     `INSERT INTO application_packet (applicant_id, application_id, version, tailored_resume_document_id, cover_letter_document_id, form_host, ats, form_fingerprint)
      VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
     [app.id, version, resume.id, letter?.id ?? null, host, opts.ats ?? detectAts(url), formFingerprint(fields)])).rows[0];
-  const proposed = fields.map((f) => {
-    const p = proposeField(f, profile);
+  const all = proposeFields(fields, profile);
+  const proposed = fields.map((f, i) => {
+    const p = all[i]!;
     const t = typed.get(`${f.key}|${f.label}`);
     if (t !== undefined && !p.step && !willFill(p) && (!f.options?.length || f.options.includes(t))) {
       return { ...p, answer: t, source: "applicant_typed" as const, sourceRefId: null, confidence: 1, note: null };

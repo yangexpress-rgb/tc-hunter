@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
   type AnswerInferrer, type InferFacts, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -254,9 +254,10 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   const gathered = await withApplicant(pool, auto, async (c) => {
     const { profile } = await packetProfile(c, deps.cfg, auto.applicantId, app.match_id);
     const workAuthSaved = profile.answers.some((a) => a.isApplicantStep && a.approved && !a.stale && a.text.trim());
-    const open = fields.filter((f) => {
+    const all = proposeFields(fields, profile);
+    const open = fields.filter((f, i) => {
       if (f.type === "file") return false;
-      const p = proposeField(f, profile);
+      const p = all[i]!;
       if (willFill(p) && !savedWordsForDate(f, p)) return false;
       if (p.step && (NEVER_INFER.has(p.step) || (p.step === "work_auth" && !workAuthSaved))) return false;
       return true;
