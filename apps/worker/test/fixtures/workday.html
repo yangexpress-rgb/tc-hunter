@@ -131,6 +131,9 @@
       });
       on("pageFooterNextButton", function () {
         if (btn.textContent === "Select One" || !document.getElementById("fn").value || !document.querySelector("#pc-sel [data-automation-id=selectedItem]")) { var e = document.getElementById("err"); e.hidden = false; e.textContent = "Errors found: How Did You Hear About Us? is required"; return; }
+        // Premier, 2026-11-16: the first Save and Continue after filling did nothing and showed nothing.
+        document.getElementById("err").hidden = true;
+        if (!window.__nextEaten) { window.__nextEaten = 1; return; }
         S.step = 2; save(); formPage();
       });
     } else if (S.step === 2) {

@@ -614,9 +614,14 @@ class WorkdayPw extends PwPage implements WorkdayPage {
   async next(): Promise<{ moved: boolean; errors: string[] }> {
     const before = await this.where();
     const btn = (await this.has("pageFooterNextButton")) ? "pageFooterNextButton" : "bottom-navigation-next-button";
+    // A list left open (a search box's choices) takes the first press just to close itself (Premier, 2026-11-16).
+    await this.pg.keyboard.press("Escape").catch(() => {});
+    await this.pg.waitForTimeout(300);
     await this.press(btn);
     for (let i = 0; i < 30; i++) {
       await this.pg.waitForTimeout(1000);
+      // Still the same page with nothing said: press again (Save and Continue only saves; it never sends).
+      if (i === 5 || i === 15) { await this.pg.keyboard.press("Escape").catch(() => {}); await this.press(btn); }
       const now = await this.where();
       if (now && now !== before) return { moved: true, errors: [] };
       const errs = await this.pg.evaluate(() => (window as any).__tcApply?.errors() ?? []).catch(() => []) as string[];
