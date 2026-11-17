@@ -431,7 +431,9 @@ class Run {
   end(status: Status, problem: string | null, waitingFor: string | null = null, stepText?: string) {
     // Where a run stopped and why, so the logs say it without a screenshot (labels and site messages, no answers).
     applyLog.info("apply.ended", { run: this.id, status, waiting_for: waitingFor, problem: problem ?? stepText ?? null });
-    return this.set({ status, problem, waiting_for: waitingFor, finished_at: status === "waiting" ? null : new Date() }, stepText ?? problem ?? undefined, !!problem && status !== "sent");
+    // The heading shows the current step: a run that stops with a message ("Answers ready…") shows that, not the
+    // last thing it was doing ("Filling in 15 answers"), which read as if it were stuck (Yong, 2026-11-17).
+    return this.set({ status, problem, waiting_for: waitingFor, finished_at: status === "waiting" ? null : new Date(), ...(stepText ? { step: stepText } : {}) }, stepText ?? problem ?? undefined, !!problem && status !== "sent");
   }
   async shot(kind: "form_filled" | "after_submit" | "stopped", caption: string, page: ApplyPage | null, cfg: AppConfig) {
     if (!page) return;

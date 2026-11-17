@@ -279,6 +279,7 @@ describe("Approve every send", () => {
     await runNow();
     const s = await applyStatus(pool, yong, ref);
     expect(s).toMatchObject({ status: "waiting", waitingFor: "approve_send" });
+    expect(s.step).toMatch(/Their form is filled in\. Approve sending it/);
     expect(s.steps.map((x) => x.text).join("\n")).not.toMatch(/More questions appeared/);
     await saveApplyMode(pool, cfg, yong, "hands_free");
   });
