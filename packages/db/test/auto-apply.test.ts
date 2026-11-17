@@ -8,7 +8,7 @@ import {
 import {
   addEvidence, addFact, answerPacketField, applyStatus, applyStatuses, applyShot, approveDocument, approvePacket, approveServerSend, connectEmail, continueAfterAnswers,
   getApplication, getApplySettings, getPacket, listDocuments, listMatches, markDiffViewed, requestApply, requestLink, requestTailor, runNextWork,
-  saveAbout, saveAnswer, saveApplyMode, savePreferences, saveWorkAuthAnswer, setStandingAnswer, storeResumeFile, trackJob, withApplicant, getProfile,
+  resolveOutcome, saveAbout, saveAnswer, saveApplyMode, savePreferences, saveWorkAuthAnswer, setStandingAnswer, storeResumeFile, trackJob, withApplicant, getProfile,
   type AppConfig, type ApplyDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -743,5 +743,20 @@ describe("an emailed security code after Submit (Yong, 2026-11-17)", () => {
     expect(s.status).toBe("failed");
     expect(s.problem).toMatch(/emailed you a security code.*didn't arrive in your Gmail.*wasn't sent\. Choose Try again/);
     await requestApply(pool, yong, ref);
+  });
+
+  it("an unclear send the applicant says didn't go through can be tried again from the page", async () => {
+    browser.spec = () => ({ url: GH(23), fields: BASE, after: "errors" });
+    const ref = apps.at(-1)!;
+    await runNow();
+    expect((await applyStatus(pool, yong, ref)).status).toBe("unclear");
+    await resolveOutcome(pool, yong, ref, false, null, "rk-unclear-1");
+    const s = await applyStatus(pool, yong, ref);
+    expect(s).toMatchObject({ status: "failed" });
+    expect(s.problem).toMatch(/You said it didn't go through.*Choose Try again/);
+    browser.spec = () => ({ url: GH(23), fields: BASE, after: "thanks" });
+    await requestApply(pool, yong, ref);
+    await runNow();
+    expect((await applyStatus(pool, yong, ref)).status).toBe("sent");
   });
 });
