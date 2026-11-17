@@ -545,7 +545,11 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
         await run.end("failed", APPLY_PROBLEM.humanCheck);
         return { status: "failed" };
       }
-      if (formFingerprint(again.fields) === formFingerprint(form.fields)) break;
+      // Only new questions count. A dropdown that lists its choices once it has been opened (Greenhouse's new
+      // forms do) changes the form's shape but asks nothing new; treating it as new made a fresh packet to
+      // approve on every run, round and round (Dollar Shave Club, 2026-11-17).
+      const known = new Set(form.fields.map((f) => f.key));
+      if (!again.fields.some((f) => !known.has(f.key))) break;
       if (round === 2) { await run.end("failed", "Their form kept changing as answers went in, so TC Hunter stopped. Nothing was sent."); return { status: "failed" }; }
       await run.step("More questions appeared after the first answers; answering those too");
       form = again;
