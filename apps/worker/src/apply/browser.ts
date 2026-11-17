@@ -228,6 +228,15 @@ class PwPage implements ApplyPage {
     await loc.press("ControlOrMeta+a").catch(() => {});
     await loc.pressSequentially(value, { delay: 20 }).catch(() => {});
     await loc.blur().catch(() => {});
+    if (await kept()) return "filled";
+    // A number box ("percentage number you are willing to travel") throws out "Up to 25%": give it the number.
+    const num = value.match(/\d+(?:\.\d+)?/)?.[0];
+    if (num && num !== value.trim()) {
+      await loc.click({ timeout: 3000 }).catch(() => {});
+      await loc.press("ControlOrMeta+a").catch(() => {});
+      await loc.pressSequentially(num, { delay: 20 }).catch(() => {});
+      await loc.blur().catch(() => {});
+    }
     return (await kept()) ? "filled" : "failed";
   }
 

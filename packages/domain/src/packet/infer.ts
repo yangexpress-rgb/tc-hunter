@@ -57,6 +57,8 @@ export function acceptInferred(questions: InferQuestion[], raw: Array<{ key: str
       if (!chosen) continue;
       answer = chosen;
     } else if (answer.length > 500) continue;
+    // A number question ("percentage number you are willing to travel") takes just the number.
+    else if (/\b(percent(age)?|number of|how many)\b/i.test(q.label) && /\d/.test(answer)) answer = answer.match(/\d+(?:\.\d+)?/)![0];
     out.push({ key: q.key, answer, basis: r.basis.trim().slice(0, 200) });
   }
   return out;
@@ -164,7 +166,7 @@ Rules:
 - Education questions (school, degree level, field of study, years): from their education rows or resume. Pick the choice for their highest degree unless the question is about a specific school row (e.g. "MBA" is a Master's degree).
 - Government, military, or a specific kind of past employer: from their work history.
 - Legal or compliance questions (excluded, debarred, convicted, disciplined, under investigation) and questions about other organisations' relationships: null unless a saved answer says it. A "Not Sure" choice is fine when that is the honest answer and the facts can't settle it.
-- Relocation, travel, salary, notice: from their saved answers or goals only.
+- Relocation, travel, salary, notice: from their saved answers or goals only. A number question (a percentage, how many) gets just the number.
 Give a short basis naming the fact used. Confidence below 0.85 means it will be left for the applicant.`;
 
 export class ClaudeAnswerInferrer implements AnswerInferrer {

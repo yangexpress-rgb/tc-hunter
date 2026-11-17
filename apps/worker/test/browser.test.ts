@@ -31,7 +31,9 @@ beforeAll(async () => {
       '<fieldset><legend>Open to travel?</legend><div><input type="radio" name="travel" id="ty" value="1" style="position:absolute;left:-9999px"><label for="ty">Yes</label>' +
       '<input type="radio" name="travel" id="tn" value="2" style="position:absolute;left:-9999px"><label for="tn">No</label></div></fieldset>' +
       '<label for="pct">Percentage</label><input id="pct" type="text">' +
-      '<script>document.getElementById("pct").addEventListener("change", function (e) { if (!window.typed) { window.typed = 1; e.target.value = ""; } });</script></form>');
+      '<label for="num">Percentage you are willing to travel</label><input id="num" type="text">' +
+      '<script>document.getElementById("num").addEventListener("change", function (e) { if (!/^\\d+$/.test(e.target.value)) e.target.value = ""; });' +
+      'document.getElementById("pct").addEventListener("change", function (e) { if (!window.typed) { window.typed = 1; e.target.value = ""; } });</script></form>');
     res.writeHead(404).end();
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()));
@@ -203,10 +205,10 @@ describe.skipIf(!available)("tick boxes, radio buttons and blanks drawn or reset
   it("ticks, picks and types even when the input sits off screen or the site drops the first value; says filled only when it took", async () => {
     const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/drawn`);
     try {
-      expect((await page.fill([{ key: "#ft", type: "checkbox", value: "Yes" }, { key: "radio:travel", type: "radio", value: "Yes" }, { key: "#pct", type: "text", value: "25" }])).map((r) => r.status))
-        .toEqual(["filled", "filled", "filled"]);
+      expect((await page.fill([{ key: "#ft", type: "checkbox", value: "Yes" }, { key: "radio:travel", type: "radio", value: "Yes" }, { key: "#pct", type: "text", value: "25" }, { key: "#num", type: "text", value: "Up to 25%" }])).map((r) => r.status))
+        .toEqual(["filled", "filled", "filled", "filled"]);
       const form = await page.readForm();
-      expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#ft", "radio:travel", "#pct"]);
+      expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#ft", "radio:travel", "#pct", "#num"]);
     } finally { await page.close(); }
   });
 });
