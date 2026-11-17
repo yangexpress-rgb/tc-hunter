@@ -5,7 +5,7 @@
  */
 import { createPool, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
 import {
-  ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
+  ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeCareersLookup, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
@@ -64,6 +64,8 @@ const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
   // answers drafted for the applicant to approve. TC_ANSWER_INFER=off stops both (Settings then says so, in red).
   inferrer: smartAnswersStatus().on ? new ClaudeAnswerInferrer() : undefined,
   drafter: smartAnswersStatus().on ? new ClaudeEssayDrafter() : undefined,
+  // Jobs from LinkedIn or Indeed are applied for on the employer's own site (Yong, 2026-11-17); Claude says where to look when board names don't answer.
+  careers: discover.proposer instanceof ClaudeCompanyProposer ? new ClaudeCareersLookup() : undefined,
 };
 const smart = smartAnswersStatus();
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);

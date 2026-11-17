@@ -62,3 +62,40 @@ export class ClaudeCompanyProposer implements CompanyProposer {
     }
   }
 }
+
+const Where = z.object({
+  boards: z.array(z.object({
+    kind: z.enum(["greenhouse", "lever", "ashby", "smartrecruiters"]),
+    token: z.string().describe("the board's token as it appears in its public address, e.g. 'stripe' in boards.greenhouse.io/stripe"),
+  })).describe("public job boards you believe this employer uses; empty if unsure"),
+  careers_url: z.string().nullable().describe("the address of its own job listings (https); for employers on Workday, the myworkdayjobs.com address, e.g. https://acme.wd1.myworkdayjobs.com/AcmeCareers; null if unsure"),
+});
+
+/**
+ * Where one employer lists its jobs, for applying to a job found on LinkedIn or Indeed on the
+ * employer's own site (Yong, 2026-11-17). It sees only the employer's name. Its answer is only a
+ * place to look: TC Hunter then reads that site itself and uses a job only if it is really there.
+ */
+export class ClaudeCareersLookup {
+  readonly version = `careers-claude-1:${MODEL}`;
+  constructor(private client: Anthropic = new Anthropic()) {}
+
+  async find(employer: string): Promise<{ boards: Array<{ kind: "greenhouse" | "lever" | "ashby" | "smartrecruiters"; token: string }>; careersUrl: string | null } | null> {
+    try {
+      const r = await this.client.beta.messages.parse({
+        model: MODEL,
+        max_tokens: 2000,
+        betas: ["server-side-fallback-2026-07-01"],
+        fallbacks: "default",
+        output_config: { effort: "low", format: zodOutputFormat(Where) },
+        system: "You know where employers publish their job openings. Given an employer's name, say which public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and the address of its own careers listings if you know it. Never give LinkedIn, Indeed or other job aggregators. Say null or empty when unsure; never guess an address.",
+        messages: [{ role: "user", content: `<employer>${employer.slice(0, 200)}</employer>` }],
+      });
+      if (r.stop_reason === "refusal" || !r.parsed_output) return null;
+      const url = r.parsed_output.careers_url;
+      return { boards: r.parsed_output.boards, careersUrl: url && /^https:\/\//.test(url) && !/linkedin\.com|indeed\./i.test(url) ? url : null };
+    } catch {
+      return null;
+    }
+  }
+}

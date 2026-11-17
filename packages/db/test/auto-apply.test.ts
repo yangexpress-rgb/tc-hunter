@@ -54,7 +54,8 @@ class FakePage implements ApplyPage {
 class FakeBrowser implements ApplyBrowser {
   pages: FakePage[] = [];
   constructor(public spec: () => FakeSpec, public workday?: () => WorkdayPage) {}
-  async open() { const p = new FakePage(this.spec()); this.pages.push(p); return p; }
+  opened: string[] = [];
+  async open(url: string) { this.opened.push(url); const p = new FakePage(this.spec()); this.pages.push(p); return p; }
   get openWorkday() { return this.workday ? async () => this.workday!() : undefined; }
   get clicks() { return this.pages.reduce((n, p) => n + p.clicks, 0); }
 }
@@ -94,9 +95,9 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Dollar Shave Club", "Nowhere Co"];
   for (const emp of employers) {
-    await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
+    await requestLink(pool, yong, { url: ["Dollar Shave Club", "Nowhere Co"].includes(emp) ? `https://www.linkedin.com/jobs/view/${emp.length}` : `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
   await drain();
   for (const emp of employers) {
@@ -642,5 +643,45 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     const s = await applyStatus(pool, yong, apps[20]!);
     expect(s.status).toBe("waiting");
     expect(s.steps.find((x) => /Smart answers are off/.test(x.text))).toMatchObject({ bad: true });
+  });
+});
+
+describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
+  const board = "https://boards-api.greenhouse.io/v1/boards/dollarshaveclub/jobs";
+  const sites: Fetcher = { async get(url: string) {
+    if (/linkedin|indeed/.test(url)) throw new Error("fetched LinkedIn");
+    const text = url === board ? '{"jobs":[]}' : url === `${board}?content=true`
+      ? JSON.stringify({ jobs: [{ id: 41, title: "Operations Analyst", location: { name: "Remote, US" }, absolute_url: "https://job-boards.greenhouse.io/dollarshaveclub/jobs/41", content: "Reports" }] }) : undefined;
+    if (text === undefined) throw new SourceRefusedError("not_found", url);
+    return { status: 200, text, url, contentType: "application/json" };
+  } };
+
+  it("finds the same job on the employer's own site and applies there, never on LinkedIn", async () => {
+    await saveApplyMode(pool, cfg, yong, "hands_free");
+    applyDeps = { ...applyDeps, fetcher: sites };
+    browser.spec = () => ({ url: "https://job-boards.greenhouse.io/dollarshaveclub/jobs/41", fields: BASE, after: "thanks" });
+    const ref = apps.at(-2)!;
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(browser.opened.at(-1)).toBe("https://job-boards.greenhouse.io/dollarshaveclub/jobs/41");
+    expect(browser.opened.some((u) => /linkedin/.test(u))).toBe(false);
+    expect(s.steps.map((x) => x.text).join("\n")).toMatch(/Found it on Dollar Shave Club's own site \(job-boards\.greenhouse\.io\): "Operations Analyst"/);
+    expect(s.status).toBe("sent");
+    const p = (await ownerQuery("SELECT employer_apply_url, employer_lookup FROM job_posting WHERE employer_canonical = 'Dollar Shave Club'")).rows[0];
+    expect(p.employer_apply_url).toBe("https://job-boards.greenhouse.io/dollarshaveclub/jobs/41");
+    expect((await ownerQuery("SELECT 1 FROM employer_board WHERE company_key = 'dollar shave club' AND job_source_id IS NOT NULL")).rowCount).toBe(1);
+  });
+
+  it("no match on the employer's site: it says why, in red, and leaves it to the applicant", async () => {
+    const opened = browser.opened.length;
+    const ref = apps.at(-1)!;
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.status).toBe("failed");
+    expect(s.problem).toMatch(/came from LinkedIn, and TC Hunter never applies there.*couldn't find Nowhere Co's careers site.*Apply on LinkedIn yourself/);
+    expect(s.steps.at(-1)).toMatchObject({ bad: true });
+    expect(browser.opened.length).toBe(opened);
   });
 });

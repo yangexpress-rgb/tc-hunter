@@ -90,7 +90,7 @@ export default async function ApplyingSettingsPage(props: PageProps) {
             <li>It never gets past a &quot;you&apos;re a person&quot; check. It stops, shows you where, and you finish on the employer&apos;s site.</li>
             <li>Right-to-work questions are answered only from the answer saved in your profile.</li>
             <li>It presses Submit once per application. If it can&apos;t tell whether it went through, it checks your Gmail for a confirmation, then asks you. It never tries again by itself.</li>
-            <li>It never applies on LinkedIn or Indeed.</li>
+            <li>It never applies on LinkedIn or Indeed. For a job found there, it looks for the same job on the employer&apos;s own careers site and applies there. If it can&apos;t find it, it says why, and you apply on LinkedIn or Indeed yourself.</li>
             <li>It keeps to the weekly limit you set, unless you choose &quot;Apply now anyway&quot; on one application.</li>
           </ul>
         </Details>
