@@ -5,13 +5,16 @@ import {
   removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveSummary, fillAboutFromResume, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyAll, verifyFact, verifyRole, requestScan, type FactTable,
 } from "@tc-hunter/db";
-import { ANSWER_PRESETS, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
+import { ANSWER_PRESETS, ClaudeAboutFinder, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
 import { app, log, requireSession } from "@/lib/server";
 
 /** Decision 13.6: Claude with contact details and names removed when configured; the built-in reader otherwise. */
 const resumeReader = (names: string[], instructions?: string | null) =>
   (resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, names, instructions ?? null) : new RulesResumeParser());
+
+/** Claude looks for the resume's summary when the built-in rules can't find it (same switch as the resume reader). */
+const aboutFinder = () => (resumeReaderName() === "claude" ? new ClaudeAboutFinder() : undefined);
 
 /** Only ever send people back to a profile page (never an outside address). */
 function backTo(form: FormData, fallback = "/profile"): string {
@@ -123,7 +126,9 @@ export async function saveSummaryAction(form: FormData) {
 /** "Copy from my resume": the summary from the uploaded resume, word for word. */
 export async function fillAboutAction(form: FormData) {
   const s = await requireSession();
-  await act(form, async () => { if (!(await fillAboutFromResume(app().pool, app().cfg, s))) throw new Error("TC_NO_ABOUT_IN_RESUME"); }, "/profile#about");
+  await act(form, async () => {
+    if (!(await fillAboutFromResume(app().pool, app().cfg, s, { finder: aboutFinder(), force: true }))) throw new Error("TC_NO_ABOUT_IN_RESUME");
+  }, "/profile#about");
 }
 
 // Import ------------------------------------------------------------------------

@@ -1,5 +1,5 @@
-import { coachNudges, getProfile, listGoals, listResumeFiles, profileDuplicates } from "@tc-hunter/db";
-import { t } from "@tc-hunter/domain";
+import { coachNudges, fillAboutFromResume, getProfile, listGoals, listResumeFiles, profileDuplicates, resumeReaderName } from "@tc-hunter/db";
+import { ABOUT_GUIDE, ClaudeAboutFinder, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -19,6 +19,10 @@ export const dynamic = "force-dynamic";
 export default async function ProfilePage(props: PageProps) {
   const session = await requireSession();
   const { pool, cfg } = app();
+  // An empty About fills itself from the uploaded resume, once per file (Yong, 2026-11-17: "I have content in my initial resume").
+  try {
+    await fillAboutFromResume(pool, cfg, session, { finder: resumeReaderName() === "claude" ? new ClaudeAboutFinder() : undefined });
+  } catch { /* the page still shows; the button below tries again */ }
   const [{ saved, error, params }, profile, nudges, goals, copies, files] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
     listGoals(pool, session), profileDuplicates(pool, session), listResumeFiles(pool, session)]);
   const targets: string[] = [...new Set(goals.flatMap((g) => g.roles))];
@@ -110,12 +114,16 @@ function AboutSection({ text, source, hasResume }: { text: string; source: strin
               starts with a version of this written for that job, using only what your profile says.</p>
             <button>Save</button>
           </form>
+          <Details summary="How Claude writes the summary for each job">
+            <pre className="prompt-text" style={{ whiteSpace: "pre-wrap" }}>{ABOUT_GUIDE}</pre>
+          </Details>
         </EditDialog>
       </header>
       {paragraphs.length ? (
         <>
           {paragraphs.map((p, i) => <p key={i}>{p}</p>)}
           {source && SOURCE_NOTE[source] ? <p className="muted small">{SOURCE_NOTE[source]}</p> : null}
+          <p className="muted small">Each tailored resume opens with a version of this written for that job: what the job asks for most comes first, using only facts from your profile. Open a job and press "Prepare a fresh draft" to get it on a resume made before today.</p>
         </>
       ) : (
         <>

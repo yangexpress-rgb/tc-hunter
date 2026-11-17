@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  aboutFromResume, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor,
+  aboutFromResume, aboutIsInResume, contactBlockEnd, stripContactDetails, type AboutFinder, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor,
   type ProfileField, type ResumeFileKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -168,7 +168,39 @@ export async function saveWorkAuthAnswer(pool: pg.Pool, cfg: AppConfig, session:
   });
 }
 
-/** "Copy from my resume" on Me: fills the About (and any other empty detail) from the uploaded resume. True when an About was found. */
-export async function fillAboutFromResume(pool: pg.Pool, cfg: AppConfig, session: Session): Promise<boolean> {
-  return withApplicant(pool, asApplicant(session), async (c) => (await fillProfileFromResume(c, cfg, session.applicantId)).includes("about"));
+/**
+ * Fills an empty About from the uploaded resume (Yong, 2026-11-17). The built-in rules first; when they
+ * find nothing, Claude looks for the summary in the resume with contact details taken out, and only
+ * text that is in the file word for word is kept. Without `force`, each uploaded file is looked at once
+ * (Me calls this on every visit while the About is empty). True when an About was filled.
+ */
+export async function fillAboutFromResume(pool: pg.Pool, cfg: AppConfig, session: Session, opts: { finder?: AboutFinder; force?: boolean } = {}): Promise<boolean> {
+  const who = asApplicant(session);
+  const start = await withApplicant(pool, who, async (c) => {
+    const a = (await c.query("SELECT about_enc, about_tried_file, preferred_name, legal_name_enc FROM applicant WHERE id = $1", [session.applicantId])).rows[0];
+    if (!a || a.about_enc) return null;
+    const file = (await c.query("SELECT id, kind, file_kind, content_enc FROM resume_file ORDER BY (kind = 'resume') DESC, created_at DESC LIMIT 1")).rows[0];
+    if (!file || (!opts.force && a.about_tried_file === file.id)) return null;
+    if ((await fillProfileFromResume(c, cfg, session.applicantId)).includes("about")) return "filled" as const;
+    await c.query("UPDATE applicant SET about_tried_file = $2 WHERE id = $1", [session.applicantId, file.id]);
+    if (!opts.finder || file.file_kind === "zip") return null;
+    const dk = await dataKeyFor(c, cfg, session.applicantId);
+    let text = "";
+    try { text = await extractText(file.file_kind as ResumeFileKind, open(dk, file.content_enc, "file:resume_file.content")); } catch { return null; }
+    const legal = a.legal_name_enc ? decryptField(dk, "applicant.legal_name", a.legal_name_enc) : "";
+    const names = [a.preferred_name, legal].filter((n: string) => n && n !== "You");
+    return { text, sent: stripContactDetails(text, { names, firstSectionLine: contactBlockEnd(text) }), kind: file.kind as string };
+  });
+  if (start === "filled") return true;
+  if (!start || !opts.finder) return false;
+  // Outside any transaction: Claude can take a few seconds.
+  const found = await opts.finder.find(start.sent);
+  if (!found || !aboutIsInResume(found, start.text)) return false;
+  return withApplicant(pool, who, async (c) => {
+    const dk = await dataKeyFor(c, cfg, session.applicantId);
+    const r = await c.query("UPDATE applicant SET about_enc = $2, about_source = $3, about_updated_at = now(), updated_at = now() WHERE id = $1 AND about_enc IS NULL",
+      [session.applicantId, encryptField(dk, "applicant.about", normaliseAbout(found)), start.kind === "linkedin" ? "linkedin" : "resume"]);
+    if (r.rowCount) await recordAudit(c, "profile.filled_from_resume", { objectType: "applicant", objectId: session.applicantId, payload: { fields: "about" } });
+    return (r.rowCount ?? 0) > 0;
+  });
 }
