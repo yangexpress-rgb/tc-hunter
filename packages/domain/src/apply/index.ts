@@ -80,10 +80,12 @@ export interface ApplyPage {
 export interface WorkdayPage extends ApplyPage {
   /** From the job page to the sign-in or first form page. */
   start(): Promise<"sign_in" | "form" | "human_check" | "closed">;
-  signIn(email: string, password: string): Promise<"ok" | "wrong" | "unverified" | "human_check">;
+  signIn(email: string, password: string): Promise<"ok" | "wrong" | "unverified" | "human_check" | "site_error">;
   createAccount(email: string, password: string): Promise<"created" | "verify_email" | "exists" | "human_check" | "no_terms_box" | "failed">;
   /** Opens the link from the "verify your account" email. */
   openLink(url: string): Promise<boolean>;
+  /** Open the job again (after the site's own error page). */
+  reopen?(): Promise<"sign_in" | "form" | "human_check" | "closed">;
   /** "Forgot your password?" on the sign-in page: asks the site to email a reset link. */
   forgotPassword?(email: string): Promise<"sent" | "failed" | "human_check">;
   /** Opens the reset email's link and sets this new password, then goes back to the job. */
