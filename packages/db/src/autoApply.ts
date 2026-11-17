@@ -225,6 +225,8 @@ export interface ApplyDeps {
   confirmWaitMs?: number;
   emailWaitMs?: number;
   pollMs?: number;
+  /** Wait before opening a Workday job again after the site's own error (shorter in tests). */
+  siteRetryMs?: number;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -631,6 +633,23 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       return "ok";
     }
     if (r === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+    if (r === "site_error") {
+      // Signed in, but Workday's own page failed ("Something went wrong") even after refreshing. Not the
+      // password: wait a minute and open the job again, once. Nothing was sent.
+      if (!siteRetried && wd.reopen) {
+        siteRetried = true;
+        await run.step(`${app.employer}'s Workday site showed an error; trying again in a minute`);
+        await new Promise((res) => setTimeout(res, deps.siteRetryMs ?? 60_000));
+        const again = await wd.reopen();
+        if (again === "form") return "ok";
+        if (again === "sign_in") return signIn(password, mayCreate);
+        if (again === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+        // "closed" here means neither the form nor sign-in showed: still the error page.
+      }
+      await run.shot("stopped", "Workday's error page", wd, deps.cfg);
+      await run.end("waiting", `${app.employer}'s Workday site keeps showing its own error ("Something went wrong") after signing in. Nothing was sent. Choose Continue to try again later, or apply there yourself.`, "sign_in");
+      return "waiting";
+    }
     if (r === "unverified") {
       const v = await verify();
       if (v !== ("verified" as Status)) return v;
@@ -657,7 +676,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
     return "waiting";
   };
-  let recovering = false, verifiedTries = 0, createdThisRun = false, waitedForVerify = false;
+  let siteRetried = false, recovering = false, verifiedTries = 0, createdThisRun = false, waitedForVerify = false;
   /**
    * The password didn't work on an account the site has for this email (one an earlier try made
    * without keeping its password, or one not yet confirmed): first the "verify your account" email

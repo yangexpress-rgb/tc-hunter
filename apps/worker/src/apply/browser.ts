@@ -300,6 +300,9 @@ class PwPage implements ApplyPage {
  * data-automation-id names, which stay the same across employers.
  */
 const log = createLogger();
+/** Workday's own "the page failed" message. */
+const mask = (x: string) => x.replace(/[^\s@:|]+@[^\s@|]+\.[a-z]{2,}/gi, "[email]");
+const WORKDAY_HICCUP = /something went wrong[\s\S]{0,80}refresh the page/i;
 /** "Sign in with email", "Sign up with email", "Continue with email address", "Use email". */
 const WITH_EMAIL = /^\s*((sign in|sign up|continue|create (an )?account|log ?in) with (your )?e-?mail( address)?|use (your )?e-?mail( address)?)\s*$/i;
 
@@ -366,7 +369,8 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     }
   }
   /** What the account page shows, for the worker log when it can't get through (button names only, nothing typed). */
-  private async describe() {
+  private async describe() { return mask(await this.describeRaw()); }
+  private async describeRaw() {
     // A string, not a function: the worker runs through tsx, which wraps named functions in a
     // helper the page doesn't have, so a function here failed silently and logged nothing.
     return this.pg.evaluate(`(() => {
@@ -406,7 +410,15 @@ class WorkdayPw extends PwPage implements WorkdayPage {
       }
       await settle(this.pg);
     }
+    let reloads = 0;
     for (let i = 0; i < 10; i++) {
+      if (WORKDAY_HICCUP.test(await this.text()) && reloads < 2) {
+        reloads++;
+        log.info("workday.refresh", { host: new URL(this.pg.url()).host, after: "start", n: reloads });
+        await this.pg.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+        await settle(this.pg, 5000);
+        continue;
+      }
       if (humanCheckIn(await this.text()) || (await this.pg.evaluate(PAGE_SCRIPT).then(() => this.pg.evaluate(() => (window as any).__tcApply.captchaVisible())))) return "human_check";
       if (await this.onSignIn()) return "sign_in";
       if (await this.inForm()) return "form";
@@ -415,7 +427,7 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     return "closed";
   }
 
-  async signIn(email: string, password: string): Promise<"ok" | "wrong" | "unverified" | "human_check"> {
+  async signIn(email: string, password: string): Promise<"ok" | "wrong" | "unverified" | "human_check" | "site_error"> {
     if (await this.has("signInLink")) { await this.press("signInLink"); await settle(this.pg, 4000); }
     else if (!(await this.has("signInSubmitButton")) && !(await this.emailChoice().isVisible().catch(() => false))) {
       // On the create-account page: "Already have an account? Sign in".
@@ -426,16 +438,29 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     await this.box("email").fill(email);
     await this.box("password").fill(password);
     await this.pressFirst(["signInSubmitButton"], /^\s*sign ?in\s*$/i);
+    let reloads = 0;
     for (let i = 0; i < 20; i++) {
       await this.pg.waitForTimeout(1000);
       const t = await this.text();
       if (humanCheckIn(t)) return "human_check";
       if (await this.inForm()) return "ok";
+      // Signed in, but Workday's page failed to load ("Something went wrong. Please refresh the page", Premier
+      // 2026-11-17): refresh as it says, at most twice. That isn't a wrong password.
+      if (WORKDAY_HICCUP.test(t) && reloads < 2 && !(await this.pg.locator("input[type=password]:visible").count().catch(() => 0))) {
+        reloads++;
+        log.info("workday.refresh", { host: new URL(this.pg.url()).host, after: "sign_in", n: reloads });
+        await this.pg.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+        await settle(this.pg, 5000);
+        i = Math.max(0, i - 8);
+        continue;
+      }
       if (/verify your (email|account)|account (has not been|is not) (verified|activated)|not yet verified/i.test(t)) return "unverified";
       if (/(wrong|incorrect|invalid) (email|password|user ?name)|sign in failed|locked/i.test(t)) { log.info("workday.sign_in_refused", { host: new URL(this.pg.url()).host, says: await this.says() }); return "wrong"; }
     }
     if (await this.inForm()) return "ok";
     log.warn("workday.account_page", { host: new URL(this.pg.url()).host, step: "after_sign_in", shows: await this.describe(), says: await this.says() });
+    // Still Workday's own error after refreshing: that's their site, not the password. Don't reset it.
+    if (WORKDAY_HICCUP.test(await this.text())) return "site_error";
     return "wrong";
   }
 
@@ -570,6 +595,12 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     await settle(this.pg);
     const s = await this.start();
     return s === "sign_in" || s === "form";
+  }
+
+  async reopen(): Promise<"sign_in" | "form" | "human_check" | "closed"> {
+    await this.pg.goto(this.jobUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
+    await settle(this.pg);
+    return this.start();
   }
 
   async openLink(url: string): Promise<boolean> {
