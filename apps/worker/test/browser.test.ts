@@ -35,6 +35,14 @@ beforeAll(async () => {
       '<label for="num">Percentage you are willing to travel</label><input id="num" type="text">' +
       '<script>document.getElementById("num").addEventListener("change", function (e) { if (!/^\\d+$/.test(e.target.value)) e.target.value = ""; });' +
       'document.getElementById("pct").addEventListener("change", function (e) { if (!window.typed) { window.typed = 1; e.target.value = ""; } });</script></form>');
+    // Workday's slow parts (Premier, 2026-11-17): a list that shows only "Select One" for a moment after opening,
+    // and a Review page whose Submit button is drawn after its heading.
+    if (url.startsWith("/slow")) return html('<div data-automation-id="formField-deg"><label>Degree*</label><button type="button" aria-haspopup="listbox" id="deg">Select One</button></div>' +
+      '<ul id="lb" role="listbox"></ul><div id="foot"></div>' +
+      '<script>document.getElementById("deg").addEventListener("click", function () { var lb = document.getElementById("lb");' +
+      'lb.innerHTML = "<li role=option>Select One</li>"; setTimeout(function () { lb.innerHTML = "<li role=option>Select One</li><li role=option>Bachelors Degree</li><li role=option>Masters Degree</li>"; }, 1200); });' +
+      'document.addEventListener("keydown", function (e) { if (e.key === "Escape") document.getElementById("lb").innerHTML = ""; });' +
+      'setTimeout(function () { document.getElementById("foot").innerHTML = "<button data-automation-id=pageFooterNextButton>Submit</button>"; }, 1500);</script>');
     res.writeHead(404).end();
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()));
@@ -212,6 +220,17 @@ describe.skipIf(!available)("tick boxes, radio buttons and blanks drawn or reset
       // A list button already showing an answer is still named by its question, not by "No Required".
       expect(form.fields.find((f) => f.key === "#rel")?.label).toBe("Are you open to relocation?*");
       expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#ft", "radio:travel", "#pct", "#rel", "#num"]);
+    } finally { await page.close(); }
+  });
+});
+
+describe.skipIf(!available)("parts a Workday page draws late", () => {
+  it("waits for a list's real choices, and for a Submit button drawn after the page", async () => {
+    const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/slow`);
+    try {
+      expect(await page.submit("[data-automation-id='pageFooterNextButton']")).toBe(true);
+      const form = await page.readForm();
+      expect(form.fields.find((f) => f.key === "#deg")?.options).toEqual(["Select One", "Bachelors Degree", "Masters Degree"]);
     } finally { await page.close(); }
   });
 });
