@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  MemorySecretStore, RulesLetterProposer, RulesRequirementsReader, RulesResumeProposer, SecretValue, SourceRefusedError,
+  MemorySecretStore, RulesLetterProposer, RulesRequirementsReader, RulesResumeProposer, SecretValue, SourceRefusedError, startDateFrom,
   type AnswerInferrer, type InferFacts, type InferQuestion, type ApplyBrowser, type ApplyPage, type FillItem, type Fetcher, type FormField, type MailReader, type PageForm, type WorkdayPage,
 } from "@tc-hunter/domain";
 import {
@@ -543,10 +543,13 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
       { key: "#worked_here", label: "Have you ever worked for Premier Health as an employee or contractor?*", type: "select", options: ["Select One", "No", "Yes"], required: true },
       { key: "#ft", label: "What type of employment are you seeking?: Full-Time", type: "checkbox" },
       { key: "#excluded", label: "Are you excluded from any Federal health care program?*", type: "select", options: ["Select One", "Yes", "No"], required: true },
+      { key: "#start_m", label: "When will you be available to start employment?: Month", type: "text", required: true },
+      { key: "#start_y", label: "When will you be available to start employment?: Year", type: "text", required: true },
       { key: "#degree", label: "Degree*", type: "select", options: ["Select One", "Certificate", "Juris Doctorate", "High School", "Bachelor's Degree", "Master's Degree", "Doctorate"], required: true },
     ];
     await addFact(pool, yong, "education_item", { institution: "Example University", degree: "BS", field: "Economics", start_date: "2008-09-01", end_date: "2012-05-01" });
     await addFact(pool, yong, "education_item", { institution: "Example Business School", degree: "MBA", field: null, start_date: "2015-09-01", end_date: "2017-05-01" });
+    await saveAnswer(pool, cfg, yong, { questionKey: "start_date", patterns: ["start date", "available to start"], answer: "2 weeks from next Monday", isApplicantStep: false, approve: true });
     applyDeps = { ...applyDeps, inferrer };
     browser.spec = () => ({ url: GH(19), fields: [...BASE, ...extra], after: "thanks" });
     await approveResume(apps[18]!);
@@ -559,6 +562,7 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     expect(asked).not.toContain("#gender");       // diversity questions are never worked out
     expect(asked).not.toContain("#first_name");   // already known
     expect(asked).not.toContain("#degree");       // settled by their education rows
+    expect(asked).not.toContain("#start_m");      // worked out by the calendar from their saved words
     expect(JSON.stringify(seen[0]!.facts)).not.toMatch(/yong@example\.test/);
     expect(seen[0]!.facts.work.map((w) => w.employer)).toContain("Northwind");
     expect(seen[0]!.facts.employer).toBe("Premier Health");
@@ -567,6 +571,9 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     expect(by(/worked for Premier/)).toMatchObject({ answer: "No", source: "inferred", willFill: true });
     expect(by(/Full-Time/)).toMatchObject({ answer: "Yes", source: "inferred" });
     expect(by(/^Degree/)).toMatchObject({ answer: "Master's Degree", source: "inferred", willFill: true });
+    const start = startDateFrom("2 weeks from next Monday", new Date().toISOString().slice(0, 10))!;
+    expect(by(/start employment\?: Month/)).toMatchObject({ answer: String(+start.slice(5, 7)), source: "inferred", willFill: true });
+    expect(by(/start employment\?: Year/)).toMatchObject({ answer: start.slice(0, 4), source: "inferred", willFill: true });
     applyDeps = { ...applyDeps, inferrer: undefined };
   });
 });

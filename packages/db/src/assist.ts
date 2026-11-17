@@ -160,7 +160,7 @@ export async function buildPacket(pool: pg.Pool, cfg: AppConfig, session: Sessio
  * after they answer, and on Workday page by page).
  */
 export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId: string,
-  app: { id: string; public_ref: string; match_id: string; job_ref: string }, url: string, fields: FormField[], opts: { keepTyped?: boolean; ats?: Ats; inferred?: Map<string, { answer: string; basis: string }> } = {}) {
+  app: { id: string; public_ref: string; match_id: string; job_ref: string }, url: string, fields: FormField[], opts: { keepTyped?: boolean; ats?: Ats; inferred?: Map<string, { answer: string; basis: string; replace?: boolean }> } = {}) {
   let host: string | null = null;
   try { host = new URL(url).hostname.toLowerCase(); } catch { /* keep null */ }
   if ((await c.query("SELECT 1 FROM application_packet WHERE application_id = $1 AND state = 'submitted'", [app.id])).rowCount) throw new DomainError("TC_PACKET_CLOSED");
@@ -191,7 +191,8 @@ export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId
     // Worked out from the applicant's own goals, history and saved answers (Yong, 2026-11-17). Never a
     // statement, consent, signature or diversity question; work authorisation only from their saved answers.
     const inf = opts.inferred?.get(f.key);
-    if (inf && !willFill(p) && (!p.step || p.step === "work_auth")) {
+    // A start date worked out from their saved words replaces those words in a date box.
+    if (inf && (!willFill(p) || (inf.replace && p.source === "answer_bank")) && (!p.step || p.step === "work_auth")) {
       return { ...p, step: null, answer: inf.answer, source: "inferred" as const, sourceRefId: null, confidence: 0.9, note: `Worked out from your profile: ${inf.basis}` };
     }
     return p;
