@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardAnswer, companyKey, findBoard, findBoardOrAsk, noBoardReason, noBoardSentence, unreadableCareersSystem, SourceRefusedError, tokenGuesses, type Fetcher, type FetchResult } from "../src";
+import { boardAnswer, companyKey, fetchSource, findBoard, findBoardOrAsk, noBoardReason, noBoardSentence, unreadableCareersSystem, SourceRefusedError, tokenGuesses, type Fetcher, type FetchResult } from "../src";
 
 class Boards implements Fetcher {
   calls: string[] = [];
@@ -77,5 +77,29 @@ describe("finding employers' job boards", () => {
     expect(noBoardReason({ careersUrl: "https://acme.com/careers" })).toBe("page");
     expect(noBoardReason({})).toBe("none");
     expect(noBoardSentence("system:Taleo")).toMatch(/^Its careers site runs on Taleo, which we can't read yet\./);
+  });
+});
+
+describe("Workday asking us to slow down (Yong, 2026-11-17)", () => {
+  const api = "https://acme.wd1.myworkdayjobs.com/wday/cxs/acme/Careers";
+  const spec = { type: "ats_api" as const, kind: "workday" as const, key: "acme.wd1.myworkdayjobs.com/acme/Careers", name: "Acme", url: "https://acme.wd1.myworkdayjobs.com/Careers" };
+  const job = (n: number) => ({ title: `Operations Analyst ${n}`, externalPath: `/job/x/R${n}` });
+  it("waits once as asked, then keeps what it read instead of failing", async () => {
+    let details = 0;
+    const waits: number[] = [];
+    const f: Fetcher = { async get(url: string) {
+      if (url === `${api}/jobs`) return { status: 200, text: JSON.stringify({ total: 3, jobPostings: [job(1), job(2), job(3)] }), url, contentType: "application/json" };
+      if (++details > 1) throw new SourceRefusedError("rate_limited", "429");
+      return { status: 200, text: JSON.stringify({ jobPostingInfo: { title: "Operations Analyst 1", jobReqId: "R1", jobDescription: "x" } }), url, contentType: "application/json" };
+    } };
+    const r = await fetchSource(spec, f, () => true, 25, ["Operations Analyst"], async (ms) => { waits.push(ms); });
+    expect(waits).toHaveLength(1);
+    expect(r.postings.map((p) => p.title)).toEqual(["Operations Analyst 1"]);
+    expect(r.listed).toBe(3);
+    expect(r.notes[0]).toMatch(/asked us to slow down/);
+  });
+  it("still fails when it can't read anything at all", async () => {
+    const f: Fetcher = { async get() { throw new SourceRefusedError("rate_limited", "429"); } };
+    await expect(fetchSource(spec, f, () => true, 25, [], async () => {})).rejects.toMatchObject({ reason: "rate_limited" });
   });
 });

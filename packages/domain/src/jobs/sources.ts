@@ -101,35 +101,59 @@ export async function workdayHasJobs(w: WorkdaySite, f: Fetcher): Promise<boolea
  * (a few pages each) when given them, else reads the newest 200; then reads up to
  * `maxDetails` related jobs in full.
  */
-async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) => boolean, maxDetails: number, terms: string[]): Promise<SourceFetchResult> {
+async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) => boolean, maxDetails: number, terms: string[], wait: (ms: number) => Promise<void>): Promise<SourceFetchResult> {
   const w = workdayFromKey(spec.key);
   const api = workdayApi(w);
   const list = new Map<string, Obj>();
+  const postings: RawPosting[] = [];
+  const notes: string[] = [];
+  // Workday asks busy readers to slow down (Yong, 2026-11-17: six Workday sites "Failed").
+  // We wait as it asks, once, and then stop for this time, keeping every job already read.
+  let waited = false, stopped = false;
+  const ask = async (url: string, body?: unknown): Promise<Obj | null> => {
+    for (;;) {
+      try { return JSON_OR((await f.get(url, { headers: WORKDAY_HEADERS, ...(body ? { body } : {}) })).text, "Workday"); } catch (e) {
+        if (!(e instanceof SourceRefusedError) || e.reason !== "rate_limited") throw e;
+        if (waited) { stopped = true; return null; }
+        waited = true;
+        await wait(WORKDAY_WAIT_MS);
+      }
+    }
+  };
+  // How many jobs the whole site lists, not only those the searches find.
+  const all = await ask(`${api}/jobs`, { appliedFacets: {}, limit: 20, offset: 0, searchText: "" });
+  if (!all) throw new SourceRefusedError("rate_limited", `${w.host} asked us to slow down`);
+  const listed = Number(all.total ?? 0) || 0;
+  if (!terms.length) for (const j of (all.jobPostings ?? []) as Obj[]) if (j.externalPath) list.set(String(j.externalPath), j);
   const searches = terms.length ? terms.slice(0, 6) : [""];
-  for (const searchText of searches) {
-    for (let offset = 0; offset < (searchText ? 60 : 200); offset += 20) {
-      const r = JSON_OR((await f.get(`${api}/jobs`, { headers: WORKDAY_HEADERS, body: { appliedFacets: {}, limit: 20, offset, searchText } })).text, "Workday");
+  search: for (const searchText of searches) {
+    for (let offset = searchText ? 0 : 20; offset < (searchText ? 60 : 200); offset += 20) {
+      if (!searchText && offset >= listed) break;
+      const r = await ask(`${api}/jobs`, { appliedFacets: {}, limit: 20, offset, searchText });
+      if (!r) break search;
       const page = (r.jobPostings ?? []) as Obj[];
       for (const j of page) if (j.externalPath) list.set(String(j.externalPath), j);
       if (page.length < 20 || offset + 20 >= Number(r.total ?? 0)) break;
     }
   }
-  // How many jobs the whole site lists, not only those the searches found.
-  let listed = list.size;
-  if (terms.length) {
-    const all = JSON_OR((await f.get(`${api}/jobs`, { headers: WORKDAY_HEADERS, body: { appliedFacets: {}, limit: 1, offset: 0, searchText: "" } })).text, "Workday");
-    listed = Math.max(listed, Number(all.total ?? 0) || 0);
-  }
   const related = [...list.values()].filter((j) => wanted(String(j.title ?? "")));
-  const postings: RawPosting[] = [];
-  for (const j of related.slice(0, maxDetails)) {
+  for (const j of stopped ? [] : related.slice(0, maxDetails)) {
     const path = String(j.externalPath);
-    try { postings.push(readWorkdayJob(JSON_OR((await f.get(`${api}${path}`, { headers: WORKDAY_HEADERS })).text, "Workday"), w, spec.name, path)); } catch (e) {
+    try {
+      const d = await ask(`${api}${path}`);
+      if (!d) break;
+      postings.push(readWorkdayJob(d, w, spec.name, path));
+    } catch (e) {
       if (!(e instanceof SourceRefusedError) || e.reason !== "not_found") throw e;
     }
   }
-  return { postings, complete: false, checked: list.size, listed, notes: related.length > maxDetails ? [`Read the first ${maxDetails} related jobs only.`] : [] };
+  if (stopped) notes.push(`Workday asked us to slow down, so we read ${postings.length} of its related jobs this time and will read the rest next time.`);
+  else if (related.length > maxDetails) notes.push(`Read the first ${maxDetails} related jobs only.`);
+  return { postings, complete: false, checked: list.size, listed, notes };
 }
+
+/** How long to wait when Workday asks us to slow down, before asking once more. */
+export const WORKDAY_WAIT_MS = 45_000;
 
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
@@ -261,7 +285,8 @@ const JSON_OR = (text: string, what: string): Obj => {
  * Reads one source. `wanted(title)` lets a big board skip detail pages for jobs whose
  * titles have nothing to do with what the applicant wants (fewer requests, same result).
  */
-export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: string) => boolean = () => true, maxDetails = 25, terms: string[] = []): Promise<SourceFetchResult> {
+export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: string) => boolean = () => true, maxDetails = 25, terms: string[] = [],
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))): Promise<SourceFetchResult> {
   const key = encodeURIComponent(spec.key);
   switch (spec.kind) {
     case "greenhouse": {
@@ -295,7 +320,7 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
       }
       return { postings, complete: false, checked: list.length, listed: list.length, notes: want.length < list.filter((j) => wanted(String(j.name ?? ""))).length ? ["Read the first 25 related jobs only."] : [] };
     }
-    case "workday": return fetchWorkday(spec, f, wanted, maxDetails, terms);
+    case "workday": return fetchWorkday(spec, f, wanted, maxDetails, terms, wait);
     case "careers_page": {
       const page = await f.get(spec.url, { kind: "page" });
       let postings = jobPostingsFromHtml(page.text, page.url);
