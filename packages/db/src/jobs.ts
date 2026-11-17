@@ -306,7 +306,14 @@ const PLAIN_REFUSAL: Record<string, string> = {
 };
 
 /** One scan for one applicant (design 5.2): every followed source, then matching, then posting watch. */
-export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: { discover?: boolean; fresh?: boolean } = {}): Promise<Record<string, number>> {
+/**
+ * What one scan covers. `only`: just these sources (the person pressed "Search again" on one
+ * row of Where we look; Yong, 2026-11-17), read again however recently, with no employer lookup.
+ * `freshIds`: sources to read again however recently, within a whole scan.
+ */
+export interface ScanOpts { discover?: boolean; fresh?: boolean; only?: string[]; freshIds?: string[] }
+
+export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: ScanOpts = {}): Promise<Record<string, number>> {
   // The run is recorded first, so the screens can show what it's doing as it goes (Yong, 2026-11-14).
   const runId = await withApplicant(pool, ctx, async (c) =>
     (await c.query(`INSERT INTO scan_run (applicant_id, progress) VALUES (app_applicant_id(), '{"step":"Starting"}') RETURNING id`)).rows[0].id as string);
@@ -324,11 +331,12 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
   }
 }
 
-async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: { discover?: boolean; fresh?: boolean }, runId: string,
+async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: ScanOpts, runId: string,
   progress: (step: string, done?: number, total?: number) => Promise<void>): Promise<Record<string, number>> {
   // First, find places to look from the goals, when goals changed or a week has passed (or the person pressed Refresh).
   let found: Record<string, number> = {};
-  if (deps.discover && (opts.discover || await withApplicant(pool, ctx, (c) => discoveryDue(c)))) {
+  const only = opts.only?.length ? new Set(opts.only) : null;
+  if (deps.discover && !only && (opts.discover || await withApplicant(pool, ctx, (c) => discoveryDue(c)))) {
     await progress("Finding employers for your goals");
     const d = await runDiscovery(pool, ctx, deps.fetcher, deps.discover, progress);
     found = { companies_checked: d.companiesChecked, boards_found: d.boardsFound, newly_followed: d.newlyFollowed };
@@ -336,7 +344,9 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   const now = deps.now?.() ?? new Date();
   const wall = Date.now(); // freshness and back-off use the real clock, like the database's last_success_at
   // "Look again now" reads every place again, however recently (Yong, 2026-11-14).
-  const fresh = opts.fresh ? 0 : (deps.freshMinutes ?? 30) * 60_000;
+  const freshMs = opts.fresh ? 0 : (deps.freshMinutes ?? 30) * 60_000;
+  const readAgain = new Set([...(opts.only ?? []), ...(opts.freshIds ?? [])]);
+  const freshFor = (id: string) => (readAgain.has(id) ? 0 : freshMs);
   const { sources, firstCount, targets, queries } = await withApplicant(pool, ctx, async (c) => {
     const src = (await c.query(
       `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted AND s.kind <> 'job_search' ORDER BY s.name`)).rows;
@@ -348,7 +358,8 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     const ids = await namedSourceIds(c);
     const keys = new Set(goals.flatMap((g) => g.companies).map(companyKey).filter(Boolean));
     const named = (x: Record<string, any>) => ids.has(x.id) || (x.kind !== "pasted_link" && keys.has(companyKey(x.name)));
-    return { sources: [...src.filter(named), ...src.filter((x) => !named(x))], firstCount: src.filter(named).length,
+    const mine = only ? src.filter((x) => only.has(x.id)) : src;
+    return { sources: [...mine.filter(named), ...mine.filter((x) => !named(x))], firstCount: mine.filter(named).length,
       targets: wanted.length ? wanted : exp, queries: searchQueries(goals) };
   });
 
@@ -357,7 +368,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   const notes: Array<{ source: string; note: string }> = [];
 
   // One step per place: each named company, each job site, each other employer.
-  const siteCount = queries.length ? (deps.search ?? []).length : 0;
+  const siteCount = !queries.length ? 0 : only ? Math.max(0, only.size - sources.length) : (deps.search ?? []).length;
   const total = sources.length + siteCount;
   let done = 0;
   // A board that answers but lists no jobs is usually not where the employer posts them. Up to
@@ -391,7 +402,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
       return;
     }
     // A board another scan read in the last half hour is not fetched again.
-    if (s.last_success_at && wall - new Date(s.last_success_at).getTime() < fresh) return;
+    if (s.last_success_at && wall - new Date(s.last_success_at).getTime() < freshFor(s.id)) return;
     const spec: SourceSpec = { type: s.type, kind: s.kind, key: s.source_key, name: s.name, url: s.url };
     try {
       const got = await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets), 25, targets);
@@ -442,6 +453,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
          ON CONFLICT (applicant_id, job_source_id) DO UPDATE SET updated_at = now() RETURNING muted`, [id]);
       return { id, muted: r.rows[0].muted as boolean };
     });
+    if (only && !only.has(follow.id)) continue;
     if (follow.muted) { done++; continue; }
     await progress(`Searching ${site.name}`, done++, total);
     try {
@@ -535,7 +547,9 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
   let done: WorkDone;
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
-    const result = item.kind === "scan" ? await runScan(pool, ctx, deps, { discover: (item.payload as { discover?: boolean }).discover === true, fresh: (item.payload as { fresh?: boolean }).fresh === true })
+    const p = item.payload as { discover?: boolean; fresh?: boolean; only?: unknown; fresh_ids?: unknown };
+    const ids = (x: unknown) => (Array.isArray(x) ? x.map(String).slice(0, 50) : undefined);
+    const result = item.kind === "scan" ? await runScan(pool, ctx, deps, { discover: p.discover === true, fresh: p.fresh === true, only: ids(p.only), freshIds: ids(p.fresh_ids) })
       : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))
       : item.kind === "resume_digest" ? { status: await (deps.digest ? runDigest(pool, ctx, String((item.payload as { digest_id?: string }).digest_id), deps.digest) : Promise.reject(new Error("resume reading not set up"))) }
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
@@ -551,8 +565,11 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
   }
   // Pressed "Look again now" while this search was running: start a new one with the latest goals.
   if (item.kind === "scan") await withApplicant(pool, ctx, async (c) => {
-    const again = (await c.query("SELECT payload->>'again' = 'true' AS again FROM work_item WHERE id = $1", [item.id])).rows[0]?.again;
-    if (again) await c.query(`INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', '{"discover":true,"fresh":true}') ON CONFLICT DO NOTHING`);
+    const w = (await c.query("SELECT payload->>'again' = 'true' AS again, payload->'again_only' AS again_only FROM work_item WHERE id = $1", [item.id])).rows[0];
+    if (w?.again) await c.query(`INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', '{"discover":true,"fresh":true}') ON CONFLICT DO NOTHING`);
+    // Pressed "Search again" on a source while this search was running: that source is searched next.
+    else if (Array.isArray(w?.again_only) && w.again_only.length) await c.query(
+      "INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', $1) ON CONFLICT DO NOTHING", [JSON.stringify({ only: w.again_only })]);
   });
   return done;
 }
@@ -603,9 +620,28 @@ export async function requestScan(pool: pg.Pool, session: Session, opts: { disco
     const payload = { ...(opts.discover ? { discover: true } : {}), ...(opts.fresh ? { fresh: true } : {}) };
     const r = await c.query("INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', $1) ON CONFLICT DO NOTHING RETURNING id", [JSON.stringify(payload)]);
     if (r.rowCount) return;
-    // One is already waiting or running: a waiting one takes on this request; a running one is followed by a fresh one.
-    await c.query("UPDATE work_item SET payload = payload || $1::jsonb WHERE kind = 'scan' AND status = 'queued'", [JSON.stringify(payload)]);
+    // One is already waiting or running: a waiting one takes on this request (and covers every source again);
+    // a running one is followed by a fresh one.
+    await c.query("UPDATE work_item SET payload = (payload - 'only') || $1::jsonb WHERE kind = 'scan' AND status = 'queued'", [JSON.stringify(payload)]);
     if (opts.fresh) await c.query(`UPDATE work_item SET payload = payload || '{"again":true}' WHERE kind = 'scan' AND status = 'running'`);
+  });
+}
+
+/**
+ * Searches one source again now, without searching every other one (Yong, 2026-11-17).
+ * A waiting search takes it on; a running one is followed by a search of just this source.
+ */
+export async function requestSourceScan(pool: pg.Pool, session: Session, sourceId: string): Promise<void> {
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const f = await c.query("SELECT 1 FROM applicant_job_source WHERE job_source_id = $1 AND NOT muted", [sourceId]);
+    if (!f.rowCount) throw new DomainError("TC_NOT_FOUND");
+    const r = await c.query("INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'scan', $1) ON CONFLICT DO NOTHING RETURNING id",
+      [JSON.stringify({ only: [sourceId] })]);
+    if (r.rowCount) return;
+    const add = (key: string) => `jsonb_set(payload, '{${key}}', (SELECT coalesce(jsonb_agg(DISTINCT x), '[]'::jsonb) FROM jsonb_array_elements(coalesce(payload->'${key}', '[]'::jsonb) || jsonb_build_array($1::text)) x))`;
+    // Waiting: one of just some sources adds this one; a whole search reads this one again however recently.
+    await c.query(`UPDATE work_item SET payload = CASE WHEN payload ? 'only' THEN ${add("only")} ELSE ${add("fresh_ids")} END WHERE kind = 'scan' AND status = 'queued'`, [sourceId]);
+    await c.query(`UPDATE work_item SET payload = ${add("again_only")} WHERE kind = 'scan' AND status = 'running'`, [sourceId]);
   });
 }
 

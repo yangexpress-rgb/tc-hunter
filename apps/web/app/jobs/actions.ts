@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, rescoreMatches, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
+import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
 import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -46,6 +46,12 @@ export async function followSourceAction(form: FormData) {
     await followSource(app().pool, s, String(form.get("address") ?? ""), String(form.get("name") ?? "") || undefined);
     await requestScan(app().pool, s);
   }, "/jobs/sources");
+}
+
+/** "Search again" on one row of Where we look: just that source, now (Yong, 2026-11-17). */
+export async function searchSourceAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => requestSourceScan(app().pool, s, String(form.get("id"))), "/jobs/sources", "searching");
 }
 
 export async function unfollowSourceAction(form: FormData) {
