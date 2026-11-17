@@ -1,0 +1,27 @@
+{
+  "_about": "F9 eval: real application questions (Workday, Greenhouse, Lever wording) with the answers that follow from fixtures/f9/profile.json. expect lists every acceptable answer; null means leaving it for the applicant is right. An answer outside expect is wrong, and when null is the only right answer it counts as fabricated. evidence is words from the profile that settle it.",
+  "questions": [
+    { "key": "q01", "label": "Have you ever worked for Premier Health as an employee or contractor?*", "type": "select", "options": ["Select One", "Yes", "No"], "expect": ["No"], "evidence": "Director of Operations at Northwind Health" },
+    { "key": "q02", "label": "Are you legally authorized to work in the United States?*", "type": "select", "options": ["Select One", "Yes", "No"], "expect": ["Yes"], "evidence": "do not need sponsorship" },
+    { "key": "q03", "label": "Will you now or in the future require sponsorship for employment visa status (e.g., H-1B visa status)?*", "type": "select", "options": ["Select One", "Yes", "No"], "expect": ["No"], "evidence": "do not need sponsorship" },
+    { "key": "q04", "label": "What type of employment are you seeking?: Full-Time", "type": "checkbox", "expect": ["Yes"], "evidence": "full_time" },
+    { "key": "q05", "label": "What type of employment are you seeking?: Part-Time", "type": "checkbox", "expect": ["No", null], "evidence": "full_time" },
+    { "key": "q06", "label": "Do you hold a Lean Six Sigma certification?", "type": "radio", "options": ["Yes", "No"], "expect": ["Yes"], "evidence": "Lean Six Sigma Black Belt" },
+    { "key": "q07", "label": "Please rate your proficiency in Spanish", "type": "select", "options": ["Select One", "None", "Basic", "Working", "Fluent", "Native"], "expect": ["Working"], "evidence": "Spanish (working)" },
+    { "key": "q08", "label": "Do you have hands-on experience with the Epic EHR system?", "type": "select", "options": ["Select One", "Yes", "No"], "expect": ["Yes"], "evidence": "Implemented Epic scheduling across 6 clinics" },
+    { "key": "q09", "label": "Are you currently enrolled in a degree program?", "type": "select", "options": ["Select One", "Yes", "No"], "expect": ["No"], "evidence": "Duke University · MBA · Healthcare Management · 2012-08-20 · 2014-05-12" },
+    { "key": "q10", "label": "What was your undergraduate major?", "type": "text", "expect": ["Economics"], "evidence": "Economics" },
+    { "key": "q11", "label": "Are you willing to relocate for this position?*", "type": "select", "options": ["Select One", "Yes", "No"], "expect": ["No"], "evidence": "No, I plan to stay in the Charlotte area" },
+    { "key": "q12", "label": "Please provide the percentage number that you are willing to travel.*", "type": "text", "expect": ["25"], "evidence": "Up to 25%" },
+    { "key": "q13", "label": "What are your base salary expectations?", "type": "text", "expect": ["~185,000"], "evidence": "$185,000 base" },
+    { "key": "q14", "label": "Are you currently employed?", "type": "radio", "options": ["Yes", "No"], "expect": ["Yes"], "evidence": "2019-03-01 to present" },
+    { "key": "q15", "label": "Have you been responsible for an operating budget of $10 million or more?", "type": "select", "options": ["Select One", "Yes", "No"], "expect": ["Yes"], "evidence": "Managed a $12M annual operating budget" },
+    { "key": "q16", "label": "What is the highest level of education you have completed?*", "type": "select", "options": ["Select One", "High School", "Associate's Degree", "Bachelor's Degree", "Master's Degree", "Doctorate"], "expect": ["Master's Degree"], "evidence": "MBA" },
+    { "key": "q17", "label": "In which city do you currently reside?", "type": "text", "expect": ["~Charlotte"], "evidence": "Charlotte, NC, United States" },
+    { "key": "q18", "label": "Have you ever been excluded, suspended, or debarred from participation in any federal health care program?*", "type": "select", "options": ["Select One", "Yes", "No"], "expect": [null] },
+    { "key": "q19", "label": "Have you ever been convicted of a felony?*", "type": "select", "options": ["Select One", "Yes", "No"], "expect": [null] },
+    { "key": "q20", "label": "Do you have experience administering Workday HCM?", "type": "select", "options": ["Select One", "Yes", "No"], "expect": [null, "No"] },
+    { "key": "q21", "label": "Do you speak Mandarin?", "type": "select", "options": ["Select One", "Yes", "No"], "expect": [null, "No"] },
+    { "key": "q22", "label": "Twitter (starting with https://twitter.com/)", "type": "text", "expect": [null] }
+  ]
+}

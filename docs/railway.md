@@ -173,6 +173,15 @@ the database's public address from Railway and a one-off copy of the vault onto 
 - **Applying for you:** the worker runs its own headless browser (installed in the image).
   Set `TC_APPLY_BROWSER=off` on the service to stop it at once; applications then wait.
   Workday sign-ups need the applicant's Gmail connected so the "verify your email" link can be opened.
+- **Smart answers:** with `ANTHROPIC_API_KEY` set, questions the rules can't settle are worked out by
+  Claude from the full profile (effort high, 5 questions a call) and each answer is checked against the
+  profile in a second call; long written answers are drafted for the applicant to approve.
+  Settings › Applying for you shows "Smart answers: on/off" (red when off); `TC_ANSWER_INFER=off` turns it off.
+  The worker's startup log line `worker.started` names the model in `answers`.
+- **Answer quality (F9):** `fixtures/f9` holds 22 real application questions with the answers a fixture
+  profile supports. `npm test` checks the pipeline against them; `ANTHROPIC_API_KEY=... npm run eval:f9`
+  runs the real model and must score at least 85% right with nothing made up. Run it before and after
+  any prompt, pipeline or model change.
 - **Health check:** `https://<your-railway-domain>/api/health` answers `ok`.
 
 ## What stays protected

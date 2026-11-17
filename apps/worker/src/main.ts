@@ -3,9 +3,9 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { createPool, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, type EmailDeps } from "@tc-hunter/db";
+import { createPool, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
 import {
-  ClaudeAnswerInferrer, ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
+  ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
@@ -59,9 +59,12 @@ async function currentSearch() {
 const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
   browser: new ServerBrowser({ proxy: process.env.HTTPS_PROXY || undefined, executablePath: process.env.TC_CHROMIUM_PATH || undefined }),
   cfg, vault: process.env.TC_VAULT_DIR ? loadSecretStore() : undefined, email,
-  // Questions worked out from the applicant's goals, history and saved answers (Yong, 2026-11-17). TC_ANSWER_INFER=off stops it.
-  inferrer: resumeReaderName() === "claude" && process.env.TC_ANSWER_INFER !== "off" ? new ClaudeAnswerInferrer() : undefined,
+  // Questions worked out from the applicant's full profile and checked against it (Yong, 2026-11-17); long written
+  // answers drafted for the applicant to approve. TC_ANSWER_INFER=off stops both (Settings then says so, in red).
+  inferrer: smartAnswersStatus().on ? new ClaudeAnswerInferrer() : undefined,
+  drafter: smartAnswersStatus().on ? new ClaudeEssayDrafter() : undefined,
 };
+const smart = smartAnswersStatus();
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
@@ -72,7 +75,8 @@ let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
 async function main() {
-  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", answers: apply?.inferrer?.version ?? "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
+  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", answers: apply?.inferrer?.version ?? "off", answers_effort: apply?.inferrer ? smart.effort : undefined, essays: apply?.drafter?.version ?? "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
+  if (!apply?.inferrer) log.warn("worker.smart_answers_off", { reason: smart.problem ?? "apply browser off" });
   // One worker: anything still marked running was cut off by the last restart or update.
   try {
     const n = await recoverInterruptedWork(pool);

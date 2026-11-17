@@ -1,4 +1,4 @@
-import { getApplySettings, getProfile, hasFreshStepUp, listDevices } from "@tc-hunter/db";
+import { getApplySettings, getProfile, hasFreshStepUp, listDevices, smartAnswersStatus } from "@tc-hunter/db";
 import { STANDING_ANSWERS, t, type ApplyMode } from "@tc-hunter/domain";
 import { headers } from "next/headers";
 import { Details, Status } from "@/components/Layers";
@@ -22,10 +22,11 @@ export default async function ApplyingSettingsPage(props: PageProps) {
   const legalName = (await getProfile(pool, cfg, session)).about.legalName;
   const standingOn = new Map(applying.standing.map((x) => [x.kind, x.text]));
   const MODES: Array<{ id: ApplyMode; title: string; does: string }> = [
-    { id: "hands_free", title: "Hands-free (recommended)", does: "Once you approve your resume for a job, TC Hunter fills in the employer's form, attaches your documents and presses Submit by itself. It only stops when it needs something from you." },
+    { id: "hands_free", title: "Hands-free", does: "Once you approve your resume for a job, TC Hunter fills in the employer's form, attaches your documents and presses Submit by itself. It only stops when it needs something from you." },
     { id: "check_answers", title: "Let me check the answers first", does: "TC Hunter fills in the form, then waits for you to approve its answers. After that it presses Submit by itself." },
-    { id: "approve_each", title: "Ask me before each step", does: "You approve the answers, and you approve sending each application, with a quick \"confirm it's you\"." },
+    { id: "approve_each", title: "Approve each application (recommended)", does: "You approve the answers, and you approve sending each application, with a quick \"confirm it's you\"." },
   ];
+  const smart = smartAnswersStatus();
   const h = await headers();
   const origin = process.env.TC_PUBLIC_ORIGIN || `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost"}`;
   return (
@@ -36,6 +37,14 @@ export default async function ApplyingSettingsPage(props: PageProps) {
         {params.apply === "mode" ? <Status>Saved. This applies to the next application TC Hunter starts.</Status> : null}
         {params.apply === "standing_on" ? <Status>Saved. TC Hunter uses this answer from the next form on.</Status> : null}
         {params.apply === "standing_off" ? <Status>Turned off. TC Hunter will stop and ask you instead.</Status> : null}
+        <div className="smart-answers" id="smart-answers" role="status">
+          {smart.on ? (
+            <p><strong>Smart answers: on</strong> <span className="muted">· model {smart.model} · effort {smart.effort} · every answer checked against your profile</span></p>
+          ) : (
+            <p className="error"><strong>Smart answers: off.</strong> {smart.problem} Applications still run, but only on answers the rules are sure of.</p>
+          )}
+          <p className="muted small">Questions your profile doesn&apos;t settle by itself are worked out from your goals, roles and what you did in them, skills, education, saved answers, stories and resumes (never your contact details). Each answer must quote the part of your profile it rests on; anything it can&apos;t support is left for you. Long written answers are drafted for you to read and approve.</p>
+        </div>
         <p>TC Hunter has its own browser on the server. It opens the employer&apos;s form, fills it in from your profile, attaches your approved resume and cover letter, and presses Submit. Each application page shows what it did, step by step, with pictures of the employer&apos;s page.</p>
         <form action={applyModeAction} className="stack">
           <fieldset>

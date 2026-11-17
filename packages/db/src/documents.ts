@@ -77,7 +77,7 @@ export async function loadTailorProfile(c: pg.PoolClient, dk: Buffer): Promise<T
   };
 }
 
-async function postingForMatch(c: pg.PoolClient, matchId: string): Promise<TailorPosting & { matchId: string; ref: string }> {
+export async function postingForMatch(c: pg.PoolClient, matchId: string): Promise<TailorPosting & { matchId: string; ref: string }> {
   const r = (await c.query(
     `SELECT m.id AS match_id, m.gap_skills, p.id, p.public_ref, p.title, p.employer_canonical, p.requirements, p.description_text
        FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.id = $1`, [matchId])).rows[0];

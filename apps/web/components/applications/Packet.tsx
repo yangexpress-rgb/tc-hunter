@@ -11,7 +11,7 @@ type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 
 const FROM: Record<string, string> = {
   master_profile: "From your profile", answer_bank: "Your saved answer", tailored_doc: "Your approved document for this job", applicant_typed: "You typed it",
-  standing_answer: "Your standing answer in Settings", inferred: "Worked out from your profile",
+  standing_answer: "Your standing answer in Settings", inferred: "Worked out from your profile", drafted: "A draft for you to check",
 };
 const STEP: Record<string, string> = {
   attestation: "A statement you confirm yourself", work_auth: "Your right to work", eeo: "A personal question: always your choice",
@@ -216,10 +216,10 @@ function AnswerForm({ p, f, back, label }: { p: Packet; f: Packet["fields"][numb
       {f.options?.length ? (
         <label className="sr-label">Your answer<select name="answer" defaultValue={f.answer ?? ""}><option value="">Leave for me</option>{f.options.map((o) => <option key={o}>{o}</option>)}</select></label>
       ) : (
-        <label className="sr-label">Your answer{f.type === "textarea" ? <textarea name="answer" rows={3} maxLength={10000} defaultValue={f.answer ?? ""} /> : <input name="answer" maxLength={1000} defaultValue={f.answer ?? ""} />}</label>
+        <label className="sr-label">Your answer{f.type === "textarea" ? <textarea name="answer" rows={f.source === "drafted" ? 10 : 3} maxLength={10000} defaultValue={f.answer ?? ""} /> : <input name="answer" maxLength={1000} defaultValue={f.answer ?? ""} />}</label>
       )}
       <span className="small muted">Saved to your profile, so you won&apos;t be asked again.</span>
-      <button className="secondary">{label}</button>
+      <button className="secondary">{f.source === "drafted" ? "Use this draft" : label}</button>
     </form>
   );
 }
