@@ -28,6 +28,8 @@ export interface InferFacts {
   education: Array<{ school: string; degree: string | null; field: string | null; start: string | null; end: string | null }>;
   /** Their approved saved answers, as question and answer. */
   saved: Array<{ question: string; answer: string }>;
+  /** Their approved resume for this job, contact details taken out. */
+  resumeText?: string | null;
 }
 export interface Inferred { key: string; answer: string; basis: string }
 export interface AnswerInferrer {
@@ -81,6 +83,7 @@ Rules:
 - Work authorisation: if their saved answer says they don't need sponsorship, they are authorised to work in their home country, and vice versa. Use their saved answers for sponsorship questions.
 - "Have you worked for <employer> before?": answer No only if none of their work history is at that employer (or a clear variant of its name); Yes if it is.
 - Still in school / currently enrolled: from their education dates against today.
+- Education questions (school, degree level, field of study, years): from their education rows or resume. Pick the choice for their highest degree unless the question is about a specific school row (e.g. "MBA" is a Master's degree).
 - Government, military, or a specific kind of past employer: from their work history.
 - Legal or compliance questions (excluded, debarred, convicted, disciplined, under investigation) and questions about other organisations' relationships: null unless a saved answer says it. A "Not Sure" choice is fine when that is the honest answer and the facts can't settle it.
 - Relocation, travel, salary, notice: from their saved answers or goals only.

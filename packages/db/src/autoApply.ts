@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText,
   type AnswerInferrer, type InferFacts, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -267,7 +267,11 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
     const saved = profile.answers.filter((a) => a.approved && !a.stale && a.text.trim())
       .map((a) => ({ question: presetLabel.get(a.key) ?? a.key.replace(/^custom:/, ""), answer: a.text.slice(0, 500) }));
     const home = [profile.city, profile.region, profile.country].filter(Boolean).join(", ") || null;
-    return { open, facts: { today: new Date().toISOString().slice(0, 10), employer: app.employer, jobTitle: app.title, goals, home, work, education, saved } satisfies InferFacts };
+    // The approved resume for this job, for what the profile rows don't spell out (a degree's level, say).
+    // Contact details are taken out first.
+    const doc = (await c.query("SELECT source_json FROM document WHERE match_id = $1 AND type = 'tailored_resume' AND status = 'approved' ORDER BY version DESC LIMIT 1", [app.match_id])).rows[0];
+    const resumeText = doc ? documentText(doc.source_json).replace(/[^\s@]+@[^\s@]+/g, "").replace(/\+?\d[\d\s().-]{7,}\d/g, "").replace(/https?:\/\/\S+|linkedin\.com\S*/gi, "").slice(0, 12000) : null;
+    return { open, facts: { today: new Date().toISOString().slice(0, 10), employer: app.employer, jobTitle: app.title, goals, home, work, education, saved, resumeText } satisfies InferFacts };
   });
   if (!gathered) return out;
   const ask: InferQuestion[] = [];
