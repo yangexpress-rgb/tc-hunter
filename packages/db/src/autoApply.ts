@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
-  checkContext, checkEssay, isEssayQuestion, companyKey, findOnEmployerSite, isNoFetchHost,
+  checkContext, checkEssay, isEssayQuestion, companyKey, findOnEmployerSite, isNoFetchHost, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
@@ -779,7 +779,9 @@ async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps,
   const until = Date.now() + (deps.confirmWaitMs ?? 45_000);
   let last = { url: "", text: "", errors: [] as string[], humanCheck: false };
   let errorsSince = 0;
-  while (Date.now() < until) {
+  let until2 = until;
+  let codeTried = false;
+  while (Date.now() < until2) {
     await sleep(deps.pollMs ?? 1500);
     try { last = await page.now(); } catch { continue; }
     const ok = ats === "workday" ? WORKDAY.confirmed.test(last.text) : looksConfirmed(ats, last.url, last.text);
@@ -795,6 +797,16 @@ async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps,
       await run.end("sent", null, null, `Sent. ${conf ? `${app.employer}'s confirmation number: ${conf}.` : `${app.employer} showed their thank-you page (no confirmation number).`}`);
       return "sent";
     }
+    // The site emailed the applicant a security code and waits for it (Greenhouse). Yong (2026-11-17): read it
+    // from their Gmail, enter it and finish sending. Once per application; without the code nothing was sent.
+    if (!codeTried && securityCodeAsked(last.text) && page.enterSecurityCode) {
+      codeTried = true;
+      const done = await finishWithCode(pool, auto, deps, app, run, page, k, selector, last.text);
+      if (done) return done;
+      until2 = Date.now() + (deps.confirmWaitMs ?? 45_000);
+      errorsSince = 0;
+      continue;
+    }
     // The form is still there with its own error messages: it is very likely not sent, but only the applicant can say.
     if (last.errors.length || last.humanCheck) { if (!errorsSince) errorsSince = Date.now(); else if (Date.now() - errorsSince > 6000) break; }
   }
@@ -804,6 +816,47 @@ async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps,
     : last.errors.length ? ` Their form showed: ${last.errors.slice(0, 3).map((e) => `"${e}"`).join(", ")}. That usually means it wasn't sent.` : "";
   await run.end("unclear", `TC Hunter pressed Submit, but ${app.employer}'s thank-you page didn't appear.${why} Nothing will be sent again. It's checking your email for their confirmation; if none comes, tell TC Hunter below whether it went through.`);
   return "unclear";
+}
+
+/**
+ * After Submit, the site wants the code it just emailed. Reads it from the applicant's connected Gmail,
+ * types it in and presses their Submit button to finish this same application. Returns a final status
+ * when it had to stop (no Gmail, no code, no box): the application was not sent then, so it goes back to
+ * the applicant with nothing pressed again. Returns null when the code went in, to watch for the thank-you page.
+ */
+async function finishWithCode(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, page: ApplyPage,
+  k: { id: string }, selector: string, pageText: string): Promise<Status | null> {
+  const notSent = async (why: string) => {
+    await withApplicant(pool, auto, async (c) => {
+      await c.query("UPDATE submission_attempt SET outcome = 'failed_permanent', error_class = 'security_code', updated_at = now() WHERE packet_id = $1 AND outcome = 'in_progress'", [k.id]);
+      await c.query("UPDATE application_packet SET state = 'packet_ready_for_review' WHERE id = $1", [k.id]);
+    });
+    await run.shot("stopped", `${app.employer}'s page asking for the security code`, page, deps.cfg);
+    await run.end("failed", `${app.employer}'s site emailed you a security code to finish sending, ${why} Their site doesn't take the application without the code, so it wasn't sent. Choose Try again, or apply on their site yourself.`);
+    return "failed" as Status;
+  };
+  await run.step(`${app.employer}'s site emailed you a security code to finish sending. Reading it from your Gmail`);
+  const mailRef = await withApplicant(pool, auto, async (c) => (await c.query("SELECT vault_ref FROM email_connection WHERE status = 'connected'")).rows[0]?.vault_ref ?? null);
+  if (!deps.email || !mailRef) return notSent("but your Gmail isn't connected, so TC Hunter couldn't read it (Settings › Email).");
+  const token = await deps.email.vault.get(auto.applicantId, mailRef);
+  const reader = token ? deps.email.reader(token) : null;
+  if (!reader?.securityCode) return notSent("but TC Hunter couldn't open your Gmail to read it.");
+  const since = new Date(Date.now() - 5 * 60_000);
+  const length = securityCodeLength(pageText);
+  const stop = Date.now() + (deps.emailWaitMs ?? 180_000);
+  let code: string | null = null;
+  do {
+    code = await reader.securityCode(since, app.employer, length).catch(() => null);
+    if (code) break;
+    await sleep(deps.pollMs ? deps.pollMs * 4 : 10_000);
+  } while (Date.now() < stop);
+  if (!code) return notSent("but it didn't arrive in your Gmail within 3 minutes.");
+  if (!(await page.enterSecurityCode!(code))) return notSent("but TC Hunter couldn't find the box on their page to type it into.");
+  await run.step(`Entered the security code from your Gmail. Pressing Submit on ${app.employer}'s form to finish`);
+  if (!(await page.submit(selector))) return notSent("and TC Hunter typed it in, but couldn't find their Submit button to finish.");
+  applyLog.info("apply.security_code", { run: run.id, length: code.length });
+  await run.step(`Waiting for ${app.employer}'s confirmation`);
+  return null;
 }
 
 async function settleAfterClickError(pool: pg.Pool, auto: RequestContext, app: AppRow) {

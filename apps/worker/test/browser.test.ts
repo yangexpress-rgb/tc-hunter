@@ -43,6 +43,11 @@ beforeAll(async () => {
       'lb.innerHTML = "<li role=option>Select One</li>"; setTimeout(function () { lb.innerHTML = "<li role=option>Select One</li><li role=option>Bachelors Degree</li><li role=option>Masters Degree</li>"; }, 1200); });' +
       'document.addEventListener("keydown", function (e) { if (e.key === "Escape") document.getElementById("lb").innerHTML = ""; });' +
       'setTimeout(function () { document.getElementById("foot").innerHTML = "<button data-automation-id=pageFooterNextButton>Submit</button>"; }, 1500);</script>');
+    // Greenhouse's security code step (Dollar Shave Club, 2026-11-17): a postal code above, then 8 one-character boxes.
+    if (url.startsWith("/code")) return html('<label for="zip">Postal code</label><input id="zip" name="postal_code" value="27513">' +
+      '<p>A verification code was sent to you. Enter the 8-character code to confirm you are a human.</p><fieldset><legend>Security code</legend>' +
+      [0, 1, 2, 3, 4, 5, 6, 7].map((i) => `<input id="security-input-${i}" maxlength="1" aria-label="Security code ${i + 1}">`).join("") + '</fieldset>' +
+      '<script>document.querySelectorAll("input[maxlength=\'1\']").forEach(function (b, i, all) { b.addEventListener("input", function () { if (b.value && all[i + 1]) all[i + 1].focus(); }); });</script>');
     res.writeHead(404).end();
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()));
@@ -231,6 +236,18 @@ describe.skipIf(!available)("parts a Workday page draws late", () => {
       expect(await page.submit("[data-automation-id='pageFooterNextButton']")).toBe(true);
       const form = await page.readForm();
       expect(form.fields.find((f) => f.key === "#deg")?.options).toEqual(["Select One", "Bachelors Degree", "Masters Degree"]);
+    } finally { await page.close(); }
+  });
+});
+
+describe.skipIf(!available)("Greenhouse's emailed security code", () => {
+  it("types the code into its one-character boxes and leaves the postal code alone", async () => {
+    const page = await new ServerBrowser().open(`${base}/code`);
+    try {
+      expect(await page.enterSecurityCode!("aB3dE9fG")).toBe(true);
+      const pg = (page as unknown as { pg: import("playwright-core").Page }).pg;
+      expect(await pg.locator("input[maxlength='1']").evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).join(""))).toBe("aB3dE9fG");
+      expect(await pg.locator("#zip").inputValue()).toBe("27513");
     } finally { await page.close(); }
   });
 });

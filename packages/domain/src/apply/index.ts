@@ -76,6 +76,8 @@ export interface ApplyPage {
   /** Presses the Submit button once. False if there was no such button to press. */
   submit(selector: string): Promise<boolean>;
   now(): Promise<PageNow>;
+  /** Types a code the site emailed into its security-code box (one box, or one box per character). False if there was no such box. */
+  enterSecurityCode?(code: string): Promise<boolean>;
   screenshot(): Promise<Uint8Array>;
   close(): Promise<void>;
 }

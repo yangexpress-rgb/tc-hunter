@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { SecretValue } from "../secretStore";
 import type { MailMessage } from "./classify";
 import { verificationLinkIn } from "../apply";
+import { CODE_SENDERS, CODE_SENDER_QUERY, securityCodeIn } from "../apply/securityCode";
 
 /**
  * Gmail, read-only (decision 13.3). The only permission asked for is gmail.readonly:
@@ -74,6 +75,11 @@ export interface MailReader {
    * (hands-free applying, Yong 2026-11-15). Read in memory; only the link is used, nothing is kept.
    */
   accountLink?(tenantHost: string, since: Date, kind?: "verify" | "reset"): Promise<string | null>;
+  /**
+   * The one-time security code a hiring site (Greenhouse) emailed after Submit, newest first, preferring an
+   * email that names the employer (Yong, 2026-11-17). Read in memory; only the code is used, nothing is kept.
+   */
+  securityCode?(since: Date, employer: string, length: number | null): Promise<string | null>;
 }
 
 const b64url = (s: string) => Buffer.from(s.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
@@ -150,6 +156,29 @@ export class GmailReader implements MailReader {
     }
     return null;
   }
+  async securityCode(since: Date, employer: string, length: number | null): Promise<string | null> {
+    const after = Math.floor(since.getTime() / 1000) - 60;
+    const list = await this.get(`/messages?${new URLSearchParams({ q: `${CODE_SENDER_QUERY} after:${after}`, maxResults: "5" })}`);
+    const mails: Array<{ from: string; text: string }> = [];
+    for (const { id } of (list.messages ?? []) as Array<{ id: string }>) {
+      const m = await this.get(`/messages/${encodeURIComponent(id)}?format=full`);
+      const from = String((m.payload?.headers ?? []).find((x: { name: string }) => x.name.toLowerCase() === "from")?.value ?? "");
+      const b = bodyOf(m.payload);
+      if (b) mails.push({ from, text: b.text });
+    }
+    return pickSecurityCode(mails, employer, length);
+  }
+}
+
+/** Picks the code from hiring-site emails (newest first), preferring one that names the employer. */
+export function pickSecurityCode(mails: Array<{ from: string; text: string }>, employer: string, length: number | null): string | null {
+  const ours = mails.filter((m) => CODE_SENDERS.test(m.from.trim()));
+  const named = ours.filter((m) => employer && m.text.toLowerCase().includes(employer.toLowerCase()));
+  for (const m of [...named, ...ours]) {
+    const code = securityCodeIn(m.text, length);
+    if (code) return code;
+  }
+  return null;
 }
 
 /** A link that opens the message in the applicant's own Gmail. */

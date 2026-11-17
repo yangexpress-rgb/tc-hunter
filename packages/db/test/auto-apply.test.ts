@@ -19,7 +19,7 @@ import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./
  * one press of Submit. The real browser runs against local pages in apps/worker/test.
  */
 
-interface FakeSpec { growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
+interface FakeSpec { securityCode?: boolean; growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
 
 class FakePage implements ApplyPage {
   values = new Map<string, string>();
@@ -43,8 +43,11 @@ class FakePage implements ApplyPage {
   }
   async filledHash() { return createHash("sha256").update(JSON.stringify([...this.values].sort())).digest("hex"); }
   async submit() { this.clicks++; return true; }
+  code: string | null = null;
+  async enterSecurityCode(code: string) { this.code = code; return true; }
   async now() {
     if (!this.clicks) return { url: this.spec.url, text: "", errors: [], humanCheck: false };
+    if (this.spec.securityCode && !(this.clicks > 1 && this.code)) return { url: this.spec.url, text: "A verification code was sent to yong@example.test. Enter the 8-character code to confirm you're a human.", errors: [], humanCheck: false };
     if (this.spec.after === "thanks") return { url: `${this.spec.url}/confirmation`, text: "Thank you for applying! Your confirmation number: GH-77120", errors: [], humanCheck: false };
     if (this.spec.after === "errors") return { url: this.spec.url, text: "Please fix the errors", errors: ["Phone is required"], humanCheck: false };
     return { url: this.spec.url, text: "Loading", errors: [], humanCheck: false };
@@ -97,7 +100,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Dollar Shave Club", "Nowhere Co", "Choices Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Dollar Shave Club", "Nowhere Co", "Choices Co", "Code Co", "Nocode Co"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: ["Dollar Shave Club", "Nowhere Co"].includes(emp) ? `https://www.linkedin.com/jobs/view/${emp.length}` : `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -268,7 +271,7 @@ describe("Approve every send", () => {
   it("dropdowns that list more choices after filling aren't new questions: approved answers lead to the send, not another approval", async () => {
     await saveApplyMode(pool, cfg, yong, "approve_each");
     browser.spec = () => ({ url: GH(8), fields: BASE, after: "thanks", growOptions: true });
-    const ref = apps.at(-1)!;
+    const ref = apps.at(-3)!;
     await approveResume(ref);
     await requestApply(pool, yong, ref);
     await runNow();
@@ -681,7 +684,7 @@ describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
     await saveApplyMode(pool, cfg, yong, "hands_free");
     applyDeps = { ...applyDeps, fetcher: sites };
     browser.spec = () => ({ url: "https://job-boards.greenhouse.io/dollarshaveclub/jobs/41", fields: BASE, after: "thanks" });
-    const ref = apps.at(-3)!;
+    const ref = apps.at(-5)!;
     await approveResume(ref);
     await runNow();
     const s = await applyStatus(pool, yong, ref);
@@ -696,7 +699,7 @@ describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
 
   it("no match on the employer's site: it says why, in red, and leaves it to the applicant", async () => {
     const opened = browser.opened.length;
-    const ref = apps.at(-2)!;
+    const ref = apps.at(-4)!;
     await approveResume(ref);
     await runNow();
     const s = await applyStatus(pool, yong, ref);
@@ -704,5 +707,41 @@ describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
     expect(s.problem).toMatch(/came from LinkedIn, and TC Hunter never applies there.*couldn't find Nowhere Co's careers site.*Apply on LinkedIn yourself/);
     expect(s.steps.at(-1)).toMatchObject({ bad: true });
     expect(browser.opened.length).toBe(opened);
+  });
+});
+
+describe("an emailed security code after Submit (Yong, 2026-11-17)", () => {
+  const mail = (code: string | null): MailReader => ({
+    async address() { return "yong@example.test"; }, async search() { return []; },
+    async securityCode(_since: Date, employer: string, length: number | null) { return employer === "Code Co" && length === 8 ? code : null; },
+  });
+
+  it("reads the code from Gmail, types it in, finishes the same application and records the thank-you", async () => {
+    const vault = applyDeps.vault as MemorySecretStore;
+    await connectEmail(pool, yong, vault, new SecretValue("refresh-token")).catch(() => {});
+    applyDeps = { ...applyDeps, email: { vault, cfg, reader: () => mail("k7QmP2xZ") } };
+    browser.spec = () => ({ url: GH(21), fields: BASE, after: "thanks", securityCode: true });
+    const ref = apps.at(-2)!;
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    const page = browser.pages.at(-1)!;
+    expect(page.code).toBe("k7QmP2xZ");
+    expect(page.clicks).toBe(2);
+    expect(s.status).toBe("sent");
+    expect(s.steps.map((x) => x.text).join("\n")).toMatch(/emailed you a security code to finish sending[\s\S]*Entered the security code from your Gmail/);
+  });
+
+  it("no code in Gmail: it says so in red, nothing was sent, and Try again is possible", async () => {
+    applyDeps = { ...applyDeps, email: { ...applyDeps.email!, reader: () => mail(null) }, emailWaitMs: 50 };
+    browser.spec = () => ({ url: GH(22), fields: BASE, after: "thanks", securityCode: true });
+    const ref = apps.at(-1)!;
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(browser.pages.at(-1)!.clicks).toBe(1);
+    expect(s.status).toBe("failed");
+    expect(s.problem).toMatch(/emailed you a security code.*didn't arrive in your Gmail.*wasn't sent\. Choose Try again/);
+    await requestApply(pool, yong, ref);
   });
 });
