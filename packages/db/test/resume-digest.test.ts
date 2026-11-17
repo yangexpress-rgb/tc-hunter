@@ -120,6 +120,26 @@ describe("resume digest", () => {
     expect((await getProfile(pool, cfg, yong)).about.summary).toBe("Operations lead who turns messy processes into simple systems.");
   });
 
+  it("when the rules find no summary, Claude's word-for-word find fills the About, once per file", async () => {
+    // Yong, 2026-11-17: "why this section is blank now. I have content in my initial resume uploaded."
+    const mia = (await newApplicant(pool, cfg, "Mia")).session;
+    const text = "Mia Example\nmia@example.test\nCloud platform leader.\nBuilt and ran platforms for retail banks.\n\nEXPERIENCE\nPlatform Lead — Fabrikam Bank\nJan 2020 – Present\n• Ran the cloud platform\n";
+    await storeResumeFile(pool, cfg, mia, { name: "mia.txt", bytes: Buffer.from(text) });
+    let asked = 0;
+    const finder = { version: "test", async find(t: string) { asked++; expect(t).not.toContain("mia@example.test"); return "Cloud platform leader.\nBuilt and ran platforms for retail banks."; } };
+    const invented = { version: "test", async find() { asked++; return "Visionary cloud platform leader for global banks."; } };
+    expect(await fillAboutFromResume(pool, cfg, mia, { finder: invented })).toBe(false); // not in the file: never kept
+    expect(asked).toBe(1);
+    expect(await fillAboutFromResume(pool, cfg, mia, { finder })).toBe(false); // this file was already looked at
+    expect(asked).toBe(1);
+    expect(await fillAboutFromResume(pool, cfg, mia, { finder, force: true })).toBe(true); // the button looks again
+    const p = await getProfile(pool, cfg, mia);
+    expect(p.about).toMatchObject({ summary: "Cloud platform leader.\nBuilt and ran platforms for retail banks.", summarySource: "resume" });
+    // Filled once, it's never looked for again.
+    expect(await fillAboutFromResume(pool, cfg, mia, { finder, force: true })).toBe(false);
+    expect(asked).toBe(2);
+  });
+
   it("the same resume in another format adds nothing that's already there", async () => {
     const r = await storeResumeFile(pool, cfg, yong, { name: "sample-resume.docx", bytes: readFileSync(join(FIX, "sample-resume.docx")) });
     expect(r.stored).toBe(true);

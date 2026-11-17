@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type Anthropic from "@anthropic-ai/sdk";
 import {
-  aboutFromResume, buildResume, careerYears, checkContext, documentText, extractText, normaliseAbout, renderDocument,
+  aboutFromResume, aboutIsInResume, ClaudeAboutFinder, buildResume, careerYears, checkContext, documentText, extractText, normaliseAbout, renderDocument,
   type TailorPosting, type TailorProfile,
 } from "../src";
 
@@ -45,6 +46,16 @@ describe("About from the uploaded resume", () => {
   it("keeps bullets on their own lines and stops at the next section", () => {
     const t = "Pat Example\n\nPROFILE\nTransformation executive who turns strategy into delivered programs across large enterprises.\n• Built and led teams of 120 across three continents\n• Delivered $40M in run-rate savings\n\nSKILLS\nSAP";
     expect(aboutFromResume(t)).toBe("Transformation executive who turns strategy into delivered programs across large enterprises.\n• Built and led teams of 120 across three continents\n• Delivered $40M in run-rate savings");
+  });
+
+  it("Claude's find is kept only when it is in the resume word for word", async () => {
+    const fake = (summary: string | null) => ({ beta: { messages: { parse: async () => ({ stop_reason: "end_turn", parsed_output: { summary } }) } } }) as unknown as Anthropic;
+    const text = "Pat Example\nSenior Director at a Fortune 10 company with over 20 years of experience\nin digital transformation.\n\nEXPERIENCE\nCencora";
+    expect(await new ClaudeAboutFinder(fake("Senior Director at a Fortune 10 company with over 20 years of experience in digital transformation.")).find(text))
+      .toBe("Senior Director at a Fortune 10 company with over 20 years of experience in digital transformation.");
+    expect(await new ClaudeAboutFinder(fake("Visionary Senior Director at a Fortune 10 company with over 20 years of experience.")).find(text)).toBeNull();
+    expect(await new ClaudeAboutFinder(fake(null)).find(text)).toBeNull();
+    expect(aboutIsInResume("• Built teams\n• Cut costs", "x\n• Built teams\n• Cut costs\n")).toBe(true);
   });
 
   it("normalises what the applicant saves to LinkedIn's length", () => {

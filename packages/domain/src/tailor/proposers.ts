@@ -66,13 +66,18 @@ const PROMPT_VERSION = "tailor-claude-2";
  * what is true: every name, number, year and level must be in the facts the summary cites.
  */
 export const ABOUT_GUIDE = `# The About (summary at the top of the resume)
-Write the applicant's About for this one job: the short executive summary a hiring manager reads first. It answers three things, in this order:
+Write the applicant's About for this one job: the short executive summary a hiring manager reads first.
+
+First, read the job: its title, required and nice-to-have skills, and the description. Decide the two or three things this employer most expects from the person in this role (for example the scope they will own, the outcomes they must deliver, the domain or industry, the level of leadership). Then pick the applicant's facts that best answer those expectations. The About is built around them; facts that don't serve this job are left out.
+
+It answers three things, in this order:
 1. Who they are: their most senior or current title, the kind and scale of organisation, and how long they have done this work.
 2. Their value: what they reliably deliver for a business (growth, transformation, efficiency, risk, customers, teams), framed around what this job needs most.
 3. Their proof: the two or three areas of experience and expertise from their facts that matter most for this job, with a concrete result where the facts give one.
 
 How it should read:
 - Executive business language: confident, specific and outcome-focused, the way a senior leader describes themselves on LinkedIn. Lead with the strengths this job's title and requirements ask for, using the applicant's own facts, so the reader sees the fit in the first sentence.
+- Use the job's own vocabulary for the work where the applicant's facts describe the same thing (for example "enterprise applications" when their facts say they ran SAP and Salesforce programs), but never claim a skill or name the facts don't give.
 - 3 to 5 sentences, 60 to 120 words, one paragraph. Resume style: no "I", "me" or "my"; start with the title or a strong noun phrase ("Senior technology executive with…", "Digital transformation leader who…").
 - Plain, precise words. No clichés or filler: never "results-driven", "dynamic", "passionate", "go-getter", "synergy", "think outside the box", "proven track record of success", "detail-oriented", "team player".
 - Don't flatter the employer and don't claim to know its plans or products. You may name the job title and the employer.
