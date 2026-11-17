@@ -319,7 +319,7 @@ function ChangesPane({ d, here }: { d: DocumentView; here: string }) {
       ) : (
         <div className="card">
           <h2>Where each paragraph comes from</h2>
-          <ul className="plain">{s.paragraphs.map((p, i) => <li key={i}><span className="chip">{{ opening: "Opening", evidence: "Your experience", motivation: "Your saved answer", closing: "Closing" }[p.role]}</span> {p.included ? p.text : <span className="muted">(left out) {p.text}</span>}</li>)}</ul>
+          <ul className="plain">{s.paragraphs.map((p, i) => <li key={i}><span className="chip">{{ opening: "Opening", fit: "Why you fit", standout: "What sets you apart", evidence: "Your experience", motivation: "Your saved answer", closing: "Closing" }[p.role]}</span> {p.included ? p.text : <span className="muted">(left out) {p.text}</span>}</li>)}</ul>
         </div>
       )}
     </section>

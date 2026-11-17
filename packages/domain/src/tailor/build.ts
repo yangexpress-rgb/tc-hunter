@@ -112,7 +112,7 @@ export function buildResume(profile: TailorProfile, posting: TailorPosting, prop
   return { source, blocked, gaps: gapsFor(profile, posting) };
 }
 
-/** Cover letter: same pattern, same checker. Motivation only from approved answers and stories (P4). */
+/** Cover letter: same pattern, same checker. Motivation only from approved answers and stories (P4). The writer's analysis becomes notes. */
 export function buildLetter(profile: TailorProfile, posting: TailorPosting, proposal: LetterProposal): LetterDraft {
   const ctx: CheckContext = checkContext(profile, posting);
   const blocked: Blocked[] = [];
@@ -126,6 +126,14 @@ export function buildLetter(profile: TailorProfile, posting: TailorPosting, prop
     paragraphs.push({ factIds: p.fact_ids, text: r.text, role, transform: r.transform, included: true });
   }
   const notes: string[] = [];
+  // How the letter argues "why me", so the applicant can judge the argument (not printed in the letter).
+  const a = proposal.analysis;
+  if (a?.thesis) notes.push(`The case this letter makes: ${a.thesis}`);
+  if (a?.needs?.length) {
+    const label = { strong: "strong proof", partial: "some proof", none: "no proof in your profile" } as const;
+    notes.push(`What this job needs most, and your proof: ${a.needs.map((n) => `${n.need} (${label[n.strength] ?? n.strength})`).join("; ")}.`);
+  }
+  if (a?.differentiators?.length) notes.push(`What sets you apart: ${a.differentiators.join("; ")}.`);
   if (!paragraphs.some((p) => p.role === "motivation")) {
     notes.push("Your own reasons for wanting this job aren't in the letter. Approve an answer to \"Why do you want to work here?\" in Saved answers, and it will be used next time.");
   }
