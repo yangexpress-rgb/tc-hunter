@@ -149,6 +149,27 @@ class PwPage implements ApplyPage {
     return out;
   }
 
+  /**
+   * Ticks or clears a tick box or radio button and says whether it really took. Boxes drawn by the site
+   * (Workday) keep the real input off screen, where a click at its spot misses: the label, then the
+   * input itself, is clicked instead.
+   */
+  protected async setTick(loc: Locator, want: boolean): Promise<boolean> {
+    const is = () => loc.isChecked().catch(() => null);
+    if ((await is()) === want) return true;
+    await loc.setChecked(want, { force: true, timeout: 3000 }).catch(() => {});
+    if ((await is()) === want) return true;
+    await loc.evaluate((el: HTMLInputElement) => {
+      const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest("label");
+      (l as HTMLElement | null ?? el).click();
+    }).catch(() => {});
+    await this.pg.waitForTimeout(300);
+    if ((await is()) === want) return true;
+    await loc.evaluate((el: HTMLInputElement) => el.click()).catch(() => {});
+    await this.pg.waitForTimeout(300);
+    return (await is()) === want;
+  }
+
   protected async fillOne(it: FillItem): Promise<FillResult["status"]> {
     const loc = locate(this.pg, it.key);
     if (!(await loc.count())) return "not_found";
@@ -177,7 +198,7 @@ class PwPage implements ApplyPage {
           const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${el.id}"]`)) || el.closest("label");
           return (l?.textContent ?? el.value ?? "").replace(/\s+/g, " ").trim();
         });
-        if (norm(label) === norm(value) || sameAnswer(label, value) || norm(await r.getAttribute("value") ?? "") === norm(value)) { await r.check({ force: true }); return "filled"; }
+        if (norm(label) === norm(value) || sameAnswer(label, value) || norm(await r.getAttribute("value") ?? "") === norm(value)) return (await this.setTick(r, true)) ? "filled" : "failed";
       }
       return "no_match";
     }
@@ -191,23 +212,7 @@ class PwPage implements ApplyPage {
       await loc.selectOption({ label: match.trim() }).catch(async () => { await loc.selectOption({ label: match }); });
       return "filled";
     }
-    if (type === "checkbox") {
-      const want = ANSWER_YES.test(value.trim());
-      const is = () => loc.isChecked().catch(() => null);
-      if ((await is()) === want) return "filled";
-      await loc.setChecked(want, { force: true, timeout: 3000 }).catch(() => {});
-      if ((await is()) === want) return "filled";
-      // A drawn box (Workday): the input itself ignores a forced click; its label or the box takes it.
-      await loc.evaluate((el: HTMLInputElement) => {
-        const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest("label");
-        (l as HTMLElement | null ?? el).click();
-      }).catch(() => {});
-      await this.pg.waitForTimeout(300);
-      if ((await is()) === want) return "filled";
-      await loc.evaluate((el: HTMLInputElement) => el.click()).catch(() => {});
-      await this.pg.waitForTimeout(300);
-      return (await is()) === want ? "filled" : "failed";
-    }
+    if (type === "checkbox") return (await this.setTick(loc, ANSWER_YES.test(value.trim()))) ? "filled" : "failed";
     await this.helpers();
     const wdList = tag === "input" && await loc.evaluate((el) => (window as any).__tcApply.isWorkdayList(el)).catch(() => false);
     if (tag === "button" || role === "combobox" || wdList) {
@@ -215,7 +220,15 @@ class PwPage implements ApplyPage {
     }
     await loc.fill(value);
     await loc.blur().catch(() => {});
-    return "filled";
+    // Some sites drop a value set from outside (the box is empty again): type it as a person would.
+    // A site that reformats it ("(416) 555-0199") has kept it.
+    const kept = async () => !value.trim() || !!(await loc.inputValue().catch(() => value)).trim();
+    if (await kept()) return "filled";
+    await loc.click({ timeout: 3000 }).catch(() => {});
+    await loc.press("ControlOrMeta+a").catch(() => {});
+    await loc.pressSequentially(value, { delay: 20 }).catch(() => {});
+    await loc.blur().catch(() => {});
+    return (await kept()) ? "filled" : "failed";
   }
 
   /** Drop-downs drawn by the site (React selects, Workday's lists): open, choose the matching choice. */
