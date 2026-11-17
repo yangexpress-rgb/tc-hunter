@@ -338,6 +338,46 @@ class PwPage implements ApplyPage {
     return { url: this.pg.url(), text: text.slice(0, 20000), errors, humanCheck: captcha || humanCheckIn(text) };
   }
 
+  /**
+   * Greenhouse's "Security code" step (Yong, 2026-11-17): one box per character, or a single box. Types the
+   * code the site emailed the applicant; false when no such box is on the page.
+   */
+  async enterSecurityCode(code: string): Promise<boolean> {
+    // One box per character first (the last run of them on the page), then a box named for the code. A plain
+    // "code" name isn't enough: the form above may have a postal code.
+    let list = this.pg.locator("input[maxlength='1']").filter({ visible: true });
+    let n = await list.count().catch(() => 0);
+    if (n < code.length) {
+      list = this.pg.locator("input[id*='security' i], input[name*='security' i], input[aria-label*='security' i], input[id*='verification' i], input[name*='verification' i], input[aria-label*='verification' i], input[autocomplete='one-time-code']").filter({ visible: true });
+      n = await list.count().catch(() => 0);
+    }
+    if (!n) return false;
+    if (n >= code.length && n > 1) {
+      const start = n - code.length;
+      for (let i = 0; i < code.length; i++) {
+        const box = list.nth(start + i);
+        await box.click({ timeout: 5000 }).catch(() => {});
+        await box.fill(code[i]!, { timeout: 5000 }).catch(async () => { await box.pressSequentially(code[i]!, { delay: 40 }); });
+      }
+    } else {
+      const box = list.first();
+      await box.click({ timeout: 5000 }).catch(() => {});
+      await box.fill(code, { timeout: 5000 }).catch(async () => { await box.pressSequentially(code, { delay: 40 }); });
+    }
+    await this.pg.waitForTimeout(500);
+    // Check what went in: every character, in order.
+    const typed = (await list.evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).join("")).catch(() => "")).replace(/\s/g, "");
+    if (!typed.endsWith(code)) {
+      // Some boxes move to the next one by themselves: type the whole code into the first box instead.
+      await list.nth(Math.max(0, n - code.length)).click({ timeout: 5000 }).catch(() => {});
+      await this.pg.keyboard.type(code, { delay: 60 });
+      await this.pg.waitForTimeout(500);
+      const again = (await list.evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).join("")).catch(() => "")).replace(/\s/g, "");
+      return again.includes(code);
+    }
+    return true;
+  }
+
   async screenshot(): Promise<Uint8Array> {
     return this.pg.screenshot({ fullPage: true, type: "jpeg", quality: 60 });
   }

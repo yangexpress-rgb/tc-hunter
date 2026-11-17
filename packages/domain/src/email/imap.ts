@@ -1,7 +1,8 @@
 import { SecretValue } from "../secretStore";
 import { verificationLinkIn } from "../apply";
+import { CODE_SENDER_QUERY } from "../apply/securityCode";
 import type { MailMessage } from "./classify";
-import { EmailAuthError, GmailReader, type GoogleClient, type MailReader } from "./gmail";
+import { EmailAuthError, GmailReader, pickSecurityCode, type GoogleClient, type MailReader } from "./gmail";
 
 /**
  * Gmail with an app password (Yong, 2026-11-15: the Google Cloud setup was "too complicated
@@ -142,6 +143,20 @@ export class GmailImapReader implements MailReader {
         if (link) return link;
       }
       return null;
+    });
+  }
+
+  async securityCode(since: Date, employer: string, length: number | null): Promise<string | null> {
+    const after = Math.floor(since.getTime() / 1000) - 60;
+    const { simpleParser } = await import("mailparser");
+    return this.withMailbox(async (client) => {
+      const mails: Array<{ from: string; text: string }> = [];
+      for (const f of await this.find(client, `${CODE_SENDER_QUERY} after:${after}`, 5, 2_000_000)) {
+        const p = await simpleParser(f.source);
+        const text = p.text ?? (typeof p.html === "string" ? p.html : "");
+        if (text) mails.push({ from: p.from?.text ?? "", text });
+      }
+      return pickSecurityCode(mails, employer, length);
     });
   }
 }
