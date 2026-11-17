@@ -543,7 +543,10 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
       { key: "#worked_here", label: "Have you ever worked for Premier Health as an employee or contractor?*", type: "select", options: ["Select One", "No", "Yes"], required: true },
       { key: "#ft", label: "What type of employment are you seeking?: Full-Time", type: "checkbox" },
       { key: "#excluded", label: "Are you excluded from any Federal health care program?*", type: "select", options: ["Select One", "Yes", "No"], required: true },
+      { key: "#degree", label: "Degree*", type: "select", options: ["Select One", "Certificate", "Juris Doctorate", "High School", "Bachelor's Degree", "Master's Degree", "Doctorate"], required: true },
     ];
+    await addFact(pool, yong, "education_item", { institution: "Example University", degree: "BS", field: "Economics", start_date: "2008-09-01", end_date: "2012-05-01" });
+    await addFact(pool, yong, "education_item", { institution: "Example Business School", degree: "MBA", field: null, start_date: "2015-09-01", end_date: "2017-05-01" });
     applyDeps = { ...applyDeps, inferrer };
     browser.spec = () => ({ url: GH(19), fields: [...BASE, ...extra], after: "thanks" });
     await approveResume(apps[18]!);
@@ -555,6 +558,7 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     expect(asked).toEqual(expect.arrayContaining(["#worked_here", "#ft", "#excluded"]));
     expect(asked).not.toContain("#gender");       // diversity questions are never worked out
     expect(asked).not.toContain("#first_name");   // already known
+    expect(asked).not.toContain("#degree");       // settled by their education rows
     expect(JSON.stringify(seen[0]!.facts)).not.toMatch(/yong@example\.test/);
     expect(seen[0]!.facts.work.map((w) => w.employer)).toContain("Northwind");
     expect(seen[0]!.facts.employer).toBe("Premier Health");
@@ -562,6 +566,7 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     const by = (label: RegExp) => p.fields.find((f: { label: string }) => label.test(f.label))!;
     expect(by(/worked for Premier/)).toMatchObject({ answer: "No", source: "inferred", willFill: true });
     expect(by(/Full-Time/)).toMatchObject({ answer: "Yes", source: "inferred" });
+    expect(by(/^Degree/)).toMatchObject({ answer: "Master's Degree", source: "inferred", willFill: true });
     applyDeps = { ...applyDeps, inferrer: undefined };
   });
 });

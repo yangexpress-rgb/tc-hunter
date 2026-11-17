@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice,
   type AnswerInferrer, type InferFacts, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -275,20 +275,31 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   });
   if (!gathered) return out;
   const ask: InferQuestion[] = [];
+  const { facts } = gathered;
   for (const f of gathered.open) {
     const hit = cache.get(cacheKey(f));
     if (hit !== undefined) { if (hit) out.set(f.key, hit); continue; }
+    // A degree question is settled by their education rows directly (an MBA is a Master's).
+    const degree = f.options?.length && DEGREE_QUESTION.test(f.label.trim()) ? degreeChoice(f.options, facts.education.map((e) => e.degree)) : null;
+    if (degree) { out.set(f.key, degree); cache.set(cacheKey(f), degree); continue; }
     ask.push({ key: f.key, label: f.label, type: f.type, options: f.options });
   }
+  // What the answers could be worked out from, as counts only (never the facts themselves).
+  applyLog.info("apply.infer_facts", { goals: facts.goals.length, work: facts.work.length, education: facts.education.length,
+    with_degree: facts.education.filter((e) => e.degree?.trim()).length, saved: facts.saved.length, resume: !!facts.resumeText,
+    from_education: gathered.open.length - ask.length });
   if (ask.length) {
-    const got = await deps.inferrer.infer(ask, gathered.facts);
+    const got = await deps.inferrer.infer(ask, facts).catch((e) => {
+      applyLog.warn("apply.infer_failed", { error: String((e as Error)?.message ?? e).slice(0, 200) }); return [];
+    });
     for (const q of ask) {
       const a = got.find((x) => x.key === q.key);
       const f = gathered.open.find((x) => x.key === q.key)!;
       cache.set(cacheKey(f), a ? { answer: a.answer, basis: a.basis } : null);
       if (a) out.set(q.key, { answer: a.answer, basis: a.basis });
     }
-    applyLog.info("apply.inferred", { asked: ask.length, answered: got.length, by: deps.inferrer.version });
+    applyLog.info("apply.inferred", { asked: ask.length, answered: got.length, by: deps.inferrer.version,
+      left: ask.filter((q) => !got.some((a) => a.key === q.key)).map((q) => q.label.slice(0, 60)).join(" | ").slice(0, 1500) });
   }
   return out;
 }
