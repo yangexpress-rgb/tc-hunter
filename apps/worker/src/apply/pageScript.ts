@@ -38,15 +38,18 @@ export const PAGE_SCRIPT = String.raw`
   function textOf(ids, el) {
     return clean(ids.split(/\s+/).map(function (id) { var n = byId(el, id); return n ? n.textContent : ""; }).join(" "));
   }
+  // A drop-down's own words before a choice ("Select One Required"), not its question (Premier's Application Questions).
+  var NOT_A_LABEL = /^(select one|choose one|select|choose|please select|select\.\.\.)\s*(required)?\s*\*?$/i;
+  function ok(t) { return !!t && !NOT_A_LABEL.test(t); }
   function labelOf(el) {
     var by = el.getAttribute("aria-labelledby");
-    if (by) { var t = textOf(by, el); if (t) return t; }
-    if (el.id) { var l = rootOf(el).querySelector('label[for="' + esc(el.id) + '"]'); if (l && clean(l.textContent)) return clean(l.textContent); }
-    var wrap = el.closest("label"); if (wrap && clean(wrap.textContent)) return clean(wrap.textContent);
-    if (el.getAttribute("aria-label")) return clean(el.getAttribute("aria-label"));
+    if (by) { var t = textOf(by, el); if (ok(t)) return t; }
+    if (el.id) { var l = rootOf(el).querySelector('label[for="' + esc(el.id) + '"]'); if (l && ok(clean(l.textContent))) return clean(l.textContent); }
+    var wrap = el.closest("label"); if (wrap && ok(clean(wrap.textContent))) return clean(wrap.textContent);
+    if (ok(clean(el.getAttribute("aria-label")))) return clean(el.getAttribute("aria-label"));
     // Workday: the question's own label sits in the same form field box.
     var box = el.closest("[data-automation-id^='formField'], .field, .application-question, .form-group");
-    if (box) { var lb = box.querySelector("label, legend, [data-automation-id='formLabel']"); if (lb && clean(lb.textContent)) return clean(lb.textContent); }
+    if (box) { var lb = box.querySelector("legend, [data-automation-id='formLabel'], label"); if (lb && ok(clean(lb.textContent))) return clean(lb.textContent); }
     if (el.placeholder) return clean(el.placeholder);
     return clean(el.name || el.id || el.getAttribute("data-automation-id"));
   }
@@ -133,6 +136,14 @@ export const PAGE_SCRIPT = String.raw`
       }
       var key = keyOf(el); if (!key || seen[key]) continue; seen[key] = 1;
       var label = type === "file" ? fileLabel(el) : labelOf(el);
+      // One choice of a tick-all-that-apply question ("Full-Time"), or one part of a date ("Month"): say which question.
+      var qbox = el.closest("[data-automation-id^='formField'], fieldset");
+      if (qbox && (type === "checkbox" && qbox.querySelectorAll("input[type=checkbox]").length > 1 || /^(month|day|year)$/i.test(label))) {
+        var ql = qbox.querySelector("legend, [data-automation-id='formLabel'], label:not([for])");
+        var qt = ql ? clean(ql.textContent) : "";
+        qt = qt.replace(/\s*\*\s*$/, "");
+        if (qt && qt !== label && ok(qt)) label = qt + ": " + label;
+      }
       var f = { key: key, label: label, type: type, required: isRequired(el, label), hasValue: false };
       if (tag === "select") {
         f.options = Array.prototype.filter.call(el.options, function (o) { return o.value !== ""; }).map(function (o) { return clean(o.textContent); });
