@@ -319,7 +319,7 @@ details.more > summary { list-style: none; cursor: pointer; color: var(--muted);
 details.more > summary:hover { color: var(--accent); text-decoration: underline; }
 details.more > summary::-webkit-details-marker { display: none; }
 /* A long table cell shown as one line until pressed (Where we look descriptions). */
-details.one-line > summary { display: block; max-width: 26em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: inherit; color: inherit; }
+details.one-line > summary { display: block; max-width: 18em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: inherit; color: inherit; }
 details.one-line[open] > summary { white-space: normal; overflow: visible; }
 details.one-line > summary:hover { color: var(--accent); text-decoration: none; }
 details.more .more-close, details.more[open] .more-open { display: none; }
