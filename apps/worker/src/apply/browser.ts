@@ -192,8 +192,21 @@ class PwPage implements ApplyPage {
       return "filled";
     }
     if (type === "checkbox") {
-      if (ANSWER_YES.test(value.trim())) await loc.check({ force: true }); else await loc.uncheck({ force: true });
-      return "filled";
+      const want = ANSWER_YES.test(value.trim());
+      const is = () => loc.isChecked().catch(() => null);
+      if ((await is()) === want) return "filled";
+      await loc.setChecked(want, { force: true, timeout: 3000 }).catch(() => {});
+      if ((await is()) === want) return "filled";
+      // A drawn box (Workday): the input itself ignores a forced click; its label or the box takes it.
+      await loc.evaluate((el: HTMLInputElement) => {
+        const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest("label");
+        (l as HTMLElement | null ?? el).click();
+      }).catch(() => {});
+      await this.pg.waitForTimeout(300);
+      if ((await is()) === want) return "filled";
+      await loc.evaluate((el: HTMLInputElement) => el.click()).catch(() => {});
+      await this.pg.waitForTimeout(300);
+      return (await is()) === want ? "filled" : "failed";
     }
     await this.helpers();
     const wdList = tag === "input" && await loc.evaluate((el) => (window as any).__tcApply.isWorkdayList(el)).catch(() => false);

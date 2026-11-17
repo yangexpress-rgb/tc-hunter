@@ -94,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -424,6 +424,34 @@ describe("Workday", () => {
     const st = await applyStatus(pool, yong, apps[17]!);
     expect(st.steps.map((x) => x.text).join(" | ")).toMatch(/Creating your account.*Signing in.*Gmail.*Confirming the account.*Signing in/);
     expect(st.status).toBe("sent");
+  });
+
+  it("an answer that opens a follow-up question: the page is read again and the follow-up answered too (Premier, 2026-11-17)", async () => {
+    const s7: { account: FakeWorkday["account"] } = { account: null };
+    const host = "followco.wd1.myworkdayjobs.com";
+    const TRAVEL: FormField = { key: "travel", label: "Are you open to travel?*", type: "select", options: ["Select One", "Yes", "No"], required: true };
+    const PCT: FormField = { key: "travel_pct", label: "Please provide the percentage number that you are willing to travel.*", type: "text", required: true };
+    class FollowCo extends FakeWorkday {
+      override async page() {
+        if (this.step > 0) return { title: "Review", review: true, form: { url: this.url(), fields: [], captcha: false, humanCheck: false } };
+        return { title: "Application Questions", review: false, form: { url: this.url(), fields: this.values.get("travel") === "Yes" ? [TRAVEL, PCT] : [TRAVEL], captcha: false, humanCheck: false } };
+      }
+      override async next() {
+        if (!this.values.get("travel_pct")) return { moved: false, errors: ["Error: The field Please provide the percentage number that you are willing to travel. is required and must have a value."] };
+        this.step++; return { moved: true, errors: [] };
+      }
+    }
+    await saveAnswer(pool, cfg, yong, { questionKey: "custom:Are you open to travel?", patterns: ["open to travel"], answer: "Yes", isApplicantStep: false, approve: true });
+    await saveAnswer(pool, cfg, yong, { questionKey: "custom:Percentage willing to travel", patterns: ["percentage.*travel"], answer: "25", isApplicantStep: false, approve: true });
+    let wd: FollowCo | null = null;
+    browser.workday = () => (wd = new FollowCo(s7, `https://${host}/en-US/External/job/Remote/Analyst_R1`));
+    browser.spec = () => ({ url: `https://${host}/en-US/External/job/Remote/Analyst_R1`, fields: [] });
+    applyDeps.email = { vault: applyDeps.vault as MemorySecretStore, cfg, reader: () => ({ ...reader, async accountLink(h: string) { return s7.account ? `https://${h}/en-US/External/activate?verify=abc` : null; } }) };
+    await approveResume(apps[19]!);
+    await requestApply(pool, yong, apps[19]!);
+    await runNow();
+    expect((await applyStatus(pool, yong, apps[19]!)).status).toBe("sent");
+    expect(wd!.values.get("travel_pct")).toBe("25");
   });
 
   it("and when the site really didn't make it, the next try makes it with that same kept password", async () => {
