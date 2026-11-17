@@ -57,8 +57,7 @@ export function factIndex(profile: TailorProfile, posting: TailorPosting): Map<s
   if (ab && (ab.text.trim() || ab.careerYears)) {
     const n = ab.careerYears ?? 0;
     const years = n > 0 ? [n, Math.floor(n / 5) * 5, Math.floor(n / 10) * 10].filter((x) => x > 0) : [];
-    add(ab.id, "about", [ab.text.trim(), n > 0 && ab.since ? `${n} years of work since ${ab.since}` : ""].filter(Boolean).join("\n"), true,
-      [...years, ab.since], []);
+    add(ab.id, "about", aboutFactText(ab), true, [...years, ab.since], []);
   }
   for (const e of profile.experience) {
     const years = [e.start, e.end].filter(Boolean).map((d) => d!.slice(0, 4));
@@ -75,6 +74,11 @@ export function factIndex(profile: TailorProfile, posting: TailorPosting): Map<s
   // The posting may be cited for its own title and employer only, never for its skills.
   add(posting.id, "posting", `${posting.title} · ${posting.employer}`, true);
   return m;
+}
+
+/** The About as a fact: the applicant's own words, and the career length their roles show. */
+export function aboutFactText(ab: { text: string; careerYears: number | null; since: string | null }): string {
+  return [ab.text.trim(), ab.careerYears && ab.careerYears > 0 && ab.since ? `${ab.careerYears} years of work since ${ab.since}` : ""].filter(Boolean).join("\n");
 }
 
 export function gapTermsFor(gapSkills: string[]): string[] {
