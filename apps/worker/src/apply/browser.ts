@@ -111,12 +111,19 @@ class PwPage implements ApplyPage {
     const loc = locate(this.pg, key);
     if (!(await loc.count())) return undefined;
     await loc.click({ timeout: 3000 });
-    await this.pg.waitForTimeout(400);
-    const texts = (await this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible").allTextContents())
-      .map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t && !/^(no options|loading)/i.test(t));
+    // Workday fills a list a moment after it opens, showing only "Select One" or "No Items." until then
+    // (Premier, 2026-11-17: Degree read with no real choices): wait for real choices, up to 4 seconds.
+    let texts: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      await this.pg.waitForTimeout(400);
+      texts = (await this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible").allTextContents())
+        .map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t && !/^(no options|no items\.?|loading)/i.test(t));
+      if (texts.some((t) => !/^(select( one)?|choose( one)?|please select)\b/i.test(t))) break;
+    }
     await this.pg.keyboard.press("Escape").catch(() => {});
     await loc.blur().catch(() => {});
-    return texts.length && texts.length <= 200 ? [...new Set(texts)] : undefined;
+    const real = texts.some((t) => !/^(select( one)?|choose( one)?|please select)\b/i.test(t));
+    return real && texts.length <= 200 ? [...new Set(texts)] : undefined;
   }
 
   async openForm(ats: Ats): Promise<PageForm> {
@@ -303,18 +310,23 @@ class PwPage implements ApplyPage {
     return createHash("sha256").update(s).digest("hex");
   }
 
-  async submit(selector: string): Promise<boolean> {
+  async submit(selector: string, waitMs = 20_000): Promise<boolean> {
     const btn = this.pg.locator(selector).filter({ visible: true });
-    const n = await btn.count();
-    for (let i = 0; i < n; i++) {
-      const b = btn.nth(i);
-      if (await b.isEnabled()) {
-        // The one press. Whatever happens after it, it is never pressed again.
-        await b.click({ timeout: 10_000, noWaitAfter: true }).catch(() => b.click({ force: true, noWaitAfter: true }));
-        return true;
+    // A page that shows its heading before its buttons (Workday's Review page, Premier 2026-11-17): wait for the button.
+    const until = Date.now() + waitMs;
+    for (;;) {
+      const n = await btn.count().catch(() => 0);
+      for (let i = 0; i < n; i++) {
+        const b = btn.nth(i);
+        if (await b.isEnabled().catch(() => false)) {
+          // The one press. Whatever happens after it, it is never pressed again.
+          await b.click({ timeout: 10_000, noWaitAfter: true }).catch(() => b.click({ force: true, noWaitAfter: true }));
+          return true;
+        }
       }
+      if (Date.now() >= until) return false;
+      await this.pg.waitForTimeout(500);
     }
-    return false;
   }
 
   async now(): Promise<PageNow> {
