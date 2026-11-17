@@ -3,7 +3,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   MemorySecretStore, RulesLetterProposer, RulesRequirementsReader, RulesResumeProposer, SecretValue, SourceRefusedError, startDateFrom,
-  type AnswerInferrer, type InferFacts, type InferQuestion, type ApplyBrowser, type ApplyPage, type FillItem, type Fetcher, type FormField, type MailReader, type PageForm, type WorkdayPage,
+  type AnswerInferrer, type EssayDrafter, type InferFacts, type InferQuestion, type ApplyBrowser, type ApplyPage, type FillItem, type Fetcher, type FormField, type MailReader, type PageForm, type WorkdayPage,
 } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, answerPacketField, applyStatus, applyStatuses, applyShot, approveDocument, approvePacket, approveServerSend, connectEmail, continueAfterAnswers,
@@ -94,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -115,9 +115,11 @@ async function approveResume(appRef: string) {
   await approveDocument(pool, cfg, yong, d.id);
 }
 
-describe("hands-free by default", () => {
-  it("the default is hands-free, and approving the resume queues the application by itself", async () => {
-    expect(await getApplySettings(pool, cfg, yong)).toMatchObject({ mode: "hands_free", chosen: false, standing: [] });
+describe("approve each by default; hands-free when chosen", () => {
+  it("the default is approve each (Yong, 2026-11-17); with hands-free chosen, approving the resume queues the application by itself", async () => {
+    expect(await getApplySettings(pool, cfg, yong)).toMatchObject({ mode: "approve_each", chosen: false, standing: [] });
+    await saveApplyMode(pool, cfg, yong, "hands_free");
+    expect(await getApplySettings(pool, cfg, yong)).toMatchObject({ mode: "hands_free", chosen: true });
     await approveResume(apps[0]!);
     expect((await applyStatus(pool, yong, apps[0]!)).status).toBe("queued");
   });
@@ -561,10 +563,23 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
       version: "test-inferrer",
       async infer(questions, facts) {
         seen.push({ questions, facts });
-        return [
-          { key: "#worked_here", answer: "No", basis: "Premier Health isn't in your work history" },
-          { key: "#ft", answer: "Yes", basis: "Your goal: full-time" },
-        ];
+        return { problems: [], answers: [
+          { key: "#worked_here", answer: "No", basis: "Your work history: \"Operations Analyst at Northwind\"" },
+          { key: "#ft", answer: "Yes", basis: "Your goals: \"full_time\"" },
+        ] };
+      },
+    };
+    const drafted: string[] = [];
+    const drafter: EssayDrafter = {
+      version: "test-drafter",
+      async draft(questions, profile, posting) {
+        drafted.push(...questions.map((q) => q.key));
+        const job = profile.experience.find((e) => e.employer === "Northwind")!;
+        return questions.map((q) => ({ key: q.key, paragraphs: [
+          { fact_ids: [job.id, job.bullets[0]!.id], text: "In my work as Operations Analyst at Northwind, I built SQL and Excel reports for planners." },
+          { fact_ids: [job.bullets[0]!.id], text: "I also led a team of 40 at Contoso." },   // not in the facts: blocked
+          { fact_ids: [posting.id], text: `That is what I would bring to the ${posting.title} role.` },
+        ] }));
       },
     };
     const extra: FormField[] = [
@@ -574,11 +589,12 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
       { key: "#start_m", label: "When will you be available to start employment?: Month", type: "text", required: true },
       { key: "#start_y", label: "When will you be available to start employment?: Year", type: "text", required: true },
       { key: "#degree", label: "Degree*", type: "select", options: ["Select One", "Certificate", "Juris Doctorate", "High School", "Bachelor's Degree", "Master's Degree", "Doctorate"], required: true },
+      { key: "#why", label: "Why do you want to work at Premier Health?", type: "textarea" },
     ];
     await addFact(pool, yong, "education_item", { institution: "Example University", degree: "BS", field: "Economics", start_date: "2008-09-01", end_date: "2012-05-01" });
     await addFact(pool, yong, "education_item", { institution: "Example Business School", degree: "MBA", field: null, start_date: "2015-09-01", end_date: "2017-05-01" });
     await saveAnswer(pool, cfg, yong, { questionKey: "start_date", patterns: ["start date", "available to start"], answer: "2 weeks from next Monday", isApplicantStep: false, approve: true });
-    applyDeps = { ...applyDeps, inferrer };
+    applyDeps = { ...applyDeps, inferrer, drafter };
     browser.spec = () => ({ url: GH(19), fields: [...BASE, ...extra], after: "thanks" });
     await approveResume(apps[18]!);
     await runNow();
@@ -591,8 +607,16 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     expect(asked).not.toContain("#first_name");   // already known
     expect(asked).not.toContain("#degree");       // settled by their education rows
     expect(asked).not.toContain("#start_m");      // worked out by the calendar from their saved words
+    expect(asked).not.toContain("#why");          // a written answer: drafted, not inferred
+    expect(drafted).toEqual(["#why"]);
     expect(JSON.stringify(seen[0]!.facts)).not.toMatch(/yong@example\.test/);
     expect(seen[0]!.facts.work.map((w) => w.employer)).toContain("Northwind");
+    // The full evidence pack: what they did in each role, skills with levels, saved answers, both resumes.
+    expect(seen[0]!.facts.bullets.map((b) => b.text)).toContain("Built SQL and Excel reports for planners");
+    expect(seen[0]!.facts.skills.map((k) => k.name)).toEqual(expect.arrayContaining(["SQL", "Excel"]));
+    expect(seen[0]!.facts.skills.every((k) => k.level)).toBe(true);
+    expect(seen[0]!.facts.saved.map((a) => a.answer)).toContain("2 weeks from next Monday");
+    expect(seen[0]!.facts.work.every((w) => w.id)).toBe(true);
     expect(seen[0]!.facts.employer).toBe("Premier Health");
     const p = (await getPacket(pool, cfg, yong, apps[18]!))!;
     const by = (label: RegExp) => p.fields.find((f: { label: string }) => label.test(f.label))!;
@@ -602,6 +626,21 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     const start = startDateFrom("2 weeks from next Monday", new Date().toISOString().slice(0, 10))!;
     expect(by(/start employment\?: Month/)).toMatchObject({ answer: String(+start.slice(5, 7)), source: "inferred", willFill: true });
     expect(by(/start employment\?: Year/)).toMatchObject({ answer: start.slice(0, 4), source: "inferred", willFill: true });
-    applyDeps = { ...applyDeps, inferrer: undefined };
+    // The written answer is a draft: in the box for the applicant, never typed in until they use it.
+    const why = by(/Why do you want/);
+    expect(why).toMatchObject({ source: "drafted", willFill: false });
+    expect(why.answer).toBe("In my work as Operations Analyst at Northwind, I built SQL and Excel reports for planners.\n\nThat is what I would bring to the " + why.answer.split("bring to the ")[1]);
+    expect(why.answer).not.toMatch(/Contoso|40/);
+    applyDeps = { ...applyDeps, inferrer: undefined, drafter: undefined };
+  });
+
+  it("with smart answers off, the run says so in red instead of quietly using rules only", async () => {
+    applyDeps = { ...applyDeps, inferrer: undefined, drafter: undefined };
+    browser.spec = () => ({ url: GH(21), fields: [...BASE, { key: "#travel", label: "Are you willing to travel up to 25%?*", type: "select", options: ["Select One", "Yes", "No"], required: true }], after: "thanks" });
+    await approveResume(apps[20]!);
+    await runNow();
+    const s = await applyStatus(pool, yong, apps[20]!);
+    expect(s.status).toBe("waiting");
+    expect(s.steps.find((x) => /Smart answers are off/.test(x.text))).toMatchObject({ bad: true });
   });
 });

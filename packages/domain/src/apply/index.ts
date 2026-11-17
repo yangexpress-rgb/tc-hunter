@@ -12,7 +12,11 @@ import type { FieldType, FormField, StandingKind } from "../packet/map";
  */
 
 export type ApplyMode = "hands_free" | "check_answers" | "approve_each";
-export const DEFAULT_APPLY_MODE: ApplyMode = "hands_free";
+/**
+ * Approve each application (Yong, 2026-11-17): nothing is sent without the applicant's approval of
+ * that specific application. Hands-free stays available as a choice in Settings.
+ */
+export const DEFAULT_APPLY_MODE: ApplyMode = "approve_each";
 
 export const APPLY_MODES: Array<{ mode: ApplyMode; title: string; text: string }> = [
   { mode: "hands_free", title: "Hands-free",

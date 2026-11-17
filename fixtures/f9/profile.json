@@ -1,0 +1,51 @@
+{
+  "_about": "F9 fixture profile (fictional applicant). The evidence pack exactly as TC Hunter sends it: no name, email, phone or links.",
+  "today": "2026-11-17",
+  "employer": "Premier Health",
+  "jobTitle": "VP, Management Services",
+  "goals": [
+    { "id": "g1", "employmentTypes": ["full_time"], "roles": ["VP Operations", "Director of Operations"], "locations": ["Charlotte, NC", "Remote"], "workplaceTypes": ["remote", "hybrid"], "timeFrame": "within 3 months" }
+  ],
+  "home": "Charlotte, NC, United States",
+  "work": [
+    { "id": "w1", "employer": "Northwind Health", "title": "Director of Operations", "start": "2019-03-01", "end": null, "type": "full_time", "location": "Charlotte, NC" },
+    { "id": "w2", "employer": "Contoso Hospital Group", "title": "Senior Manager, Process Improvement", "start": "2014-06-01", "end": "2019-02-28", "type": "full_time", "location": "Raleigh, NC" },
+    { "id": "w3", "employer": "Fabrikam Insurance", "title": "Operations Analyst", "start": "2010-07-01", "end": "2014-05-31", "type": "full_time", "location": "Charlotte, NC" }
+  ],
+  "bullets": [
+    { "id": "b1", "roleId": "w1", "text": "Led a team of 45 across 3 regional service centers" },
+    { "id": "b2", "roleId": "w1", "text": "Cut patient intake processing time by 30% with a Lean redesign" },
+    { "id": "b3", "roleId": "w1", "text": "Managed a $12M annual operating budget" },
+    { "id": "b4", "roleId": "w2", "text": "Ran 20+ Lean Six Sigma projects saving $4.5M" },
+    { "id": "b5", "roleId": "w2", "text": "Implemented Epic scheduling across 6 clinics" },
+    { "id": "b6", "roleId": "w3", "text": "Built SQL and Tableau dashboards for claims leadership" }
+  ],
+  "skills": [
+    { "id": "k1", "name": "Lean Six Sigma", "category": "domain", "level": "expert" },
+    { "id": "k2", "name": "SQL", "category": "technical", "level": "working" },
+    { "id": "k3", "name": "Tableau", "category": "tool", "level": "strong" },
+    { "id": "k4", "name": "Epic", "category": "tool", "level": "working" },
+    { "id": "k5", "name": "Spanish", "category": "language", "level": "working" },
+    { "id": "k6", "name": "Budgeting", "category": "domain", "level": "strong" }
+  ],
+  "education": [
+    { "id": "e1", "school": "University of North Carolina", "degree": "Bachelor of Science", "field": "Economics", "start": "2006-08-15", "end": "2010-05-10" },
+    { "id": "e2", "school": "Duke University", "degree": "MBA", "field": "Healthcare Management", "start": "2012-08-20", "end": "2014-05-12" }
+  ],
+  "credentials": [
+    { "id": "c1", "name": "Lean Six Sigma Black Belt", "kind": "certification", "issuer": "ASQ", "issuedOn": "2016-04-01" }
+  ],
+  "saved": [
+    { "id": "a1", "question": "Do you require visa sponsorship?", "answer": "No. I am a U.S. citizen and do not need sponsorship." },
+    { "id": "a2", "question": "Earliest start date", "answer": "2 weeks from next Monday" },
+    { "id": "a3", "question": "Desired salary", "answer": "$185,000 base" },
+    { "id": "a4", "question": "Are you willing to relocate?", "answer": "No, I plan to stay in the Charlotte area or work remotely." },
+    { "id": "a5", "question": "Willingness to travel", "answer": "Up to 25%" },
+    { "id": "a6", "question": "How did you hear about us?", "answer": "LinkedIn" }
+  ],
+  "stories": [
+    { "id": "st1", "title": "Intake redesign", "text": "Patient intake at our three service centers was slow and inconsistent. I was asked to fix it within two quarters. I mapped the process with front-line staff, removed duplicate data entry and set up daily huddles. Intake processing time fell by 30% and staff overtime dropped." }
+  ],
+  "resumeText": "SUMMARY\nOperations leader in healthcare with Lean Six Sigma Black Belt.\n\nEXPERIENCE\nDirector of Operations, Northwind Health, Charlotte, NC (2019 - present)\n- Led a team of 45 across 3 regional service centers\n- Cut patient intake processing time by 30% with a Lean redesign\n- Managed a $12M annual operating budget\n\nSenior Manager, Process Improvement, Contoso Hospital Group (2014 - 2019)\n- Ran 20+ Lean Six Sigma projects saving $4.5M\n- Implemented Epic scheduling across 6 clinics\n\nEDUCATION\nMBA, Healthcare Management, Duke University\nB.S. Economics, University of North Carolina",
+  "masterResumeText": "SUMMARY\nHealthcare operations leader. Certified Lean Six Sigma Black Belt (ASQ, 2016).\n\nEXPERIENCE\nDirector of Operations, Northwind Health, Charlotte, NC, March 2019 - present\n- Led a team of 45 across 3 regional service centers\n- Cut patient intake processing time by 30% with a Lean redesign\n- Managed a $12M annual operating budget\n\nSenior Manager, Process Improvement, Contoso Hospital Group, Raleigh, NC, June 2014 - February 2019\n- Ran 20+ Lean Six Sigma projects saving $4.5M\n- Implemented Epic scheduling across 6 clinics\n\nOperations Analyst, Fabrikam Insurance, Charlotte, NC, July 2010 - May 2014\n- Built SQL and Tableau dashboards for claims leadership\n\nEDUCATION\nDuke University, MBA, Healthcare Management, 2014\nUniversity of North Carolina, Bachelor of Science, Economics, 2010\n\nSKILLS\nLean Six Sigma, SQL, Tableau, Epic, budgeting. Languages: English (native), Spanish (working)."
+}

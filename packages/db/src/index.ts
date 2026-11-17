@@ -21,3 +21,4 @@ export * from "./assist";
 export * from "./resumes";
 export * from "./autoApply";
 export * from "./profileFill";
+export * from "./answerFacts";

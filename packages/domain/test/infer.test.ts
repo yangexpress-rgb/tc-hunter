@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptInferred, degreeChoice, DEGREE_QUESTION, START_QUESTION, startDateFrom, startDatePart, type InferQuestion } from "../src";
+import { acceptInferred, checkContext, checkEssay, degreeChoice, DEGREE_QUESTION, isEssayQuestion, START_QUESTION, startDateFrom, startDatePart, type InferQuestion, type TailorProfile } from "../src";
 
 describe("answers worked out from the profile: only ones that fit the question", () => {
   const qs: InferQuestion[] = [
@@ -71,5 +71,46 @@ describe("the start date, from the saved answer by the calendar (Yong, 2026-11-1
     expect(startDatePart(`${q}: Day`, "2026-12-07")).toBe("7");
     expect(startDatePart(`${q}: Year`, "2026-12-07")).toBe("2026");
     expect(startDatePart("Start date", "2026-12-07")).toBe("12/07/2026");
+  });
+});
+
+describe("long answers and written questions (Yong, 2026-11-17)", () => {
+  it("keeps a text answer up to 2,000 characters, not 500", () => {
+    const q: InferQuestion[] = [{ key: "t", label: "Anything else we should know?", type: "text" }];
+    const long = "Led operations. ".repeat(60).trim();
+    expect(long.length).toBeGreaterThan(500);
+    expect(acceptInferred(q, [{ key: "t", answer: long, confidence: 0.9, basis: "x" }])).toHaveLength(1);
+    expect(acceptInferred(q, [{ key: "t", answer: "x".repeat(2001), confidence: 0.9, basis: "x" }])).toEqual([]);
+  });
+  it("sends why / describe / explain text boxes to the drafter, short questions to the inferrer", () => {
+    for (const l of ["Why do you want to work at Premier?", "Describe a time you improved a process.", "Please explain any gaps in employment", "Cover note", "Tell us about yourself"]) {
+      expect(isEssayQuestion({ label: l, type: "textarea" })).toBe(true);
+    }
+    expect(isEssayQuestion({ label: "Why do you want to work here?", type: "text" })).toBe(false);
+    expect(isEssayQuestion({ label: "Additional information", type: "textarea" })).toBe(false);
+    expect(isEssayQuestion({ label: "Describe your work authorization", type: "select", options: ["Yes", "No"] })).toBe(false);
+  });
+});
+
+describe("a drafted written answer keeps only paragraphs the facts support", () => {
+  const profile: TailorProfile = {
+    experience: [{ id: "w1", employer: "Northwind", title: "Operations Analyst", location: null, start: "2021-01-01", end: null, type: "full_time", verified: true,
+      bullets: [{ id: "b1", itemId: "w1", text: "Built SQL and Excel reports for planners", metricValue: null, metricUnit: null, verified: true }] }],
+    education: [], credentials: [], skills: [], answers: [],
+    stories: [{ id: "st1", title: "Reports", text: "Planners waited a week for numbers. I built daily reports.", linkedFactIds: ["b1"], approved: true }],
+  };
+  const posting = { id: "p1", title: "Analyst", employer: "Premier", requirements: { must_have: [], nice_to_have: [], years: null, education: null, authorisation: null, confidence: "low" as const }, descriptionText: "", gapSkills: ["Python"] };
+  const ctx = checkContext(profile, posting);
+  it("drops invented names, numbers and gap skills; needs real experience behind it", () => {
+    const r = checkEssay([
+      { fact_ids: ["w1", "b1"], text: "As Operations Analyst at Northwind, I built SQL and Excel reports for planners." },
+      { fact_ids: ["b1"], text: "I also automated them in Python for 300 users." },
+      { fact_ids: ["st1"], text: "When planners waited a week for numbers, I built daily reports." },
+      { fact_ids: ["nope"], text: "I love Premier." },
+    ], ctx, "p1")!;
+    expect(r.blocked).toBe(2);
+    expect(r.text).toBe("As Operations Analyst at Northwind, I built SQL and Excel reports for planners.\n\nWhen planners waited a week for numbers, I built daily reports.");
+    expect(r.factIds).toEqual(["w1", "b1", "st1"]);
+    expect(checkEssay([{ fact_ids: ["p1"], text: "I'm applying for the Analyst role at Premier." }], ctx, "p1")).toBeNull();
   });
 });

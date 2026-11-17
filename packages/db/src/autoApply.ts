@@ -2,13 +2,15 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
-  type AnswerInferrer, type InferFacts, type InferQuestion,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
+  checkContext, checkEssay, isEssayQuestion,
+  type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { hasFreshStepUp, type Session } from "./auth";
-import type { AppConfig } from "./config";
+import { answerEvidence } from "./answerFacts";
+import { smartAnswersStatus, type AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
 import { exportDocument } from "./documents";
 import type { EmailDeps } from "./email";
@@ -228,12 +230,16 @@ export interface ApplyDeps {
   pollMs?: number;
   /** Wait before opening a Workday job again after the site's own error (shorter in tests). */
   siteRetryMs?: number;
-  /** Works out answers from the applicant's goals, history and saved answers (Yong, 2026-11-17). */
+  /** Works out answers from the applicant's full profile, then checks each against it (Yong, 2026-11-17). */
   inferrer?: AnswerInferrer;
+  /** Drafts long written answers for the applicant to approve. */
+  drafter?: EssayDrafter;
 }
 
 /** What was worked out for a question this run, by its words and choices (Workday asks page by page). */
-export type InferCache = Map<string, { answer: string; basis: string } | null>;
+export type InferCache = Map<string, Worked | null>;
+/** An answer worked out for a question: filled when it passed every check, or a draft the applicant approves first. */
+export interface Worked { answer: string; basis: string; replace?: boolean; draft?: boolean }
 const cacheKey = (f: FormField) => `${f.label}|${(f.options ?? []).join("/")}`;
 /**
  * A start-date box their saved answer would fill with its words ("2 weeks from next Monday") rather than
@@ -245,14 +251,16 @@ const savedWordsForDate = (f: FormField, p: { source: string | null; answer: str
 const NEVER_INFER = new Set(["eeo", "signature", "consent", "attestation"]);
 
 /**
- * Questions TC Hunter has no sure answer for, worked out from the applicant's own facts when they follow
- * from them. Contact details are not sent. Returns answers by question key.
+ * Questions TC Hunter has no sure answer for, worked out from the applicant's full profile when they
+ * follow from it (Yong, 2026-11-17). Contact details are not sent. Short questions go to the inferrer
+ * and its check; long written questions get a draft the applicant approves. Returns answers by
+ * question key, and anything that went wrong, so it is never silent.
  */
 async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, fields: FormField[], cache: InferCache) {
-  const out = new Map<string, { answer: string; basis: string; replace?: boolean }>();
-  if (!deps.inferrer) return out;
+  const out = new Map<string, Worked>();
+  const problems: string[] = [];
   const gathered = await withApplicant(pool, auto, async (c) => {
-    const { profile } = await packetProfile(c, deps.cfg, auto.applicantId, app.match_id);
+    const { profile, dk } = await packetProfile(c, deps.cfg, auto.applicantId, app.match_id);
     const workAuthSaved = profile.answers.some((a) => a.isApplicantStep && a.approved && !a.stale && a.text.trim());
     const all = proposeFields(fields, profile);
     const open = fields.filter((f, i) => {
@@ -263,26 +271,17 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
       return true;
     });
     if (!open.length) return null;
-    const goals = (await c.query("SELECT employment_types, roles, locations, workplace_types, time_frame FROM hunt_goal WHERE active ORDER BY created_at")).rows
-      .map((g) => ({ employmentTypes: g.employment_types, roles: g.roles, locations: g.locations, workplaceTypes: g.workplace_types, timeFrame: g.time_frame }));
-    const day = (d: Date | string | null) => (d ? new Date(d).toISOString().slice(0, 10) : null);
-    const work = (await c.query("SELECT employer_name, title, start_date, end_date, employment_type FROM experience_item ORDER BY start_date DESC")).rows
-      .map((w) => ({ employer: w.employer_name, title: w.title, start: day(w.start_date)!, end: day(w.end_date), type: w.employment_type }));
-    const education = (await c.query("SELECT institution, degree, field, start_date, end_date FROM education_item ORDER BY start_date DESC NULLS LAST")).rows
-      .map((e) => ({ school: e.institution, degree: e.degree, field: e.field, start: day(e.start_date), end: day(e.end_date) }));
-    const presetLabel = new Map<string, string>(ANSWER_PRESETS.map((p) => [p.key, p.label]));
-    const saved = profile.answers.filter((a) => a.approved && !a.stale && a.text.trim())
-      .map((a) => ({ question: presetLabel.get(a.key) ?? a.key.replace(/^custom:/, ""), answer: a.text.slice(0, 500) }));
-    const home = [profile.city, profile.region, profile.country].filter(Boolean).join(", ") || null;
-    // The approved resume for this job, for what the profile rows don't spell out (a degree's level, say).
-    // Contact details are taken out first.
-    const doc = (await c.query("SELECT source_json FROM document WHERE match_id = $1 AND type = 'tailored_resume' AND status = 'approved' ORDER BY version DESC LIMIT 1", [app.match_id])).rows[0];
-    const resumeText = doc ? documentText(doc.source_json).replace(/[^\s@]+@[^\s@]+/g, "").replace(/\+?\d[\d\s().-]{7,}\d/g, "").replace(/https?:\/\/\S+|linkedin\.com\S*/gi, "").slice(0, 12000) : null;
-    return { open, facts: { today: new Date().toISOString().slice(0, 10), employer: app.employer, jobTitle: app.title, goals, home, work, education, saved, resumeText } satisfies InferFacts };
+    if (!deps.inferrer && !deps.drafter) return { open, evidence: null };
+    return { open, evidence: await answerEvidence(c, dk, profile, app) };
   });
-  if (!gathered) return out;
+  if (!gathered) return { answers: out, problems };
+  if (!gathered.evidence) {
+    problems.push(`Smart answers are off, so ${gathered.open.length === 1 ? "1 question was" : `${gathered.open.length} questions were`} left for you. ${smartAnswersStatus().problem ?? ""}`.trim());
+    return { answers: out, problems };
+  }
   const ask: InferQuestion[] = [];
-  const { facts } = gathered;
+  const essays: FormField[] = [];
+  const { facts, tailor, posting } = gathered.evidence;
   const startSaid = facts.saved.find((a) => /start date|available to start/i.test(a.question))?.answer;
   const startDate = startSaid ? startDateFrom(startSaid, facts.today) : null;
   const start = startDate ? { date: startDate, said: startSaid! } : null;
@@ -301,27 +300,49 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
       const a = { answer: startDatePart(f.label, start.date), basis: `Your start date: ${start.said.slice(0, 60)}`, replace: true };
       out.set(f.key, a); continue;
     }
+    // Long written answers ("Why do you want to work here?") are drafted for the applicant to approve.
+    if (isEssayQuestion(f)) { essays.push(f); continue; }
     ask.push({ key: f.key, label: f.label, type: f.type, options: f.options });
   }
   // What the answers could be worked out from, as counts only (never the facts themselves).
-  applyLog.info("apply.infer_facts", { goals: facts.goals.length, work: facts.work.length, education: facts.education.length,
-    with_degree: facts.education.filter((e) => e.degree?.trim()).length, saved: facts.saved.length, resume: !!facts.resumeText,
-    start_saved: !!startSaid, start_read: !!start,
-    from_education: gathered.open.length - ask.length });
-  if (ask.length) {
-    const got = await deps.inferrer.infer(ask, facts).catch((e) => {
-      applyLog.warn("apply.infer_failed", { error: String((e as Error)?.message ?? e).slice(0, 200) }); return [];
-    });
+  applyLog.info("apply.infer_facts", { goals: facts.goals.length, work: facts.work.length, bullets: facts.bullets.length, skills: facts.skills.length,
+    education: facts.education.length, with_degree: facts.education.filter((e) => e.degree?.trim()).length, saved: facts.saved.length, stories: facts.stories.length,
+    resume: facts.resumeText?.length ?? 0, master_resume: facts.masterResumeText?.length ?? 0, start_saved: !!startSaid, start_read: !!start,
+    essays: essays.length, from_education: gathered.open.length - ask.length - essays.length });
+  if (ask.length && !deps.inferrer) problems.push(`Smart answers are off, so ${ask.length === 1 ? "1 question was" : `${ask.length} questions were`} left for you. ${smartAnswersStatus().problem ?? ""}`.trim());
+  else if (ask.length) {
+    const got = await deps.inferrer!.infer(ask, facts).catch((e): InferOutcome => ({ answers: [], problems: [`Smart answers failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`] }));
+    problems.push(...got.problems);
     for (const q of ask) {
-      const a = got.find((x) => x.key === q.key);
+      const a = got.answers.find((x) => x.key === q.key);
       const f = gathered.open.find((x) => x.key === q.key)!;
-      cache.set(cacheKey(f), a ? { answer: a.answer, basis: a.basis } : null);
+      // A question whose call failed is asked again on the next page; one with no supported answer is not.
+      if (a || !got.problems.length) cache.set(cacheKey(f), a ? { answer: a.answer, basis: a.basis } : null);
       if (a) out.set(q.key, { answer: a.answer, basis: a.basis });
     }
-    applyLog.info("apply.inferred", { asked: ask.length, answered: got.length, by: deps.inferrer.version,
-      left: ask.filter((q) => !got.some((a) => a.key === q.key)).map((q) => q.label.slice(0, 60)).join(" | ").slice(0, 1500) });
+    applyLog.info("apply.inferred", { asked: ask.length, answered: got.answers.length, by: deps.inferrer!.version, problems: got.problems.length,
+      rejected: (got.rejected ?? []).map((r) => `${ask.find((q) => q.key === r.key)?.label.slice(0, 40) ?? r.key}: ${r.why.slice(0, 60)}`).join(" | ").slice(0, 1500),
+      left: ask.filter((q) => !got.answers.some((a) => a.key === q.key)).map((q) => q.label.slice(0, 60)).join(" | ").slice(0, 1500) });
   }
-  return out;
+  if (essays.length && deps.drafter) {
+    try {
+      const ctx = checkContext(tailor, posting);
+      const drafts = await deps.drafter.draft(essays.map((f) => ({ key: f.key, label: f.label })), tailor, posting);
+      let blocked = 0;
+      for (const f of essays) {
+        const d = drafts.find((x) => x.key === f.key);
+        const ok = d ? checkEssay(d.paragraphs, ctx, posting.id) : null;
+        blocked += ok?.blocked ?? 0;
+        const w = ok ? { answer: ok.text, basis: `a draft from ${ok.factIds.length === 1 ? "1 fact" : `${ok.factIds.length} facts`} in your profile`, draft: true } : null;
+        cache.set(cacheKey(f), w);
+        if (w) out.set(f.key, w);
+      }
+      applyLog.info("apply.drafted", { asked: essays.length, drafted: essays.filter((f) => out.has(f.key)).length, blocked_paragraphs: blocked, by: deps.drafter.version });
+    } catch (e) {
+      problems.push(`Drafting written answers failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`);
+    }
+  }
+  return { answers: out, problems };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -340,6 +361,8 @@ class Run {
       `UPDATE apply_run SET ${[...sets, "updated_at = now()"].join(", ")}${push} WHERE id = $1`, [this.id, ...vals, ...(stepText ? [stepText] : [])]));
   }
   step(text: string) { applyLog.info("apply.step", { run: this.id, step: text }); return this.set({ step: text }, text); }
+  /** A line in the run's steps without changing the current step; red when it is a problem. */
+  note(text: string, bad = false) { return this.set({}, text, bad); }
   meta(fields: { ats?: string; form_host?: string; packet_id?: string }) { return this.set(fields); }
   end(status: Status, problem: string | null, waitingFor: string | null = null, stepText?: string) {
     // Where a run stopped and why, so the logs say it without a screenshot (labels and site messages, no answers).
@@ -544,9 +567,16 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
   const keyPrefix = "";
   const fields = cleanForm(form.fields);
   const prefilled = opts.prefilled ?? new Set<string>();
-  const inferred = await inferAnswers(pool, auto, deps, app, fields.filter((f) => !prefilled.has(f.key)), opts.inferCache ?? new Map()).catch((e) => {
-    applyLog.warn("apply.infer_failed", { error: String(e).slice(0, 200) }); return new Map<string, { answer: string; basis: string; replace?: boolean }>();
+  const worked = await inferAnswers(pool, auto, deps, app, fields.filter((f) => !prefilled.has(f.key)), opts.inferCache ?? new Map()).catch((e) => {
+    applyLog.warn("apply.infer_failed", { error: String(e).slice(0, 200) });
+    return { answers: new Map<string, Worked>(), problems: [`Smart answers failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`] };
   });
+  // Never silent (Yong, 2026-11-17): when smart answers are off or fail, the run says so in red.
+  for (const p of [...new Set(worked.problems)]) {
+    applyLog.warn("apply.infer_problem", { run: run.id, problem: p.slice(0, 300) });
+    await run.note(p.slice(0, 400), true);
+  }
+  const inferred = worked.answers;
   const result = await withApplicant(pool, auto, async (c) => {
     // Reuse the packet for this exact form once it is approved. One still waiting for review is made again,
     // so a new standing answer or profile change counts; answers the applicant typed are kept.
