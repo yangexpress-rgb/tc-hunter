@@ -4,7 +4,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RulesRequirementsReader, SourceRefusedError, type CompanyIdea, type RawPosting, type SearchSite, type CompanyProposer, type Fetcher, type FetchResult, type GoalBrief } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, deleteGoal, followSource, latestDiscovery, listMatches, listSources, namedCompanies, requestScan, runNextWork, saveGoal, unfollowSource,
+  addEvidence, addFact, deleteGoal, followSource, latestDiscovery, listMatches, listSources, namedCompanies, requestScan, requestSourceScan, runNextWork, saveGoal, unfollowSource,
   type AppConfig, type GoalInput, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -158,5 +158,33 @@ describe("a source that answers but lists no jobs (Yong, 2026-11-17: Salesforce 
     await requestScan(pool, ann);
     while (await runNextWork(pool, { ...deps, fetcher: sites })) { /* drain */ }
     expect((await listSources(pool, ann)).filter((s) => s.name === "Initech").map((s) => [s.kind, s.health, s.last_listed, s.open_jobs])).toEqual([["greenhouse", "ok", 0, 0]]);
+  });
+});
+
+describe("searching one source again (Yong, 2026-11-17)", () => {
+  it("reads only that source, however recently it was read, and doesn't look for employers", async () => {
+    const kim = (await newApplicant(pool, cfg, "Kim")).session;
+    await saveGoal(pool, kim, goal({ roles: ["Operations Analyst"] }));
+    await followSource(pool, kim, "https://boards.greenhouse.io/fabrikam", "Fabrikam");
+    const other = await followSource(pool, kim, "https://jobs.lever.co/contoso", "Contoso");
+    const asked: GoalBrief[] = [];
+    const watch: CompanyProposer = { version: "watch", async propose(g) { asked.push(g); return []; } };
+    const calls: string[] = [];
+    const logged: Fetcher = { get: async (url, o) => { calls.push(url); return web.get(url, o); } };
+    const run = { ...deps, fetcher: logged, freshMinutes: 60, discover: { proposer: watch } };
+    await requestScan(pool, kim);
+    while (await runNextWork(pool, run)) { /* drain */ }
+    calls.length = 0; asked.length = 0;
+    const fab = (await listSources(pool, kim)).find((s) => s.name === "Fabrikam")!.id;
+    await requestSourceScan(pool, kim, fab);
+    while (await runNextWork(pool, run)) { /* drain */ }
+    expect(calls.some((u) => u.includes("fabrikam"))).toBe(true);   // read again, though read minutes ago
+    expect(calls.some((u) => u.includes("contoso"))).toBe(false);
+    expect(asked).toEqual([]);
+    // A whole search already waiting takes it on, still covering every source.
+    await requestScan(pool, kim);
+    await requestSourceScan(pool, kim, other);
+    const [w] = (await ownerQuery("SELECT payload FROM work_item WHERE applicant_id = $1 AND kind = 'scan' AND status = 'queued'", [kim.applicantId])).rows;
+    expect(w.payload).toEqual({ fresh_ids: [other] });
   });
 });

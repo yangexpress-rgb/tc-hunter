@@ -8,7 +8,7 @@ import { ago } from "@/components/jobs/JobBits";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { followSourceAction, refreshAction, unfollowSourceAction } from "../actions";
+import { followSourceAction, refreshAction, searchSourceAction, unfollowSourceAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -67,7 +67,7 @@ export default async function SourcesPage(props: PageProps) {
   // One row per source for the status table: job sites (on or not), LinkedIn alerts, and every followed page.
   // Everything on this page is one table (Yong, 2026-11-15): job sites, LinkedIn alerts, companies named, found and added by you.
   type StatusRow = { key: string; name: string; detail?: string; kind: string; status: string; last: Date | null; jobs: number; reason: string; listed?: number | null;
-    link?: { href: string; label: string }; action?: { id: string; label: string } };
+    link?: { href: string; label: string }; action?: { id: string; label: string }; again?: string };
   const covers = new Map(sites.map((x) => [HOME[x.id], x.covers]));
   const kindOf = (s: (typeof sources)[number]) => s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : s.origin === "search" ? "Job search site"
     : isNamed(s) ? "Company you named" : s.origin === "you" ? "Added by you" : s.origin === "found" ? "Found for your goals" : KIND[s.kind] ?? "Jobs page";
@@ -92,6 +92,8 @@ export default async function SourcesPage(props: PageProps) {
         reason: never ? "Waiting for the next search." : failed ? why(s.health_reason) : advice ? advice.reason
           : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.` : "",
         link: advice?.link,
+        // LinkedIn's alerts come in with the email check, not a search.
+        again: s.url === "https://www.linkedin.com/jobs/" ? undefined : s.id,
         action: { id: s.id, label: s.origin === "you" ? "Stop following" : "Don't use" } };
     }),
     ...named.filter((n) => !namedWithSource.has(n.key)).map((n) => ({ key: `named-${n.key}`, name: n.name, kind: "Company you named",
@@ -129,6 +131,7 @@ export default async function SourcesPage(props: PageProps) {
       <p><a href="/jobs">← Jobs</a></p>
       <h1>{t("jobs.sources.title")}</h1>
       <Flash saved={saved} error={error} />
+      {params.searching === "1" ? <p className="status" role="status">Searching that source again now. The box above shows how it's going, and its row updates when it's done.</p> : null}
 
       <section className="card stack">
         <p>For each of your <a href="/profile/goals">goals</a>, we read the careers sites of the companies you named first, then search job sites, then find other employers that fit and read their own jobs pages. Jobs that fit come back to Jobs, scored. You don't need to do anything here.</p>
@@ -173,11 +176,18 @@ export default async function SourcesPage(props: PageProps) {
                   <td>{r.last ? ago(r.last) : "Never"}</td>
                   <td className="num">{r.jobs}</td>
                   <td className={bad(r.status) ? "error wrap" : "muted wrap"}>{r.reason}{r.link ? <> <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a></> : null}</td>
-                  <td>{r.action ? (
-                    <form action={unfollowSourceAction}>
-                      <input type="hidden" name="id" value={r.action.id} /><input type="hidden" name="back" value={BACK} />
-                      <button className="small secondary">{r.action.label}</button>
-                    </form>) : null}</td>
+                  <td><div className="row-actions" style={{ marginTop: 0, flexWrap: "nowrap" }}>
+                    {r.again ? (
+                      <form action={searchSourceAction}>
+                        <input type="hidden" name="id" value={r.again} /><input type="hidden" name="back" value={BACK} />
+                        <button className="small" title={`Search ${r.name} again now, without searching every other source`}>Search again</button>
+                      </form>) : null}
+                    {r.action ? (
+                      <form action={unfollowSourceAction}>
+                        <input type="hidden" name="id" value={r.action.id} /><input type="hidden" name="back" value={BACK} />
+                        <button className="small secondary">{r.action.label}</button>
+                      </form>) : null}
+                  </div></td>
                 </tr>
               ))}
               {shown.length === 0 ? <tr><td colSpan={8} className="muted">No sources match these filters.</td></tr> : null}
