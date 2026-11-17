@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice, START_QUESTION, startDateFrom, startDatePart,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeField, ANSWER_PRESETS, documentText, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
   type AnswerInferrer, type InferFacts, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -291,6 +291,10 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
     // A degree question is settled by their education rows directly (an MBA is a Master's).
     const degree = f.options?.length && DEGREE_QUESTION.test(f.label.trim()) ? degreeChoice(f.options, facts.education.map((e) => e.degree)) : null;
     if (degree) { out.set(f.key, degree); cache.set(cacheKey(f), degree); continue; }
+    if (f.options?.length && DEGREE_QUESTION.test(f.label.trim())) {
+      // Why their degree matched none of the form's choices: the levels found and the site's choices (no school names).
+      applyLog.info("apply.degree_unmatched", { levels: facts.education.map((e) => degreeLevel(e.degree)).join(","), choices: f.options.join(" / ").slice(0, 800) });
+    }
     // A start date is worked out from their saved answer by the calendar, not by judgement ("2 weeks from next Monday").
     if (start && f.type !== "checkbox" && !f.options?.length && START_QUESTION.test(f.label)) {
       const a = { answer: startDatePart(f.label, start.date), basis: `Your start date: ${start.said.slice(0, 60)}`, replace: true };

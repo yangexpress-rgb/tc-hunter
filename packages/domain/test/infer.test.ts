@@ -36,6 +36,10 @@ describe("the degree question, from the applicant's education rows", () => {
     expect(degreeChoice(premier.filter((o) => o !== "MBA"), ["B.S.", "M.B.A."])?.answer).toBe("Master's Degree");
     expect(degreeChoice(premier, ["Ph.D."])?.answer).toBe("Doctorate");
     expect(degreeChoice(premier, ["J.D."])?.answer).toBe("Juris Doctorate");
+    const workday = ["Select One", "Certificate", "High School Diploma or GED", "Associates Degree", "Bachelors Degree", "Masters Degree", "Doctorate Degree", "Juris Doctorate"];
+    expect(degreeChoice(workday, ["Bachelor of Science", "Master’s in Business Administration"])?.answer).toBe("Masters Degree");
+    expect(degreeChoice(workday, ["BS"])?.answer).toBe("Bachelors Degree");
+    expect(degreeChoice(workday, ["PhD"])?.answer).toBe("Doctorate Degree");
     expect(degreeChoice(premier, ["B.A. Economics"])).toMatchObject({ answer: "Bachelor's Degree", basis: "Your education: B.A. Economics" });
   });
   it("leaves it when the rows don't name a degree or no choice fits", () => {

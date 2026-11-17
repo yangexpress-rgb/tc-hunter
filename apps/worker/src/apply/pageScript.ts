@@ -42,11 +42,19 @@ export const PAGE_SCRIPT = String.raw`
   var NOT_A_LABEL = /^(select one|choose one|select|choose|please select|select\.\.\.)\s*(required)?\s*\*?$/i;
   function ok(t) { return !!t && !NOT_A_LABEL.test(t); }
   function labelOf(el) {
+    // A Workday list button names itself by its chosen value: "No Required" is the answer, not the question.
+    var own = clean(el.tagName === "BUTTON" ? el.textContent : el.value);
+    function okFor(t) {
+      if (!ok(t)) return false;
+      if (!own) return true;
+      var rest = t.indexOf(own) === 0 ? t.slice(own.length).trim() : null;
+      return rest === null || !/^(required)?\s*\*?$/i.test(rest);
+    }
     var by = el.getAttribute("aria-labelledby");
-    if (by) { var t = textOf(by, el); if (ok(t)) return t; }
+    if (by) { var t = textOf(by, el); if (okFor(t)) return t; }
     if (el.id) { var l = rootOf(el).querySelector('label[for="' + esc(el.id) + '"]'); if (l && ok(clean(l.textContent))) return clean(l.textContent); }
     var wrap = el.closest("label"); if (wrap && ok(clean(wrap.textContent))) return clean(wrap.textContent);
-    if (ok(clean(el.getAttribute("aria-label")))) return clean(el.getAttribute("aria-label"));
+    if (okFor(clean(el.getAttribute("aria-label")))) return clean(el.getAttribute("aria-label"));
     // Workday: the question's own label sits in the same form field box.
     var box = el.closest("[data-automation-id^='formField'], .field, .application-question, .form-group");
     if (box) { var lb = box.querySelector("legend, [data-automation-id='formLabel'], label"); if (lb && ok(clean(lb.textContent))) return clean(lb.textContent); }
