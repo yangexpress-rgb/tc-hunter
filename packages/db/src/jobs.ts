@@ -507,7 +507,7 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
       : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))
       : item.kind === "resume_digest" ? { status: await (deps.digest ? runDigest(pool, ctx, String((item.payload as { digest_id?: string }).digest_id), deps.digest) : Promise.reject(new Error("resume reading not set up"))) }
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
-      : item.kind === "apply" ? await (deps.apply ? runApply(pool, ctx, item.payload as never, deps.apply) : Promise.reject(new Error("the application browser isn't set up")))
+      : item.kind === "apply" ? await (deps.apply ? runApply(pool, ctx, item.payload as never, { fetcher: deps.fetcher, ...deps.apply }) : Promise.reject(new Error("the application browser isn't set up")))
       : await runIngestLink(pool, ctx, item.payload as never, deps);
     await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
     const counts = Object.fromEntries(Object.entries((result ?? {}) as Record<string, unknown>).filter(([, v]) => typeof v === "number"));

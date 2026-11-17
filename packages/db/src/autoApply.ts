@@ -3,7 +3,8 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
-  checkContext, checkEssay, isEssayQuestion,
+  checkContext, checkEssay, isEssayQuestion, companyKey, findOnEmployerSite, isNoFetchHost,
+  type CareersLookup, type Fetcher, type SourceSpec,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -18,6 +19,7 @@ import { attachReceipt, cleanForm, createPacket, packetProfile, settleUnclear } 
 import { approveSubmission, consumeSubmissionKey, DomainError, recordSubmitted } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
 import { tz, weeklyBudget } from "./tracker";
+import { upsertSource } from "./jobs";
 
 const applyLog = createLogger();
 
@@ -234,6 +236,10 @@ export interface ApplyDeps {
   inferrer?: AnswerInferrer;
   /** Drafts long written answers for the applicant to approve. */
   drafter?: EssayDrafter;
+  /** Reads employers' own job lists, to find a LinkedIn or Indeed job on the employer's site (Yong, 2026-11-17). */
+  fetcher?: Fetcher;
+  /** Where an employer lists its jobs, when the usual board names don't answer. */
+  careers?: CareersLookup;
 }
 
 /** What was worked out for a question this run, by its words and choices (Workday asks page by page). */
@@ -345,6 +351,64 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   return { answers: out, problems };
 }
 
+/** The job site a link belongs to, in words ("LinkedIn"). */
+function siteName(url: string): string {
+  const h = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } })();
+  if (/linkedin\.com$/.test(h)) return "LinkedIn";
+  if (/(^|\.)indeed\./.test(h)) return "Indeed";
+  if (/glassdoor\./.test(h)) return "Glassdoor";
+  if (/ziprecruiter\.com$/.test(h)) return "ZipRecruiter";
+  return h.replace(/^www\./, "") || "a job site";
+}
+
+/**
+ * A job found on LinkedIn or Indeed (or a site like them): TC Hunter never applies there, so it
+ * looks for the same job on the employer's own careers site and applies there instead (Yong,
+ * 2026-11-17). Each step shows on the application; a job it can't find there ends in red with why.
+ * Returns the employer's own address for the job, or null when it ended the run.
+ */
+async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow, jobSiteUrl: string, deps: ApplyDeps, run: Run): Promise<string | null> {
+  const site = siteName(jobSiteUrl);
+  const posting = await withApplicant(pool, auto, async (c) => (await c.query(
+    `SELECT p.id, p.title, p.location_raw, p.employer_apply_url FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as
+    { id: string; title: string; location_raw: string | null; employer_apply_url: string | null });
+  if (posting.employer_apply_url) {
+    await run.note(`Found on ${site}. Applying on ${app.employer}'s own site instead, where TC Hunter found the same job earlier`);
+    return posting.employer_apply_url;
+  }
+  const giveUp = async (why: string) => {
+    await run.end("failed", `This job came from ${site}, and TC Hunter never applies there for you. It looked for the same job on ${app.employer}'s own careers site, but ${why}. Apply on ${site} yourself, then choose "I applied" here.`);
+    return null;
+  };
+  if (!deps.fetcher) return giveUp("looking up employers' sites isn't set up on this server");
+  await run.step(`Found on ${site}, where TC Hunter never applies. Looking for the same job on ${app.employer}'s own careers site`);
+  const key = companyKey(app.employer);
+  const known = key ? await withApplicant(pool, auto, async (c) => (await c.query(
+    `SELECT s.name, s.type, s.kind, s.source_key AS key, s.url FROM employer_board b JOIN job_source s ON s.id = b.job_source_id WHERE b.company_key = $1`, [key])).rows[0] as SourceSpec | undefined) : undefined;
+  let r: Awaited<ReturnType<typeof findOnEmployerSite>>;
+  try {
+    r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw }, deps.fetcher, { known: known ?? null, lookup: deps.careers });
+  } catch (e) {
+    applyLog.warn("apply.employer_site_error", { detail: String((e as Error)?.message ?? e).slice(0, 200) });
+    return giveUp("its site couldn't be reached just now. Try again later");
+  }
+  await withApplicant(pool, auto, async (c) => {
+    await c.query("UPDATE job_posting SET employer_apply_url = $2, employer_lookup = $3 WHERE id = $1",
+      [posting.id, r.found ? r.url : null, JSON.stringify(r.found ? { found: true, title: r.title, location: r.location, site: r.spec.url, at: new Date() } : { found: false, reason: r.reason, site: r.spec?.url ?? null, at: new Date() })]);
+    // A board found by this lookup is remembered for the employer, as discovery does.
+    if (r.spec && !known && key) {
+      const id = await upsertSource(c, r.spec);
+      await c.query(`INSERT INTO employer_board (company_key, name, job_source_id, note, checked_at) VALUES ($1, $2, $3, NULL, now())
+        ON CONFLICT (company_key) DO UPDATE SET job_source_id = coalesce(employer_board.job_source_id, EXCLUDED.job_source_id), note = CASE WHEN employer_board.job_source_id IS NULL THEN NULL ELSE employer_board.note END`, [key, app.employer, id]);
+    }
+  });
+  applyLog.info("apply.employer_site", { found: r.found, kind: r.spec?.kind ?? null });
+  if (!r.found) return giveUp(r.reason);
+  const host = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
+  await run.note(`Found it on ${app.employer}'s own site (${host}): "${r.title}"${r.location ? `, ${r.location}` : ""}. Applying there`);
+  return r.url;
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -406,7 +470,13 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
   try {
     const pre = await before(pool, auto, app, mode, payload, run);
     if (pre) return { status: pre };
-    const url = app.apply_url || app.urls.find((u) => !/linkedin\.com|indeed\./i.test(u)) || app.urls[0];
+    // Never LinkedIn or Indeed: any link to the employer's own site first, else the same job found there.
+    const links = [app.apply_url, ...app.urls].filter((u): u is string => !!u);
+    let url = links.find((u) => !isNoFetchHost(u)) ?? null;
+    if (!url && links.length) {
+      url = await employerSiteUrl(pool, auto, app, links[0]!, deps, run);
+      if (!url) return { status: "failed" };
+    }
     if (!url) { await run.end("failed", APPLY_PROBLEM.noLink); return { status: "failed" }; }
     const first = detectAts(url);
     if (first === "linkedin" || first === "indeed") { await run.end("failed", APPLY_PROBLEM.never); return { status: "failed" }; }
