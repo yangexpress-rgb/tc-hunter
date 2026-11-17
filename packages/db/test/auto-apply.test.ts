@@ -3,7 +3,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   MemorySecretStore, RulesLetterProposer, RulesRequirementsReader, RulesResumeProposer, SecretValue, SourceRefusedError,
-  type ApplyBrowser, type ApplyPage, type FillItem, type Fetcher, type FormField, type MailReader, type PageForm, type WorkdayPage,
+  type AnswerInferrer, type InferFacts, type InferQuestion, type ApplyBrowser, type ApplyPage, type FillItem, type Fetcher, type FormField, type MailReader, type PageForm, type WorkdayPage,
 } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, answerPacketField, applyStatus, applyStatuses, applyShot, approveDocument, approvePacket, approveServerSend, connectEmail, continueAfterAnswers,
@@ -94,7 +94,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -523,5 +523,45 @@ describe("a last look before Submit (Spaulding Ridge, 2026-11-15)", () => {
     expect(s.problem).toMatch(/still needs "Resume\/CV \*": the file didn't attach.*nothing was sent/);
     expect(browser.clicks).toBe(clicks);
     expect((await getPacket(pool, cfg, yong, apps[12]!))!.outcomeUnknown).toBe(false);
+  });
+});
+
+describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
+  it("asks only what isn't settled, never with contact details; uses the answers that fit; the rest stays with the applicant", async () => {
+    const seen: Array<{ questions: InferQuestion[]; facts: InferFacts }> = [];
+    const inferrer: AnswerInferrer = {
+      version: "test-inferrer",
+      async infer(questions, facts) {
+        seen.push({ questions, facts });
+        return [
+          { key: "#worked_here", answer: "No", basis: "Premier Health isn't in your work history" },
+          { key: "#ft", answer: "Yes", basis: "Your goal: full-time" },
+        ];
+      },
+    };
+    const extra: FormField[] = [
+      { key: "#worked_here", label: "Have you ever worked for Premier Health as an employee or contractor?*", type: "select", options: ["Select One", "No", "Yes"], required: true },
+      { key: "#ft", label: "What type of employment are you seeking?: Full-Time", type: "checkbox" },
+      { key: "#excluded", label: "Are you excluded from any Federal health care program?*", type: "select", options: ["Select One", "Yes", "No"], required: true },
+    ];
+    applyDeps = { ...applyDeps, inferrer };
+    browser.spec = () => ({ url: GH(19), fields: [...BASE, ...extra], after: "thanks" });
+    await approveResume(apps[18]!);
+    await runNow();
+    const s = await applyStatus(pool, yong, apps[18]!);
+    expect(s).toMatchObject({ status: "waiting", waitingFor: "answers" });
+    expect(s.problem).toMatch(/1 question needs your answer.*"Are you excluded/);
+    const asked = seen[0]!.questions.map((q) => q.key);
+    expect(asked).toEqual(expect.arrayContaining(["#worked_here", "#ft", "#excluded"]));
+    expect(asked).not.toContain("#gender");       // diversity questions are never worked out
+    expect(asked).not.toContain("#first_name");   // already known
+    expect(JSON.stringify(seen[0]!.facts)).not.toMatch(/yong@example\.test/);
+    expect(seen[0]!.facts.work.map((w) => w.employer)).toContain("Northwind");
+    expect(seen[0]!.facts.employer).toBe("Premier Health");
+    const p = (await getPacket(pool, cfg, yong, apps[18]!))!;
+    const by = (label: RegExp) => p.fields.find((f: { label: string }) => label.test(f.label))!;
+    expect(by(/worked for Premier/)).toMatchObject({ answer: "No", source: "inferred", willFill: true });
+    expect(by(/Full-Time/)).toMatchObject({ answer: "Yes", source: "inferred" });
+    applyDeps = { ...applyDeps, inferrer: undefined };
   });
 });

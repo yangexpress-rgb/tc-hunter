@@ -14,7 +14,7 @@ import { canonicalJson } from "../fingerprint";
  */
 export type FieldType = "text" | "email" | "tel" | "url" | "number" | "date" | "textarea" | "select" | "radio" | "checkbox" | "file";
 export type StepKind = "attestation" | "work_auth" | "eeo" | "consent" | "signature" | "captcha" | "mfa" | "verification";
-export type FieldSource = "master_profile" | "answer_bank" | "tailored_doc" | "applicant_typed" | "standing_answer";
+export type FieldSource = "master_profile" | "answer_bank" | "tailored_doc" | "applicant_typed" | "standing_answer" | "inferred";
 /** Standing answers (Yong, 2026-11-15): kinds of question that are always the applicant's own, unless they set an answer for them in Settings. */
 export type StandingKind = "site_account" | "attestation" | "consent" | "background_check" | "signature" | "eeo";
 
