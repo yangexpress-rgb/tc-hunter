@@ -112,7 +112,9 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
   let waited = false, stopped = false;
   const ask = async (url: string, body?: unknown): Promise<Obj | null> => {
     for (;;) {
-      try { return JSON_OR((await f.get(url, { headers: WORKDAY_HEADERS, ...(body ? { body } : {}) })).text, "Workday"); } catch (e) {
+      // Said as the careers site's own page would (where the request comes from), not as a different reader.
+      const headers = { ...WORKDAY_HEADERS, Origin: `https://${w.host}`, Referer: `https://${w.host}/${w.site}` };
+      try { return JSON_OR((await f.get(url, { headers, ...(body ? { body } : {}) })).text, "Workday"); } catch (e) {
         if (!(e instanceof SourceRefusedError) || e.reason !== "rate_limited") throw e;
         if (waited) { stopped = true; return null; }
         waited = true;

@@ -5,7 +5,7 @@
  */
 export const USER_AGENT = "TCHunter/1.0 (personal job search for one household; polite, cached, rate-limited)";
 
-export interface FetchResult { status: number; text: string; url: string; contentType: string }
+export interface FetchResult { status: number; text: string; url: string; contentType: string; /** Retry-After, when the site sent one. */ retryAfter?: string }
 /** headers: extra request headers (an API key a job-search site asks for). body: sends a JSON POST instead of a GET. */
 export interface FetchOpts { kind?: "api" | "page"; headers?: Record<string, string>; body?: unknown }
 export interface Fetcher { get(url: string, opts?: FetchOpts): Promise<FetchResult> }
@@ -80,7 +80,7 @@ export class PoliteFetcher implements Fetcher {
       // Job feeds of big employers (Databricks on Greenhouse, Veeva on Lever) run past 5 MB; web pages stay capped lower.
       const cap = this.opts.maxBytes ?? (accept === "application/json" ? 40_000_000 : 5_000_000);
       if (text.length > cap) throw new SourceRefusedError("too_big", `${text.length} bytes`);
-      return { status: r.status, text, url: r.url || url, contentType: r.headers.get("content-type") ?? "" };
+      return { status: r.status, text, url: r.url || url, contentType: r.headers.get("content-type") ?? "", retryAfter: r.headers.get("retry-after") ?? undefined };
     } catch (e) {
       if (e instanceof SourceRefusedError) throw e;
       throw new SourceRefusedError("unreachable", (e as Error).message);
@@ -101,7 +101,7 @@ export class PoliteFetcher implements Fetcher {
     }
     const r = await this.once(url, opts.kind === "page" ? "text/html,application/xhtml+xml" : "application/json", { headers: opts.headers, body: opts.body });
     if (r.status === 401 || r.status === 403) throw new SourceRefusedError("refused", `${u.host} answered ${r.status}`);
-    if (r.status === 429) throw new SourceRefusedError("rate_limited", `${u.host} answered 429`);
+    if (r.status === 429) throw new SourceRefusedError("rate_limited", `${u.host} answered 429${r.retryAfter ? ` (try again in ${r.retryAfter})` : ""}`);
     if (r.status === 404 || r.status === 410) throw new SourceRefusedError("not_found", `${u.host} answered ${r.status}`);
     if (r.status >= 400) throw new SourceRefusedError("unreachable", `${u.host} answered ${r.status}`);
     return r;
