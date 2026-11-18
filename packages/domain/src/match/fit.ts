@@ -1,0 +1,201 @@
+import { findSkills, canonicalSkill } from "../jobs/skills";
+import { containsPhrase } from "../jobs/text";
+import { countryFit } from "../jobs/country";
+import { functionWords, levelOf } from "../jobs/normalize";
+import type { SalaryPeriod } from "../jobs/types";
+import { applicantLevel, effectiveYears, employmentKind, languageMentioned, levelFit, sameEmployer, seniorityFit, type MatchPosting, type MatchPrefs, type MatchProfile } from "./score";
+
+/**
+ * Two scores for every job (Yong, 2026-11-18), each 0-100, deterministic and explained
+ * line by line. AI never sets either one.
+ *
+ * - G-score (against goal): how well the posting matches what a goal asks for: the role,
+ *   level, kind of work, place, pay, companies or industries, specialty and language.
+ *   Only what the goal sets counts, so a goal that leaves pay blank isn't marked up or
+ *   down for pay. With several goals, the job keeps the goal it fits best.
+ * - C-score (against candidate): how well the applicant's own record (checked skills with
+ *   proof, checked experience) covers what the posting asks for. Goals don't change it.
+ *
+ * The older overall match score (score.ts) is unchanged and still drives "Best match",
+ * the ruled-out filters, calibration and the resume threshold.
+ */
+export const FIT_VERSION = "fit-2";  // fit-2: the goal's countries count in Place
+
+export interface FitPart { key: string; label: string; weight: number; raw: number; points: number; detail: string[] }
+export interface Fit { score: number; parts: FitPart[]; summary: string }
+export interface GoalFit extends Fit { goalId: string | null; goalName: string | null }
+
+const PER_YEAR: Record<SalaryPeriod, number> = { year: 1, month: 12, hour: 2080 };
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+function finish(parts: Array<Omit<FitPart, "points">>): { score: number; parts: FitPart[] } {
+  const total = parts.reduce((s, p) => s + p.weight, 0);
+  const out = parts.map((p) => ({ ...p, raw: Math.round(p.raw * 1000) / 1000, points: round1(p.weight * p.raw) }));
+  const score = total ? Math.max(0, Math.min(100, Math.round((100 * out.reduce((s, p) => s + p.weight * p.raw, 0)) / total))) : 0;
+  return { score, parts: out };
+}
+
+/**
+ * How close a posting's title is to a role the goal names: mostly how much of the role's
+ * own words the title has, a little how much of the title is about that role.
+ */
+export function roleFit(postingTitle: string, roles: string[]): { raw: number; best: string | null; words: string[] } {
+  const pw = new Set(functionWords(postingTitle));
+  let best = { raw: 0, best: null as string | null, words: [] as string[] };
+  if (!pw.size) return best;
+  for (const role of roles) {
+    const rw = [...new Set(functionWords(role))];
+    if (!rw.length) continue;
+    const hits = rw.filter((w) => pw.has(w));
+    const raw = 0.7 * (hits.length / rw.length) + 0.3 * (hits.length / pw.size);
+    if (raw > best.raw) best = { raw: Math.min(1, raw), best: role, words: hits };
+  }
+  return best;
+}
+
+/** G-score for one goal. */
+export function goalFit(prefs: MatchPrefs, posting: MatchPosting): GoalFit {
+  const text = `${posting.title}\n${posting.descriptionText}`;
+  const parts: Array<Omit<FitPart, "points">> = [];
+
+  // Role (35): always counts. A goal with no role or occupation can't say.
+  const roles = [...prefs.targetTitles, ...(prefs.occupation ? [prefs.occupation] : [])].filter((r) => r.trim());
+  if (roles.length) {
+    const r = roleFit(posting.title, roles);
+    const line = r.raw >= 0.99 ? `The title is the role you want: "${r.best}".`
+      : r.best ? `The title shares ${r.words.map((w) => `"${w}"`).join(", ")} with "${r.best}".`
+      : `The title isn't close to a role you want (${roles.slice(0, 3).join(", ")}${roles.length > 3 ? "…" : ""}).`;
+    parts.push({ key: "role", label: "Role", weight: 35, raw: r.raw, detail: [line] });
+  } else parts.push({ key: "role", label: "Role", weight: 35, raw: 0.5, detail: ["This goal doesn't name a role, so this counts as half."] });
+
+  // Level (15), when the goal picks levels.
+  const levels = prefs.levels ?? [];
+  if (levels.length) { const lv = levelFit(posting.title, levels); parts.push({ key: "level", label: "Level", weight: 15, raw: lv.raw, detail: [lv.line] }); }
+
+  // Kind of work (10), when the goal picks kinds.
+  const kinds = prefs.employmentTypes ?? [];
+  if (kinds.length) {
+    const kind = employmentKind(posting.title);
+    const want = kinds.map((k) => KIND[k] ?? k).join(" or ");
+    parts.push(kind
+      ? { key: "type", label: "Job type", weight: 10, raw: kinds.includes(kind) ? 1 : 0, detail: [kinds.includes(kind) ? `${KIND[kind]}, which you want.` : `${KIND[kind]}, and you want ${want}.`] }
+      : { key: "type", label: "Job type", weight: 10, raw: 0.7, detail: [`The title doesn't say what kind of job it is (you want ${want}).`] });
+  }
+
+  // Place (20), when the goal sets places or ways of working.
+  if (prefs.locations.length || prefs.workplaceTypes.length) {
+    const loc = (posting.locationRaw ?? "").toLowerCase();
+    const isRemote = posting.workplaceType === "remote" || /\bremote\b/.test(loc);
+    const wantsRemote = prefs.workplaceTypes.includes("remote") || prefs.locations.some((l) => /remote/i.test(l));
+    const placeHit = prefs.locations.find((l) => { const c = l.toLowerCase().split(",")[0]!.trim(); return c && !/remote/.test(c) && loc.includes(c); });
+    const typeOk = !posting.workplaceType || !prefs.workplaceTypes.length || prefs.workplaceTypes.includes(posting.workplaceType);
+    const [raw, line] = isRemote && wantsRemote ? [1, "Remote, which you want."]
+      : placeHit && typeOk ? [1, `In ${posting.locationRaw}, a place you chose.`]
+      : !loc && !posting.workplaceType ? [0.5, "The posting doesn't say where."]
+      : placeHit ? [0.5, `In a place you chose, but ${posting.workplaceType}.`]
+      : !prefs.locations.filter((l) => !/remote/i.test(l)).length && typeOk
+        ? (posting.workplaceType ? [1, `${WORK[posting.workplaceType]}, a way of working you chose.`] : [0.5, "The posting doesn't say if it's remote, hybrid or in the office."])
+      : [0, `Not in a place you chose (${posting.locationRaw ?? posting.workplaceType}).`];
+    const cf = countryFit(posting, prefs.countries ?? []);
+    // Outside the goal's countries: no place points, whatever else fits. Unknown country: at most half.
+    const r = cf.verdict === "out" ? 0 : cf.verdict === "unknown" ? Math.min(raw as number, 0.5) : raw as number;
+    parts.push({ key: "place", label: "Place", weight: 20, raw: r, detail: cf.verdict === "any" ? [line as string] : [line as string, cf.line] });
+  } else if ((prefs.countries ?? []).length) {
+    // Only countries set: the country is the place.
+    const cf = countryFit(posting, prefs.countries ?? []);
+    parts.push({ key: "place", label: "Place", weight: 20, raw: cf.raw, detail: [cf.line] });
+  }
+
+  // Pay (10), when the goal sets an expectation.
+  if (prefs.salaryFloor) {
+    const sal = posting.salary;
+    const top = sal?.max ?? sal?.min ?? null;
+    let raw = 0.5, line = "Pay isn't published.";
+    if (sal && top !== null) {
+      if (sal.currency && sal.currency !== prefs.salaryFloor.currency) line = `Pay is in ${sal.currency}, so it can't be compared with your goal.`;
+      else {
+        const ok = top * PER_YEAR[sal.period ?? "year"] >= prefs.salaryFloor.amount * PER_YEAR[prefs.salaryFloor.period];
+        raw = ok ? 1 : 0; line = ok ? "Published pay reaches your goal." : "Published pay is below your goal.";
+      }
+    }
+    parts.push({ key: "pay", label: "Pay", weight: 10, raw, detail: [line] });
+  }
+
+  // Company or industry (10), when the goal names any.
+  const companies = (prefs.companiesInclude ?? []).filter((x) => x.trim());
+  if (companies.length || prefs.industriesInclude.length) {
+    const company = companies.find((x) => sameEmployer(posting.employer, x));
+    const industry = prefs.industriesInclude.find((i) => containsPhrase(`${posting.employer}\n${text}`, i));
+    parts.push({ key: "company", label: "Company or industry", weight: 10, raw: company || industry ? 1 : 0,
+      detail: [company ? `At ${posting.employer}, a company you named.` : industry ? `Mentions ${industry}, an industry you want.` : "Not a company or industry you named."] });
+  }
+
+  // Specialty (10) and language (10), when the goal sets them.
+  const specs = (prefs.specialties ?? []).filter((x) => x.trim());
+  if (specs.length) {
+    const hits = specs.filter((x) => containsPhrase(text, x));
+    parts.push({ key: "specialty", label: "Specialty", weight: 10, raw: hits.length ? 0.5 + 0.5 * hits.length / specs.length : 0,
+      detail: [hits.length ? `Mentions ${hits.join(", ")}.` : `Doesn't mention ${specs.join(" or ")}.`] });
+  }
+  const langs = (prefs.languages ?? []).filter((x) => x.trim());
+  if (langs.length) {
+    const hit = langs.find((l) => languageMentioned(text, l));
+    parts.push({ key: "language", label: "Language", weight: 10, raw: hit ? 1 : 0, detail: [hit ? `Asks for ${hit}.` : `Doesn't mention ${langs.join(" or ")}.`] });
+  }
+
+  const { score, parts: done } = finish(parts);
+  const weak = done.filter((p) => p.raw < 0.5).map((p) => p.label.toLowerCase());
+  const summary = `${band(score)} for ${prefs.goalName ?? "your goal"}${weak.length ? `; off on ${weak.join(", ")}` : ""}.`;
+  return { score, parts: done, summary, goalId: prefs.goalId ?? null, goalName: prefs.goalName ?? null };
+}
+
+/** G-score across goals: the goal the job fits best. */
+export function bestGoalFit(prefs: MatchPrefs[], posting: MatchPosting): GoalFit {
+  let best: GoalFit | null = null;
+  for (const p of prefs) { const g = goalFit(p, posting); if (!best || g.score > best.score) best = g; }
+  if (!best) return { score: 0, parts: [], summary: "No goal set yet.", goalId: null, goalName: null };
+  return prefs.length > 1 && best.goalName ? { ...best, parts: best.parts.map((p, i) => i === 0 ? { ...p, detail: [`Fits your goal "${best!.goalName}" best.`, ...p.detail] } : p) } : best;
+}
+
+/** C-score: the applicant's checked record against what the posting asks for. */
+export function candidateFit(profile: MatchProfile, posting: MatchPosting, now: Date): Fit {
+  const text = `${posting.title}\n${posting.descriptionText}`;
+  const parts: Array<Omit<FitPart, "points">> = [];
+
+  // Required skills (45): only when the posting lists any. Otherwise it can't be judged and doesn't count.
+  const must = posting.requirements.must_have;
+  if (must.length) {
+    const covered = must.filter((m) => profile.skills.some((s) => s.evidenceIds.length > 0 && [s.name, ...s.aliases].some((n) => canonicalSkill(n) === canonicalSkill(m))));
+    const missing = must.filter((m) => !covered.includes(m));
+    parts.push({ key: "skills", label: "Required skills", weight: 45, raw: covered.length / must.length,
+      detail: [`You cover ${covered.length} of ${must.length} required skills with proof.`, ...(missing.length ? [`Missing: ${missing.join(", ")}.`] : [])] });
+  }
+
+  // Experience (35 = years 15 + level 10 + past roles 10).
+  const yrs = effectiveYears(profile.experience, now);
+  const req = posting.requirements.years;
+  const yearsRaw = req ? Math.min(1, yrs.years / req) : 1;
+  const sen = seniorityFit(levelOf(posting.title), applicantLevel(profile.experience));
+  const past = roleFit(posting.title, profile.experience.map((e) => e.title));
+  const expRaw = (15 * yearsRaw + 10 * sen.raw + 10 * past.raw) / 35;
+  parts.push({ key: "experience", label: "Experience", weight: 35, raw: expRaw, detail: [
+    req ? `Asks for ${req}+ years; you have ${yrs.years} counted years.` : `No years asked for; you have ${yrs.years} counted years.`,
+    sen.line,
+    past.best ? `The title is close to a role you've had: "${past.best}".` : "The title isn't close to a role you've had.",
+  ] });
+
+  // Field (20): the applicant's own skills and terms that the posting mentions.
+  const own = new Set<string>([...profile.skills.map((s) => canonicalSkill(s.name)), ...findSkills(profile.experience.map((e) => `${e.title}\n${e.text}`).join("\n")).map(canonicalSkill)]);
+  const shared = [...new Set(findSkills(text).map(canonicalSkill))].filter((t) => own.has(t));
+  parts.push({ key: "field", label: "Field", weight: 20, raw: Math.min(1, shared.length / 5),
+    detail: [`${shared.length} of your skills and terms appear in the posting${shared.length ? `: ${shared.slice(0, 8).join(", ")}` : ""}.`] });
+
+  const { score, parts: done } = finish(parts);
+  const summary = must.length ? `${band(score)}: you cover ${parts[0]!.detail[0]!.match(/\d+ of \d+/)![0]} required skills.`
+    : `${band(score)}: the posting lists no skills we could read, so this is your experience and field only.`;
+  return { score, parts: done, summary };
+}
+
+const band = (s: number) => (s >= 80 ? "Strong fit" : s >= 60 ? "Good fit" : s >= 40 ? "Partial fit" : "Weak fit");
+const WORK: Record<string, string> = { remote: "Remote", hybrid: "Hybrid", onsite: "In the office" };
+const KIND: Record<string, string> = { full_time: "Full time", part_time: "Part time", contract: "Contract", internship: "Internship", temporary: "Temporary", volunteer: "Volunteer" };

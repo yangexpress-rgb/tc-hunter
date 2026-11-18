@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
-import { checkLine, type CheckContext } from "../tailor/checker";
+import { checkLine, maskMetric, type CheckContext } from "../tailor/checker";
 import type { ProposedLine, TailorPosting, TailorProfile } from "../tailor/types";
 import { ANSWER_MODEL, cachedTurn, promptCacheOn } from "./infer";
 import { recordUsage } from "../ai/meter";
@@ -113,7 +113,7 @@ export class ClaudeEssayDrafter implements EssayDrafter {
     const about = profile.about?.text.trim() ? [{ id: profile.about.id, kind: "about", text: profile.about.text }] : [];
     const facts = [...about, ...profile.experience.filter((e) => e.verified).flatMap((e) => [
       { id: e.id, kind: "role", text: [e.title, e.employer].filter(Boolean).join(" at ") },
-      ...e.bullets.filter((b) => b.verified).map((b) => ({ id: b.id, kind: "bullet", role_id: e.id, text: b.metricValue !== null ? b.text.replace(String(b.metricValue), "{metric}") : b.text })),
+      ...e.bullets.filter((b) => b.verified).map((b) => ({ id: b.id, kind: "bullet", role_id: e.id, text: maskMetric(b) })),
     ])];
     const skills = profile.skills.filter((s) => s.verified).map((s) => ({ id: s.id, name: s.name, level: s.proficiency ?? "not stated" }));
     const motivation = [

@@ -1,10 +1,10 @@
 import { employmentKind, goalLevelIndex, goalTypeLabel, jobLevelKey, jobLevelLabel, t } from "@tc-hunter/domain";
 import { feedbackAction } from "@/app/jobs/actions";
-import { pay, place, posted } from "@/components/jobs/JobBits";
+import { FitScores, pay, place, posted } from "@/components/jobs/JobBits";
 import { companyDomain, groupByCompany, payShort } from "@/lib/jobsView";
 
 // Sorting shared by every layout.
-export const GOAL_SORTS = ["score", "company", "role", "level", "location", "type", "pay", "posted", "status"] as const;
+export const GOAL_SORTS = ["score", "g", "c", "company", "role", "level", "location", "type", "pay", "posted", "status"] as const;
 export type GoalSort = (typeof GOAL_SORTS)[number];
 
 const PER_YEAR: Record<string, number> = { year: 1, month: 12, hour: 2080 };
@@ -20,7 +20,7 @@ const shortDate = (d: Date | string | null) => (d ? new Date(d).toLocaleDateStri
 
 export function sortRows(rows: Array<Record<string, any>>, by: GoalSort, dir: "asc" | "desc") {
   const key = (r: Record<string, any>): string | number | null => ({
-    score: r.score, level: ((k) => (k === "none" ? null : goalLevelIndex(k as never)))(jobLevelKey(r.title ?? "")), company: String(r.employer_canonical ?? "").toLowerCase(), role: String(r.title ?? "").toLowerCase(),
+    score: r.score, g: r.g_score ?? null, c: r.c_score ?? null, level: ((k) => (k === "none" ? null : goalLevelIndex(k as never)))(jobLevelKey(r.title ?? "")), company: String(r.employer_canonical ?? "").toLowerCase(), role: String(r.title ?? "").toLowerCase(),
     location: place(r).toLowerCase(), type: kindOf(r), pay: yearlyPay(r), posted: r.posted_at ? new Date(r.posted_at).getTime() : null, status: statusOf(r),
   })[by];
   const sign = dir === "asc" ? 1 : -1;
@@ -52,8 +52,18 @@ export function Initials({ name, size }: { name: string; size?: "big" }) {
   return <span className={`initials tone-${h % 6}${size === "big" ? " big" : ""}`} aria-hidden="true">{letters}</span>;
 }
 
-const band = (r: Row) => (r.filtered ? "filtered" : r.score >= 80 ? "strong" : r.score >= 60 ? "good" : r.score >= 40 ? "partial" : "weak");
-export const FitChip = ({ r }: { r: Row }) => <span className={`fit ${band(r)}`} aria-label={`Match score ${r.score} out of 100`}>{r.score} match</span>;
+export const FitChip = ({ r }: { r: Row }) => <FitScores r={r} compact />;
+
+/** The goal and candidate lines under a job: what each score says, in a few words. */
+export function FitLines({ r }: { r: Row }) {
+  if (!r.g_summary && !r.c_summary) return r.reason_line ? <p className="job-card-reason">{r.reason_line}</p> : null;
+  return (
+    <div className="fit-lines">
+      {r.g_summary ? <div><strong>G</strong> {r.g_summary}</div> : null}
+      {r.c_summary ? <div><strong>C</strong> {r.c_summary}</div> : null}
+    </div>
+  );
+}
 
 function CardActions({ r, back }: { r: Row; back: string }) {
   const hidden = (<><input type="hidden" name="match_id" value={r.id} /><input type="hidden" name="back" value={back} /></>);
@@ -96,7 +106,7 @@ export function JobCard({ r, back }: { r: Row; back: string }) {
       </div>
       {money ? <div className="job-card-pay">{money}</div> : <div className="job-card-pay none">Pay not published</div>}
       <div className="job-card-place">{place(r)}<br /><span className="small">{posted(r.posted_at)}</span></div>
-      {r.reason_line ? <p className="job-card-reason">{r.reason_line}</p> : null}
+      <FitLines r={r} />
       {r.filtered ? <p className="error small">Ruled out: {(r.filter_reasons as string[]).join("; ")}</p> : null}
       <CardActions r={r} back={back} />
     </li>
@@ -112,20 +122,21 @@ export function JobCards({ rows, back }: { rows: Row[]; back: string }) {
 // Company cards
 // ---------------------------------------------------------------------------
 
-export type CompanySort = "score" | "roles" | "name";
-export const COMPANY_SORTS: Array<[CompanySort, string]> = [["score", "Best match"], ["roles", "Most roles"], ["name", "Name"]];
+export type CompanySort = "score" | "g" | "c" | "roles" | "name";
+export const COMPANY_SORTS: Array<[CompanySort, string]> = [["g", "G-score"], ["c", "C-score"], ["score", "Best match"], ["roles", "Most roles"], ["name", "Name"]];
 
 const WORKPLACE: Record<string, string> = { remote: "Remote", hybrid: "Hybrid", onsite: "In the office" };
 
 export function companiesOf(rows: Row[]) {
   return groupByCompany(rows).map(({ name, rows: list }) => {
-    const sorted = [...list].sort((a, b) => b.score - a.score);
+    const sorted = [...list].sort((a, b) => (b.g_score ?? -1) - (a.g_score ?? -1) || b.score - a.score);
     const count = (vals: string[]) => [...vals.reduce((m, v) => m.set(v, (m.get(v) ?? 0) + 1), new Map<string, number>()).entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v);
     const levels = count(list.map((r) => jobLevelKey(r.title ?? "")).filter((k) => k !== "none")).map((k) => jobLevelLabel(k));
     const work = count(list.map((r) => (r.workplace_type ? WORKPLACE[r.workplace_type as string] : /remote/i.test(r.location_raw ?? "") ? "Remote" : null)).filter(Boolean) as string[]);
     const places = count(list.map((r) => String(r.location_raw ?? "").split(/\s*[;|·]\s*/)[0]!.trim()).filter((p) => p && !/^remote$/i.test(p)));
     return {
-      name, rows: sorted, best: sorted[0]!.score, unseen: list.filter((r) => !r.seen_at).length,
+      name, rows: sorted, best: sorted[0]!.score,
+      bestG: Math.max(-1, ...list.map((r) => r.g_score ?? -1)), bestC: Math.max(-1, ...list.map((r) => r.c_score ?? -1)), unseen: list.filter((r) => !r.seen_at).length,
       domain: companyDomain(name, list.map((r) => r.apply_url)),
       tags: [...work.slice(0, 2), ...places.slice(0, 2), ...levels.slice(0, 2)],
     };
@@ -137,6 +148,8 @@ export function CompanyCards({ rows, sort, rolesHref, tab }: {
 }) {
   const list = companiesOf(rows).sort((a, b) =>
     sort === "roles" ? b.rows.length - a.rows.length || b.best - a.best
+      : sort === "g" ? b.bestG - a.bestG || b.bestC - a.bestC
+      : sort === "c" ? b.bestC - a.bestC || b.bestG - a.bestG
       : sort === "name" ? a.name.localeCompare(b.name)
       : b.best - a.best || b.rows.length - a.rows.length);
   const noun = (n: number) => (tab === "new" ? (n === 1 ? "matched role" : "matched roles") : tab === "saved" ? (n === 1 ? "saved role" : "saved roles") : (n === 1 ? "passed role" : "passed roles"));
@@ -156,7 +169,7 @@ export function CompanyCards({ rows, sort, rolesHref, tab }: {
             <div className="company-card-roles">
               <span className="muted small">Hiring for</span>
               <ul className="plain">
-                {c.rows.slice(0, 3).map((r) => <li key={r.id}><a href={`/jobs/${r.public_ref}`}>{r.title}</a> <span className="muted small">{r.score}</span></li>)}
+                {c.rows.slice(0, 3).map((r) => <li key={r.id}><a href={`/jobs/${r.public_ref}`}>{r.title}</a> <span className="muted small" title="G-score · C-score">G {r.g_score ?? "–"} · C {r.c_score ?? "–"}</span></li>)}
               </ul>
               {c.rows.length > 3 ? <span className="muted small">and {c.rows.length - 3} more</span> : null}
             </div>

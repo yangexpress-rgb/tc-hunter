@@ -1,5 +1,6 @@
 import { canonicalSkill, findSkills } from "../jobs/skills";
 import { containsPhrase } from "../jobs/text";
+import { countryFit } from "../jobs/country";
 import { functionWords, goalLevelIndex, goalLevelLabel, goalLevelOf, LEVEL_LABEL, levelIndex, levelOf, normalizeTitle, type GoalLevel, type Level } from "../jobs/normalize";
 import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
 
@@ -8,7 +9,7 @@ import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
  * number explained. AI never sets a score. Changing any rule here means a new
  * RULES_VERSION, so stored scores stay reproducible.
  */
-export const RULES_VERSION = "match-3";  // match-2: goals (companies, kind of work, occupation); match-3: the goal's levels
+export const RULES_VERSION = "match-4";  // match-2: goals (companies, kind of work, occupation); match-3: the goal's levels; match-4: the goal's countries
 export const WEIGHTS = { skills: 35, experience: 25, preferences: 20, keywords: 10, recency: 10 } as const;
 
 /** Early-career experience counts toward years at a recorded, visible discount (P2). */
@@ -47,6 +48,8 @@ export interface MatchPrefs {
   /** From a goal (match-3): specialties and languages; a job that mentions them scores higher. */
   specialties?: string[];
   languages?: string[];
+  /** From a goal (match-4): countries the job must be in, as ISO codes. Empty or missing means any. */
+  countries?: string[];
   /** The goal's short name, for the reasons, and its id, so a match can say which goal it fits best. */
   goalName?: string;
   goalId?: string;
@@ -109,7 +112,7 @@ export function applicantLevel(exp: ProfileExperience[]): Level {
   return exp.length ? "entry" : "intern";
 }
 
-function seniorityFit(lp: Level | null, la: Level): { raw: number; line: string } {
+export function seniorityFit(lp: Level | null, la: Level): { raw: number; line: string } {
   if (!lp) return { raw: 0.8, line: "The posting doesn't say its level." };
   const d = levelIndex(lp) - levelIndex(la);
   if (levelIndex(lp) <= 1 && levelIndex(la) <= 1) return { raw: 1, line: `${LEVEL_LABEL[lp]} posting, and you're early in your career.` };
@@ -118,7 +121,7 @@ function seniorityFit(lp: Level | null, la: Level): { raw: number; line: string 
   return { raw, line };
 }
 
-function titleRelevance(postingTitle: string, candidates: string[]): { raw: number; best: string | null } {
+export function titleRelevance(postingTitle: string, candidates: string[]): { raw: number; best: string | null } {
   const pw = functionWords(postingTitle);
   if (!pw.length) return { raw: 0, best: null };
   let best = 0, bestT: string | null = null;
@@ -201,6 +204,10 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
     else if (placeHit && !typeOk) { placeRaw = 0.5; prefLines.push(`In a place you chose, but ${posting.workplaceType}.`); }
     else { placeRaw = 0; filterReasons.push(`Not in a place you chose (${posting.locationRaw ?? posting.workplaceType}).`); }
   } else prefLines.push("You haven't set places, so any location fits.");
+  // match-4: a job clearly outside the goal's countries is ruled out for it (Yong, 2026-11-18).
+  const cf = countryFit(posting, prefs.countries ?? []);
+  if (cf.verdict === "out") { placeRaw = 0; filterReasons.push(cf.line); }
+  else if (cf.verdict !== "any") prefLines.push(cf.line);
 
   let payRaw = 1;
   const sal = posting.salary;
@@ -358,7 +365,7 @@ export function languageMentioned(text: string, language: string): boolean {
 }
 
 const employerKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(inc|llc|ltd|corp|corporation|co|plc|gmbh|the)\b/g, " ").replace(/\s+/g, " ").trim();
-function sameEmployer(employer: string, named: string): boolean {
+export function sameEmployer(employer: string, named: string): boolean {
   const a = employerKey(employer), b = employerKey(named);
   return !!a && !!b && (a === b || ` ${a} `.includes(` ${b} `));
 }

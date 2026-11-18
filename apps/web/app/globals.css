@@ -542,3 +542,15 @@ button.pass:hover { color: var(--error); border-color: var(--error); }
 button.link-button { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
 #add-job { margin-top: 18px; }
 @media (max-width: 640px) { .seg-end { margin-left: 0; } .pill-pop { position: fixed; left: 16px; right: 16px; top: auto; min-width: 0; } }
+
+/* G-score and C-score side by side (Yong, 2026-11-18). */
+.fit-pair { display: inline-flex; gap: 6px; flex: none; align-items: center; }
+.fit-pair.compact { margin-left: auto; }
+.fit-pair .score { min-width: 44px; flex-direction: column; line-height: 1; font-size: 16px; }
+.fit-pair .score-key { font-size: 10px; font-weight: 600; letter-spacing: 0.04em; opacity: 0.8; }
+.fit-pair .fit .score-key { margin-right: 4px; }
+.fit-pair .fit { margin-left: 0; }
+.fit-lines { font-size: 14px; margin-top: 4px; display: grid; gap: 2px; }
+.fit-lines strong { display: inline-block; min-width: 1.2em; color: var(--muted); }
+.fit-legend { margin: 4px 0 0; }
+.fit-lines.big { font-size: 16px; margin: 8px 0; }

@@ -12,9 +12,29 @@ const LEGAL = /\b(inc|incorporated|llc|l\.l\.c|ltd|limited|corp|corporation|co|c
  */
 const COMPANY_CODE = /^\s*\d{3,5}\s*[-–:]?\s+(?=[A-Za-z])/;
 
+const LEGAL_WORD = /^(inc|incorporated|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|gmbh|plc|ag|sa|bv|pty|lp|llp)\.?,?$/i;
+const isSubsequence = (short: string, long: string) => { let i = 0; for (const ch of long) if (ch === short[i]) i++; return i === short.length; };
+
+/**
+ * Workday sites also use letter codes for the legal entity: "SVCS Huron Consulting Services LLC"
+ * (Yong, 2026-11-18). A leading all-capitals word is a code only when the rest of the name spells it
+ * out: its initials ("HCG Huron Consulting Group") or a later word it shortens ("SVCS" = Services).
+ * "BNSF Railway", "KPMG Advisory", "SAP America" stay as they are.
+ */
+function stripLetterCode(name: string): string {
+  const m = /^([A-Z]{2,6})\s+(.+)$/.exec(name);
+  if (!m) return name;
+  const code = m[1]!.toLowerCase(), rest = m[2]!;
+  const words = rest.split(/\s+/).map((w) => w.replace(/[^A-Za-z]/g, "")).filter((w) => w && !LEGAL_WORD.test(w));
+  if (words.length < 2 || !/^[A-Z]/.test(rest)) return name;
+  const initials = words.map((w) => w[0]!.toLowerCase()).join("");
+  const shortens = words.some((w) => w.length > code.length && w[0]!.toLowerCase() === code[0] && isSubsequence(code, w.toLowerCase()));
+  return initials.startsWith(code) || shortens ? rest : name;
+}
+
 /** The employer's name without a leading company code. */
 export function cleanEmployerName(name: string): string {
-  return name.replace(COMPANY_CODE, "").replace(/\s+/g, " ").trim();
+  return stripLetterCode(name.replace(COMPANY_CODE, "").replace(/\s+/g, " ").trim());
 }
 
 /**

@@ -90,18 +90,103 @@ export function checkContext(profile: TailorProfile, posting: TailorPosting): Ch
   return { facts: factIndex(profile, posting), profile, gapTerms: gapTermsFor(posting.gapSkills), allowNames: [posting.employer, posting.title] };
 }
 
-/** Fills `{metric}` with the cited bullet's own number (the writer never types numbers). */
+/** A number as written in a text, with its sign and unit: "$50M", "30%", "4.5x", "1,200+". */
+const NUM_TOKEN = /(?<![A-Za-z0-9.])\$?\d[\d,]*(?:\.\d+)?(?:\s?(?:%|percent\b|mm\b|million\b|billion\b|[KkMmBb]\b|x\b)|\+)?/g;
+const MULT: Record<string, number> = { k: 1e3, m: 1e6, mm: 1e6, million: 1e6, b: 1e9, billion: 1e9 };
+const tokenValue = (t: string): number => {
+  const m = /^\$?(\d[\d,]*(?:\.\d+)?)\s?([A-Za-z]+)?/.exec(t.trim());
+  if (!m) return NaN;
+  return Number(m[1]!.replace(/,/g, "")) * (MULT[(m[2] ?? "").toLowerCase()] ?? 1);
+};
+const numberTokens = (s: string) => [...s.matchAll(NUM_TOKEN)].map((m) => m[0].replace(/,$/, "").trim());
+
+/**
+ * The bullet's saved number as the bullet itself writes it ("$50M", not "$50,000,000"), or null when the
+ * text doesn't show it. The writer sees this token as {metric}, and {metric} is filled with it again.
+ */
+export function metricToken(b: { text: string; metricValue: number | null }): string | null {
+  if (b.metricValue === null || b.metricValue === undefined) return null;
+  const v = Number(b.metricValue);
+  return numberTokens(b.text).find((t) => Math.abs(tokenValue(t) - v) <= Math.abs(v) * 1e-9) ?? null;
+}
+
+/** The bullet as Claude sees it: its own number replaced by {metric}, when the text shows that number. */
+export function maskMetric(b: { text: string; metricValue: number | null }): string {
+  const t = metricToken(b);
+  return t ? b.text.replace(t, "{metric}") : b.text;
+}
+
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** The text of each cited fact that can hold a number written in a phrase (About, bullets, answers, stories). */
+function citedTexts(factIds: string[], profile: TailorProfile): string[] {
+  const out: string[] = [];
+  for (const id of factIds) {
+    if (profile.about?.id === id) out.push(profile.about.text);
+    for (const e of profile.experience) for (const b of e.bullets) if (b.id === id) out.push(b.text);
+    for (const a of profile.answers) if (a.id === id) out.push(a.text);
+    for (const s of profile.stories) if (s.id === id) out.push(s.text);
+  }
+  return out;
+}
+
+/**
+ * A {metric} sitting in a phrase a cited fact writes with its own number ("Fortune {metric}" where the
+ * About says "Fortune 500") is that number, not the bullet's. Without this, "Fortune 500" came out as
+ * "Fortune $50,000,000" (Yong, 2026-11-18): the writer put {metric} on the About's number, and it was
+ * filled with a cited bullet's dollar amount.
+ */
+function numberFromPhrase(before: string, after: string, texts: string[]): string | null {
+  const prev = /([A-Za-z][A-Za-z&-]*)\s+$/.exec(before)?.[1];
+  const next = /^\s+([A-Za-z][A-Za-z-]*)/.exec(after)?.[1];
+  const usable = (w?: string) => !!w && w.length >= 3 && !STOPWORDS.has(w.toLowerCase());
+  const NUM = "\\$?\\d[\\d,]*(?:\\.\\d+)?(?:\\s?(?:%|[KkMmBb]\\b|x\\b)|\\+)?";
+  for (const t of texts) {
+    if (usable(prev)) { const m = new RegExp(`(?<![A-Za-z])${escRe(prev!)}\\s+(${NUM})`, "i").exec(t); if (m) return m[1]!.replace(/,$/, ""); }
+    if (usable(next)) { const m = new RegExp(`(?<![A-Za-z0-9.$])(${NUM})\\s+${escRe(next!)}\\b`, "i").exec(t); if (m) return m[1]!.replace(/,$/, ""); }
+  }
+  return null;
+}
+
+/** Fills `{metric}` with the cited bullet's own number, as the bullet writes it (the writer never types numbers). */
 export function fillMetric(text: string, factIds: string[], profile: TailorProfile): string {
   if (!text.includes("{metric}")) return text;
   const bullets = profile.experience.flatMap((e) => e.bullets);
   const b = bullets.find((x) => factIds.includes(x.id) && x.metricValue !== null);
-  if (b) return text.replace(/\{metric\}/g, formatMetric(b.metricValue, b.metricUnit));
-  // A bullet with no saved metric: use its one number as written ("30%", "$4.5M"), taken from the first
-  // cited bullet that has a number, and only when that bullet has exactly one. Otherwise {metric} stays and is blocked.
-  const cited = factIds.map((id) => bullets.find((x) => x.id === id)).filter((x): x is NonNullable<typeof x> => !!x);
-  const first = cited.find((x) => numbersIn(x.text).length > 0);
-  const tokens = first ? [...first.text.matchAll(/(?<![A-Za-z0-9.])\$?\d[\d,]*(?:\.\d+)?(?:%|\+|[KMB]\b|x\b)?/g)].map((m) => m[0]) : [];
-  return tokens.length === 1 ? text.replace(/\{metric\}/g, tokens[0]!) : text;
+  let fill: string | null = null;
+  if (b) fill = metricToken(b) ?? formatMetric(b.metricValue, b.metricUnit);
+  else {
+    // A bullet with no saved metric: use its one number as written ("30%", "$4.5M"), taken from the first
+    // cited bullet that has a number, and only when that bullet has exactly one. Otherwise {metric} stays and is blocked.
+    const cited = factIds.map((id) => bullets.find((x) => x.id === id)).filter((x): x is NonNullable<typeof x> => !!x);
+    const first = cited.find((x) => numbersIn(x.text).length > 0);
+    const tokens = first ? numberTokens(first.text) : [];
+    if (tokens.length === 1) fill = tokens[0]!;
+  }
+  // The bullet whose number this is comes first, so its own phrase wins.
+  const texts = [...(b ? [b.text] : []), ...citedTexts(factIds, profile).filter((t) => t !== b?.text)];
+  return text.replace(/\{metric\}/g, (whole, at: number, all: string) =>
+    numberFromPhrase(all.slice(0, at), all.slice(at + whole.length), texts) ?? fill ?? whole);
+}
+
+/**
+ * Text that reads wrong whatever the facts say (Yong, 2026-11-18: "Fortune $50,000,000 companies"):
+ * a placeholder left in, a number with a unit that can't be right for what it counts, a doubled
+ * unit or word, stray markup. Each is a short label of what is wrong.
+ */
+const COUNTED = "companies|employees|people|staff|engineers|developers|countries|states|sites|locations|offices|stores|hospitals|clinics|schools|students|users|members|reports|direct reports|years|months|weeks|days|hours";
+const GARBLE: Array<[RegExp, string]> = [
+  [/\{[^{}]*\}|\{\{|\}\}/, "a placeholder was left in"],
+  [/\[(?:company|employer|role|title|job title|name|metric|number|x|insert[^\]]*)\]/i, "a placeholder was left in"],
+  [/\bundefined\b|\bNaN\b|\[object Object\]/, "a program value was left in"],
+  [/\bFortune\s+(?:\$|\d[\d,]{4,}|\d+(?:\.\d+)?\s?%)/i, "\"Fortune\" is followed by an amount, not a list size like 500"],
+  [new RegExp(`\\$\\s?\\d[\\d,]*(?:\\.\\d+)?\\s?(?:[KkMmBb]|mm|million|billion)?\\+?\\s+(?:${COUNTED})\\b`, "i"), "a dollar amount counts people, places or time"],
+  [/\$\s?\d[\d,]*(?:\.\d+)?\s?%|%\s*%|\$\s*\$|\d\s?%\s+percent\b/i, "a number has two units"],
+  [/\b(?!(?:had|that|is|do|very|bye)\b)([A-Za-z]{2,})\s+\1\b/i, "a word is doubled"],
+  [/\*\*|__|#{2,}|<\/?[a-z][a-z0-9]*>/i, "markup was left in"],
+];
+export function garbleIssues(text: string): string[] {
+  return [...new Set(GARBLE.filter(([re]) => re.test(text)).map(([, label]) => label))];
 }
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim().replace(/[.;]$/, "").toLowerCase();
@@ -111,6 +196,8 @@ export function checkLine(rawText: string, factIds: string[], ctx: CheckContext)
   const no = (reason: BlockReason, terms: string[] = []): CheckResult => ({ ok: false, reason, terms, text });
   if (!text) return no("no_source_fact");
   if (/[{}]/.test(text)) return no("number_mismatch", ["{metric}"]);
+  const garbled = garbleIssues(text);
+  if (garbled.length) return no("garbled", garbled);
   const cited = factIds.map((id) => ctx.facts.get(id));
   if (cited.length === 0 || cited.some((f) => !f)) return no("no_source_fact");
   const facts = cited as Fact[];

@@ -5,7 +5,7 @@
  */
 import { aiUsageSink, createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
 import {
-  ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeCareersLookup, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
+  ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeCareersLookup, ClaudeLetterProposer, ClaudeProofreader, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
   HeldSessions, handoverHours, ClaudeRequirementsBatcher, setUsageSink, promptCacheOn,
 } from "@tc-hunter/domain";
@@ -28,6 +28,8 @@ const claudeWrites = resumeReaderName() === "claude" && process.env.TC_TAILOR_WR
 const tailor = {
   resume: claudeWrites ? new ClaudeResumeProposer() : new RulesResumeProposer(),
   letter: claudeWrites ? new ClaudeLetterProposer() : new RulesLetterProposer(),
+  // The final review pass over each draft (Yong, 2026-11-18). TC_PROOFREAD=off skips it; the checker still blocks garbled text.
+  proofread: claudeWrites && process.env.TC_PROOFREAD !== "off" ? new ClaudeProofreader() : undefined,
   cfg,
 };
 // Connected Gmail (decision 13.3): each applicant connects with an app password (Yong, 2026-11-15)
