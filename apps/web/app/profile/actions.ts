@@ -345,7 +345,6 @@ export async function saveSearchSettingsAction(form: FormData) {
     employers_exclude: list(form.get("employers_exclude")),
     must_have_keywords: list(form.get("must_have_keywords")),
     deal_breakers: list(form.get("deal_breakers")),
-    scan_schedule: String(form.get("scan_schedule") ?? "daily"),
     notify_pref: String(form.get("notify_pref") ?? "in_app"),
     tailor_target_pages: num(form.get("tailor_target_pages")) ?? 2,
     weekly_application_budget: num(form.get("weekly_application_budget")),

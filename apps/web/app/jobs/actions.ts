@@ -1,8 +1,9 @@
 "use server";
 import { redirect } from "next/navigation";
-import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
+import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
 import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
+import { TIMES, ZONES } from "@/lib/schedule";
 
 /** Only ever send people back to a Jobs page. */
 function backTo(form: FormData, fallback = "/jobs"): string {
@@ -80,4 +81,17 @@ export async function adjustmentAction(form: FormData) {
 export async function alertSeenAction(form: FormData) {
   const s = await requireSession();
   await act(form, () => markAlertSeen(app().pool, s, String(form.get("id"))), "/jobs");
+}
+
+/** The schedule for searching every source by itself (Yong, 2026-11-17). */
+export async function saveScheduleAction(form: FormData) {
+  const s = await requireSession();
+  const pick = <T extends string>(v: unknown, ok: readonly T[], d: T): T => (ok as readonly string[]).includes(String(v)) ? (String(v) as T) : d;
+  const day = Number(form.get("scan_day"));
+  await act(form, () => savePreferences(app().pool, s, {
+    scan_schedule: pick(form.get("scan_schedule"), ["daily", "weekly", "manual"], "daily"),
+    scan_day: Number.isInteger(day) && day >= 0 && day <= 6 ? day : 1,
+    scan_time: pick(form.get("scan_time"), TIMES, "18:00"),
+    scan_tz: pick(form.get("scan_tz"), ZONES.map(([z]) => z), "America/New_York"),
+  }), "/jobs/sources");
 }

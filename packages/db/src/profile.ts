@@ -427,7 +427,7 @@ export async function deleteStory(pool: pg.Pool, session: Session, id: string): 
 
 export const PREFERENCE_FIELDS = [
   "target_titles", "seniority", "locations", "workplace_types", "salary_floor_amount", "salary_floor_currency", "salary_floor_period",
-  "industries_include", "industries_exclude", "employers_exclude", "must_have_keywords", "deal_breakers", "scan_schedule", "notify_pref",
+  "industries_include", "industries_exclude", "employers_exclude", "must_have_keywords", "deal_breakers", "scan_schedule", "scan_day", "scan_time", "scan_tz", "notify_pref",
   "tailor_target_pages", "long_term_target_role", "target_function", "weekly_application_budget", "min_score_to_tailor", "weekly_review_enabled",
 ] as const;
 export type Preferences = Partial<Record<(typeof PREFERENCE_FIELDS)[number], unknown>>;

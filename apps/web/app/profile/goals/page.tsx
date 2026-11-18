@@ -1,3 +1,4 @@
+import { describeSchedule } from "@/lib/schedule";
 import { emailStatus, getPreferences, listGoals } from "@tc-hunter/db";
 import { GOAL_LEVELS, GOAL_TYPES, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
@@ -162,8 +163,6 @@ export default async function GoalsPage(props: PageProps) {
               <label>Deal-breakers<input name="deal_breakers" defaultValue={joined(v.deal_breakers)} placeholder="e.g. night shifts, commission only" /></label>
               <label>Words a job must mention<input name="must_have_keywords" defaultValue={joined(v.must_have_keywords)} /></label>
               <div className="fields">
-                <label>Look for new jobs<select name="scan_schedule" defaultValue={v.scan_schedule ?? "daily"}>
-                  <option value="daily">Every day</option><option value="weekly">Every week</option><option value="manual">Only when I ask</option></select></label>
                 <label>Tell me about new jobs<select name="notify_pref" defaultValue={v.notify_pref ?? "in_app"}>
                   <option value="in_app">Here in the app</option><option value="daily_digest">In a daily email</option><option value="weekly_digest">In a weekly email</option></select></label>
               </div>
@@ -182,7 +181,7 @@ export default async function GoalsPage(props: PageProps) {
           </EditDialog>
         </header>
         <p className="muted small">These apply to every goal.</p>
-        <p className="item-sub">{({ daily: "Looks for new jobs every day", weekly: "Looks for new jobs every week", manual: "Looks for jobs only when you ask" } as Record<string, string>)[v.scan_schedule ?? "daily"]}</p>
+        <p className="item-sub">Looks for new jobs: {describeSchedule({ schedule: v.scan_schedule ?? "daily", scanDay: v.scan_day ?? 1, scanTime: v.scan_time ?? "18:00", scanTz: v.scan_tz ?? "America/New_York" })}. <a href="/jobs/sources#schedule">Change</a></p>
         {joined(v.employers_exclude) ? <p className="muted">Skipping: {joined(v.employers_exclude)}</p> : null}
         {joined(v.industries_exclude) ? <p className="muted">Industries skipped: {joined(v.industries_exclude)}</p> : null}
         {joined(v.deal_breakers) ? <p className="muted">Deal-breakers: {joined(v.deal_breakers)}</p> : null}

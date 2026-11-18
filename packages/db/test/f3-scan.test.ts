@@ -239,12 +239,33 @@ describe("pasted links and the queue", () => {
     await drain();
   });
 
-  it("the schedule queues a scan only for applicants who follow sources and haven't scanned recently", async () => {
+  it("the schedule queues a scan only for applicants who follow sources and haven't scanned since the scheduled time", async () => {
     await ownerQuery("UPDATE scan_run SET started_at = started_at - interval '2 days'");
-    const n = (await pool.query("SELECT enqueue_due_scans() AS n")).rows[0].n;
+    // An hour after the latest 6 PM Eastern (the default time), nobody has searched since it.
+    const at = "scan_slot('daily', 1, '18:00', 'America/New_York', now()) + interval '1 hour'";
+    const n = (await pool.query(`SELECT enqueue_due_scans(${at}) AS n`)).rows[0].n;
     expect(n).toBe(3);  // Yong, Leo, and the posting-watch test's applicant (seeded to follow a board, never scanned)
     await drain();
-    expect((await pool.query("SELECT enqueue_due_scans() AS n")).rows[0].n).toBe(0);
+    expect((await pool.query(`SELECT enqueue_due_scans(${at}) AS n`)).rows[0].n).toBe(0);
+  });
+
+  it("runs at the chosen time: weekly on the chosen day, not before it, and a time missed by hours waits for the next", async () => {
+    await ownerQuery("UPDATE scan_run SET started_at = started_at - interval '30 days'");
+    await ownerQuery("UPDATE hunt_preference SET scan_schedule = 'weekly', scan_day = 3, scan_time = '09:30', scan_tz = 'America/Chicago' WHERE applicant_id = $1", [leo.applicantId]);
+    const slot = (await pool.query("SELECT scan_slot('weekly', 3, '09:30', 'America/Chicago', now()) AS s")).rows[0].s as Date;
+    const local = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", weekday: "long", hour: "numeric", minute: "2-digit" }).format(slot);
+    expect(local).toBe("Wednesday 9:30 AM");
+    const leoQueued = async (at: string) => {
+      await pool.query(`SELECT enqueue_due_scans(${at})`);
+      const r = await ownerQuery("SELECT count(*)::int AS n FROM work_item WHERE applicant_id = $1 AND kind = 'scan' AND status = 'queued'", [leo.applicantId]);
+      return r.rows[0].n as number;
+    };
+    const slotSql = "scan_slot('weekly', 3, '09:30', 'America/Chicago', now())";
+    expect(await leoQueued(`${slotSql} - interval '1 minute'`)).toBe(0);   // before Wednesday 9:30 (this is the week before's window, long past)
+    expect(await leoQueued(`${slotSql} + interval '7 hours'`)).toBe(0);    // missed by more than 6 hours
+    expect(await leoQueued(`${slotSql} + interval '10 minutes'`)).toBe(1);
+    await drain();
+    await ownerQuery("UPDATE hunt_preference SET scan_schedule = 'daily', scan_day = 1, scan_time = '18:00', scan_tz = 'America/New_York' WHERE applicant_id = $1", [leo.applicantId]);
   });
 });
 

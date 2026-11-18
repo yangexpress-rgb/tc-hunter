@@ -703,6 +703,10 @@ export interface ScanStatus {
   failed: string | null;
   /** How often it runs by itself, and when the next one is due (null when only on request). */
   schedule: "daily" | "weekly" | "manual";
+  /** Weekday (0 Sunday … 6 Saturday, weekly only), time ("18:00") and time zone it runs at. */
+  scanDay: number;
+  scanTime: string;
+  scanTz: string;
   nextRunAt: string | null;
 }
 
@@ -711,13 +715,20 @@ export async function scanStatus(pool: pg.Pool, session: Session): Promise<ScanS
   return withApplicant(pool, asApplicant(session), async (c) => {
     const w = (await c.query("SELECT status, last_error, created_at, finished_at FROM work_item WHERE kind = 'scan' ORDER BY created_at DESC LIMIT 1")).rows[0];
     const r = (await c.query("SELECT * FROM scan_run ORDER BY started_at DESC LIMIT 1")).rows[0];
-    // The schedule (enqueue_due_scans): 20 hours after the last search for daily, 7 days for weekly; checked every 15 minutes.
-    const schedule = ((await c.query("SELECT scan_schedule FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.scan_schedule ?? "daily") as ScanStatus["schedule"];
-    const lastStart = (await c.query("SELECT max(started_at) AS t FROM scan_run")).rows[0]?.t as Date | null;
-    const gap = schedule === "weekly" ? 7 * 86_400_000 : 20 * 3_600_000;
-    const nextRunAt = schedule === "manual" ? null
-      : new Date(Math.max(Date.now() + 15 * 60_000, (lastStart ? new Date(lastStart).getTime() + gap : 0) + 15 * 60_000)).toISOString();
-    const base: ScanStatus = { state: "none", step: null, done: null, total: null, startedAt: null, finishedAt: null, places: 0, jobsRead: 0, newJobs: 0, closed: 0, problems: [], failed: null, schedule, nextRunAt };
+    // The schedule (enqueue_due_scans, Yong 2026-11-17): every day or week at a chosen time; checked every 15 minutes.
+    const pref = (await c.query("SELECT scan_schedule, scan_day, scan_time, scan_tz FROM hunt_preference WHERE active LIMIT 1")).rows[0];
+    const schedule = (pref?.scan_schedule ?? "daily") as ScanStatus["schedule"];
+    const scanDay = Number(pref?.scan_day ?? 1), scanTime = String(pref?.scan_time ?? "18:00"), scanTz = String(pref?.scan_tz ?? "America/New_York");
+    let nextRunAt: string | null = null;
+    if (schedule !== "manual") {
+      const period = schedule === "weekly" ? "7 days" : "1 day";
+      const t = (await c.query(`SELECT scan_slot($1, $2, $3, $4, now()) AS slot, scan_slot($1, $2, $3, $4, now() + $5::interval) AS next,
+          now() < scan_slot($1, $2, $3, $4, now()) + interval '6 hours'
+            AND NOT EXISTS (SELECT 1 FROM scan_run WHERE started_at >= scan_slot($1, $2, $3, $4, now())) AS due`,
+        [schedule, scanDay, scanTime, scanTz, period])).rows[0];
+      nextRunAt = new Date(t.due ? Date.now() : t.next).toISOString();
+    }
+    const base: ScanStatus = { state: "none", step: null, done: null, total: null, startedAt: null, finishedAt: null, places: 0, jobsRead: 0, newJobs: 0, closed: 0, problems: [], failed: null, schedule, scanDay, scanTime, scanTz, nextRunAt };
     if (w?.status === "queued") return { ...base, state: "waiting", startedAt: w.created_at };
     if (w?.status === "running" && r && !r.finished_at) {
       const p = r.progress ?? {};
