@@ -54,3 +54,26 @@ export async function runRequirementsEval(log: { info: (e: string, d: Record<str
       years: `${r.years ?? "none"} (${s.yearsRight ? "right" : "wrong"})`, education: s.educationRight, authorisation: s.authorisationRight });
   }
 }
+
+/**
+ * Golden-set material (Yong, 2026-11-18: "replace the rewritten postings with verbatim postings the
+ * app has already scanned"). When TC_EVAL_DUMP_POSTINGS=1, logs up to 12 scanned job ads word for
+ * word, one per employer, in parts. Job ads are the shared catalogue: no applicant data is read.
+ */
+export async function dumpPostings(pool: { query: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }> }, log: { info: (e: string, d: Record<string, unknown>) => void }) {
+  const { rows } = await pool.query(`
+    SELECT DISTINCT ON (employer_canonical) public_ref, employer_canonical, title, apply_url, description_text, requirements
+    FROM job_posting
+    WHERE status = 'active' AND length(description_text) BETWEEN 1500 AND 9000
+      AND title ~* '(director|vice president|\\mvp\\M|head of|senior manager|lead|principal)'
+    ORDER BY employer_canonical, length(description_text) DESC
+    LIMIT 12`);
+  log.info("eval.posting_dump_started", { postings: rows.length });
+  const PART = 1500;
+  for (const r of rows) {
+    const text = String(r.description_text);
+    const parts = Math.ceil(text.length / PART);
+    log.info("eval.posting_head", { ref: r.public_ref, employer: r.employer_canonical, title: r.title, url: r.apply_url, chars: text.length, parts, requirements: JSON.stringify(r.requirements).slice(0, 1500) });
+    for (let i = 0; i < parts; i++) log.info("eval.posting_part", { ref: r.public_ref, part: i + 1, of: parts, text: text.slice(i * PART, (i + 1) * PART) });
+  }
+}

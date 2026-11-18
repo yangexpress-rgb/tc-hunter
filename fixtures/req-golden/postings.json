@@ -1,5 +1,5 @@
 {
- "_about": "Requirements-reader golden set (Yong, 2026-11-17 prompt review). Each posting with the requirements a careful reader takes from it, so the reader's recall is measured before and after any prompt or model change. Postings r1-r4 follow real public postings (source); r5 is a composite for the prompt's edge cases. expect alternatives are split by |; a read entry matches when it contains the expected words. Run live on the server with TC_EVAL_REQ=1 (see apps/worker/src/evalF9.ts), or locally with TC_EVAL_LIVE=1 and ANTHROPIC_API_KEY.",
+ "_about": "Requirements-reader golden set (Yong, 2026-11-17 prompt review). Each posting with the requirements a careful reader takes from it, so the reader's recall is measured before and after any prompt or model change. Postings r1-r4 follow real public postings (source); r5 is a composite for the prompt's edge cases. expect alternatives are split by |; a read entry matches when it contains the expected words. Run live on the server with TC_EVAL_REQ=1 (see apps/worker/src/evalF9.ts), or locally with TC_EVAL_LIVE=1 and ANTHROPIC_API_KEY. A degree the posting only prefers is a nice-to-have, not an education requirement (Yong, 2026-11-18): education stays null.",
  "postings": [
   {
    "key": "r1-people-systems",
@@ -49,7 +49,7 @@
      "MBA"
     ],
     "years": 5,
-    "education": "MBA",
+    "education": null,
     "authorisation": null
    }
   },
@@ -76,10 +76,11 @@
      "decision-making|decision making",
      "problem-solving|problem solving",
      "data analysis",
-     "business management software"
+     "business management software",
+     "Bachelor's degree|bachelor"
     ],
     "years": 8,
-    "education": "Bachelor",
+    "education": null,
     "authorisation": null
    }
   },
