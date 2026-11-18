@@ -31,8 +31,9 @@ const RANK: Record<Proficiency, number> = { working: 1, strong: 2, expert: 3 };
 const MONTHS = /\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|jun(e)?|jul(y)?|aug(ust)?|sep(t(ember)?)?|oct(ober)?|nov(ember)?|dec(ember)?)\b/gi;
 
 const numStr = (n: number | string) => String(n).replace(/,/g, "").replace(/\.0+$/, "");
+/** Numbers in a text, including ones with a unit letter after them ("$40M", "4.5x", "2nd"); not ones inside a name ("Q4", "S4HANA"). */
 export const numbersIn = (s: string): string[] =>
-  [...s.matchAll(/(?<![A-Za-z0-9])\d[\d,]*(?:\.\d+)?(?![A-Za-z0-9])/g)].map((m) => numStr(m[0].replace(/,$/, "")));
+  [...s.matchAll(/(?<![A-Za-z0-9.])\d[\d,]*(?:\.\d+)?(?![\d.]*\d)/g)].map((m) => numStr(m[0].replace(/,$/, "")));
 
 export function formatMetric(value: number | null, unit: string | null): string {
   if (value === null || value === undefined) return "";
@@ -92,8 +93,15 @@ export function checkContext(profile: TailorProfile, posting: TailorPosting): Ch
 /** Fills `{metric}` with the cited bullet's own number (the writer never types numbers). */
 export function fillMetric(text: string, factIds: string[], profile: TailorProfile): string {
   if (!text.includes("{metric}")) return text;
-  const b = profile.experience.flatMap((e) => e.bullets).find((x) => factIds.includes(x.id) && x.metricValue !== null);
-  return text.replace(/\{metric\}/g, b ? formatMetric(b.metricValue, b.metricUnit) : "{metric}");
+  const bullets = profile.experience.flatMap((e) => e.bullets);
+  const b = bullets.find((x) => factIds.includes(x.id) && x.metricValue !== null);
+  if (b) return text.replace(/\{metric\}/g, formatMetric(b.metricValue, b.metricUnit));
+  // A bullet with no saved metric: use its one number as written ("30%", "$4.5M"), taken from the first
+  // cited bullet that has a number, and only when that bullet has exactly one. Otherwise {metric} stays and is blocked.
+  const cited = factIds.map((id) => bullets.find((x) => x.id === id)).filter((x): x is NonNullable<typeof x> => !!x);
+  const first = cited.find((x) => numbersIn(x.text).length > 0);
+  const tokens = first ? [...first.text.matchAll(/(?<![A-Za-z0-9.])\$?\d[\d,]*(?:\.\d+)?(?:%|\+|[KMB]\b|x\b)?/g)].map((m) => m[0]) : [];
+  return tokens.length === 1 ? text.replace(/\{metric\}/g, tokens[0]!) : text;
 }
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim().replace(/[.;]$/, "").toLowerCase();

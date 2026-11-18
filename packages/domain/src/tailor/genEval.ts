@@ -2,7 +2,7 @@ import type { Requirements } from "../jobs/types";
 import { checkEssay, TIME_QUESTION } from "../packet/essay";
 import { BANNED_PHRASES } from "../promptShared";
 import { buildLetter, buildSummary } from "./build";
-import { checkContext } from "./checker";
+import { checkContext, checkLine } from "./checker";
 import type { Blocked, LetterProposal, ProposedLine, ResumeProposal, TailorPosting, TailorProfile } from "./types";
 
 /**
@@ -41,7 +41,11 @@ export function genPosting(c: GenCase, profile: TailorProfile): TailorPosting {
   };
 }
 
-const gapNamed = (text: string, posting: TailorPosting) => posting.gapSkills.filter((g) => g.length > 2 && new RegExp(`\\b${g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text));
+/** Gap skills named in the text, leaving out the job's own title and employer (which the letter may always name). */
+const gapNamed = (raw: string, posting: TailorPosting) => {
+  const text = [posting.title, posting.employer].filter(Boolean).reduce((t, n) => t.split(n).join(" "), raw);
+  return posting.gapSkills.filter((g) => g.length > 2 && new RegExp(`\\b${g.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text));
+};
 
 /** Letters argue fit using only profile facts. */
 export function letterRubric(key: string, profile: TailorProfile, posting: TailorPosting, proposal: LetterProposal): RubricResult {
@@ -94,7 +98,7 @@ export function essayRubric(key: string, profile: TailorProfile, posting: Tailor
   }
   const checks: RubricCheck[] = [
     { check: "drafted (not left empty)", pass: paragraphs.length > 0 },
-    { check: "only profile facts (checker blocked nothing)", pass: !!all && all.blocked === 0, detail: all ? `${all.blocked} blocked` : "nothing survived" },
+    { check: "only profile facts (checker blocked nothing)", pass: !!all && all.blocked === 0, detail: [all ? `${all.blocked} blocked` : "nothing survived", ...paragraphs.map((p) => checkLine(p.text, p.fact_ids, ctx)).flatMap((r) => (r.ok ? [] : [`${r.reason} (${r.terms.join(", ")})`]))].join("; ") },
     { check: "voice: no banned phrase", pass: !banned(raw).length, detail: banned(raw).join(", ") },
   ];
   if (q.maxChars) checks.push({ check: `within ${q.maxChars} characters as written`, pass: raw.length <= q.maxChars, detail: `${raw.length} characters${shown && shown.text.length < raw.length ? `; shown cut to ${shown.text.length}` : ""}` });
