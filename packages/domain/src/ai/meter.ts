@@ -33,12 +33,12 @@ export const JUDGMENT_MODEL = "claude-opus-5-5";
 export type AiPurpose =
   | "requirements" | "companies" | "careers"           // job searching
   | "answers" | "answer_check" | "essays"              // answers
-  | "resume_tailor" | "cover_letter" | "resume_read" | "about_find"; // documents
+  | "resume_tailor" | "cover_letter" | "resume_read" | "about_find" | "proofread"; // documents
 export type AiGroup = "searching" | "answers" | "documents" | "tests";
 export const AI_GROUP: Record<AiPurpose, Exclude<AiGroup, "tests">> = {
   requirements: "searching", companies: "searching", careers: "searching",
   answers: "answers", answer_check: "answers", essays: "answers",
-  resume_tailor: "documents", cover_letter: "documents", resume_read: "documents", about_find: "documents",
+  resume_tailor: "documents", cover_letter: "documents", resume_read: "documents", about_find: "documents", proofread: "documents",
 };
 export const AI_GROUP_LABEL: Record<AiGroup, string> = {
   searching: "Job searching", answers: "Application answers", documents: "Resumes, letters and reading your resume", tests: "Quality tests",

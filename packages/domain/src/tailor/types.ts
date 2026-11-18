@@ -86,7 +86,7 @@ export interface LetterProposer {
   propose(profile: TailorProfile, posting: TailorPosting, opts?: ProposeOptions): Promise<{ proposal: LetterProposal; meta: GenerationMeta }>;
 }
 
-export type BlockReason = "no_source_fact" | "gap_skill" | "number_mismatch" | "date_mismatch" | "new_name" | "proficiency_raise" | "unverified_fact" | "unconfirmed_alias";
+export type BlockReason = "no_source_fact" | "gap_skill" | "number_mismatch" | "date_mismatch" | "new_name" | "proficiency_raise" | "unverified_fact" | "unconfirmed_alias" | "garbled";
 export type Transform = "verbatim" | "reordered" | "rephrased" | "selected";
 
 /** The editable content of a tailored resume (document.source_json). Names, titles and dates are copied from rows, never written. */

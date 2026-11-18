@@ -23,6 +23,7 @@ const BLOCK_REASON: Record<string, string> = {
   proficiency_raise: "Makes your level sound higher than you said",
   unverified_fact: "Rests on a row you haven't checked yet",
   unconfirmed_alias: "A new name for one of your skills",
+  garbled: "Reads wrong (a number, unit or word out of place)",
 };
 const KIND_LABEL = { resume: "Resume", letter: "Cover letter" } as const;
 const STATUS_LABEL = { draft: "Draft", approved: "Approved", superseded: "Replaced by a newer version" } as const;
