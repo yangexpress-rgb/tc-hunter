@@ -123,13 +123,13 @@ export function JobCards({ rows, back }: { rows: Row[]; back: string }) {
 // ---------------------------------------------------------------------------
 
 export type CompanySort = "score" | "g" | "c" | "roles" | "name";
-export const COMPANY_SORTS: Array<[CompanySort, string]> = [["score", "Best match"], ["g", "G-score"], ["c", "C-score"], ["roles", "Most roles"], ["name", "Name"]];
+export const COMPANY_SORTS: Array<[CompanySort, string]> = [["g", "G-score"], ["c", "C-score"], ["score", "Best match"], ["roles", "Most roles"], ["name", "Name"]];
 
 const WORKPLACE: Record<string, string> = { remote: "Remote", hybrid: "Hybrid", onsite: "In the office" };
 
 export function companiesOf(rows: Row[]) {
   return groupByCompany(rows).map(({ name, rows: list }) => {
-    const sorted = [...list].sort((a, b) => b.score - a.score);
+    const sorted = [...list].sort((a, b) => (b.g_score ?? -1) - (a.g_score ?? -1) || b.score - a.score);
     const count = (vals: string[]) => [...vals.reduce((m, v) => m.set(v, (m.get(v) ?? 0) + 1), new Map<string, number>()).entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v);
     const levels = count(list.map((r) => jobLevelKey(r.title ?? "")).filter((k) => k !== "none")).map((k) => jobLevelLabel(k));
     const work = count(list.map((r) => (r.workplace_type ? WORKPLACE[r.workplace_type as string] : /remote/i.test(r.location_raw ?? "") ? "Remote" : null)).filter(Boolean) as string[]);

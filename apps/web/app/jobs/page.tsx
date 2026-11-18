@@ -15,7 +15,7 @@ import { adjustmentAction, alertSeenAction, jobsViewAction, pasteLinkAction } fr
 export const dynamic = "force-dynamic";
 
 const TABS = [["new", "New"], ["saved", "Saved"], ["passed", "Passed"]] as const;
-const SORTS = [["score", "Best match"], ["g", "G-score"], ["c", "C-score"], ["date", "Newest"], ["salary", "Highest pay"], ["company", "Company"]] as const;
+const SORTS = [["g", "G-score"], ["c", "C-score"], ["score", "Best match"], ["date", "Newest"], ["salary", "Highest pay"], ["company", "Company"]] as const;
 type Sort = (typeof SORTS)[number][0];
 const SORT_KEY: Record<Sort, [GoalSort, "asc" | "desc"]> = { score: ["score", "desc"], g: ["g", "desc"], c: ["c", "desc"], date: ["posted", "desc"], salary: ["pay", "desc"], company: ["company", "asc"] };
 const LADDER = [["", "Any"], ["step_toward", "Steps toward your goal"], ["same_level", "Same level"], ["side_step", "Side steps"]] as const;
@@ -29,7 +29,7 @@ export default async function JobsPage(props: PageProps) {
   const sp = await props.searchParams;
   const many = (k: string) => { const v = sp[k]; return (Array.isArray(v) ? v : v ? v.split(",") : []).filter(Boolean); };
   const status = (["new", "saved", "passed"].includes(params.tab ?? "") ? params.tab : "new") as "new" | "saved" | "passed";
-  const sort: Sort = SORTS.some(([k]) => k === params.sort) ? params.sort as Sort : "score";
+  const sort: Sort = SORTS.some(([k]) => k === params.sort) ? params.sort as Sort : "g";  // G-score first by default (Yong, 2026-11-18)
   const ladder = LADDER.some(([k]) => k && k === params.ladder) ? params.ladder : undefined;
   const showFiltered = params.filtered === "1";
   const [sources, scan, work, alerts, adjustments, summary, goals, prefs] = await Promise.all([
@@ -39,7 +39,7 @@ export default async function JobsPage(props: PageProps) {
   // The layout: the applicant's own default unless they switched for this visit.
   const defaultView = asJobsView(prefs?.jobs_view) ?? "list";
   const view = asJobsView(params.view) ?? defaultView;
-  const csort: CompanySort = COMPANY_SORTS.some(([k]) => k === params.csort) ? params.csort as CompanySort : "score";
+  const csort: CompanySort = COMPANY_SORTS.some(([k]) => k === params.csort) ? params.csort as CompanySort : "g";
   const company = params.company?.trim() || undefined;
   const search = (params.q ?? "").trim().slice(0, 100);
   const goal = goals.some((g) => g.id === params.goal) ? params.goal : undefined;
@@ -63,9 +63,9 @@ export default async function JobsPage(props: PageProps) {
   const narrowed = rows.length !== matched.rows.length;
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
-    const all = { tab: status, view, sort, csort: csort === "score" ? undefined : csort, q: search || undefined, goal, ladder, source,
+    const all = { tab: status, view, sort, csort: csort === "g" ? undefined : csort, q: search || undefined, goal, ladder, source,
       filtered: showFiltered ? "1" : undefined, company, level: levels.length ? levels.join(",") : undefined, work: works.length ? works.join(",") : undefined, ...over };
-    for (const [k, v] of Object.entries(all)) if (v && !(k === "tab" && v === "new") && !(k === "sort" && v === "score") && !(k === "view" && v === defaultView)) p.set(k, v);
+    for (const [k, v] of Object.entries(all)) if (v && !(k === "tab" && v === "new") && !(k === "sort" && v === "g") && !(k === "view" && v === defaultView)) p.set(k, v);
     const s = p.toString();
     return s ? `/jobs?${s}` : "/jobs";
   };
@@ -97,7 +97,7 @@ export default async function JobsPage(props: PageProps) {
 
       {/* Searching and Refresh live on Where we look (Yong, 2026-11-18); Matches is only the jobs. */}
       <FilterBar
-        hidden={{ tab: status === "new" ? undefined : status, view: view === defaultView ? undefined : view, sort: sort === "score" ? undefined : sort, csort: csort === "score" ? undefined : csort, company }}
+        hidden={{ tab: status === "new" ? undefined : status, view: view === defaultView ? undefined : view, sort: sort === "g" ? undefined : sort, csort: csort === "g" ? undefined : csort, company }}
         search={search} goals={goals.map((g) => [g.id, goalName(g)] as const)} goal={goal ?? ""}
         levels={levels} levelOpts={JOB_LEVEL_FILTERS} work={works} workOpts={WORK}
         ladder={ladder ?? ""} ladderOpts={LADDER} sources={sources.map((s) => [s.id, s.name] as const)} source={source ?? ""}
@@ -112,7 +112,7 @@ export default async function JobsPage(props: PageProps) {
         </nav>
         <nav className="seg seg-end" aria-label="Sort">
           {view === "companies"
-            ? COMPANY_SORTS.map(([k, l]) => <a key={k} href={q({ csort: k === "score" ? undefined : k })} aria-current={csort === k ? "page" : undefined}>{l}</a>)
+            ? COMPANY_SORTS.map(([k, l]) => <a key={k} href={q({ csort: k === "g" ? undefined : k })} aria-current={csort === k ? "page" : undefined}>{l}</a>)
             : SORTS.map(([k, l]) => <a key={k} href={q({ sort: k })} aria-current={sort === k ? "page" : undefined}>{l}</a>)}
         </nav>
       </div>
