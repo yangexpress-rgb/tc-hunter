@@ -134,7 +134,13 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
         // Many careers pages (Salesforce's, for one) send people on to a Workday site for the jobs themselves.
         const wdLink = /https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[A-Za-z0-9_\/-]+/.exec(page.text)?.[0];
         const wdSite = wdLink ? parseWorkday(wdLink) : null;
-        if (wdSite && await workdayHasJobs(wdSite, f)) return detectSource(`https://${wdSite.host}/${wdSite.site}`, idea.name);
+        if (wdSite && !skip.has(`workday:${wdSite.host}/${wdSite.tenant}/${wdSite.site}`) && await workdayHasJobs(wdSite, f)) return detectSource(`https://${wdSite.host}/${wdSite.site}`, idea.name);
+        // Or to a public job board (Greenhouse, Lever, Ashby, SmartRecruiters) named in the page.
+        for (const m of page.text.matchAll(/https:\/\/(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io\/(?:embed\/job_board\?for=)?[a-z0-9_-]+|https:\/\/jobs\.(?:eu\.)?lever\.co\/[a-z0-9_.-]+|https:\/\/jobs\.ashbyhq\.com\/[a-z0-9_.%-]+|https:\/\/(?:jobs|careers)\.smartrecruiters\.com\/[a-z0-9_-]+/gi)) {
+          const b = detectSource(m[0], idea.name);
+          if (!b || b.kind === "careers_page" || b.kind === "workday" || skip.has(`${b.kind}:${b.key}`)) continue;
+          if (boardAnswer(b.kind as AtsKind, (await f.get(PROBE_URL[b.kind as AtsKind](encodeURIComponent(b.key)))).text)) return { ...b, name: idea.name };
+        }
         if (jobPostingsFromHtml(page.text, page.url).length || jobLinksFromHtml(page.text, page.url).length) return spec;
       }
     } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
@@ -145,7 +151,8 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
 /** Looks up where an employer lists its jobs when the usual board names don't answer (Claude, when set up). */
 export interface CareersLookup {
   readonly version: string;
-  find(employer: string): Promise<Pick<CompanyIdea, "boards" | "careersUrl"> | null>;
+  /** `notHere`: addresses already tried that show no jobs, so they aren't offered again. */
+  find(employer: string, notHere?: string[]): Promise<Pick<CompanyIdea, "boards" | "careersUrl"> | null>;
 }
 
 /**
@@ -155,7 +162,7 @@ export interface CareersLookup {
 export async function findBoardOrAsk(idea: Pick<CompanyIdea, "name" | "boards" | "careersUrl">, f: Fetcher, lookup?: CareersLookup, skip: Set<string> = new Set()): Promise<{ spec: SourceSpec | null; careersUrl: string | null }> {
   const spec = await findBoard(idea, f, skip);
   if (spec || !lookup) return { spec, careersUrl: idea.careersUrl ?? null };
-  const more = await lookup.find(idea.name).catch(() => null);
+  const more = await lookup.find(idea.name, idea.careersUrl ? [idea.careersUrl] : []).catch(() => null);
   if (!more || (!more.boards?.length && !more.careersUrl)) return { spec: null, careersUrl: idea.careersUrl ?? null };
   // Only what the lookup adds is tried: the name guesses already failed.
   const tried = new Set([...skip, ...tokenGuesses(idea.name).flatMap((t) => KINDS.map((k) => `${k}:${t}`))]);

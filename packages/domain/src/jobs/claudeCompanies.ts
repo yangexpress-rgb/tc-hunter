@@ -80,7 +80,7 @@ export class ClaudeCareersLookup {
   readonly version = `careers-claude-1:${MODEL}`;
   constructor(private client: Anthropic = new Anthropic()) {}
 
-  async find(employer: string): Promise<{ boards: Array<{ kind: "greenhouse" | "lever" | "ashby" | "smartrecruiters"; token: string }>; careersUrl: string | null } | null> {
+  async find(employer: string, notHere: string[] = []): Promise<{ boards: Array<{ kind: "greenhouse" | "lever" | "ashby" | "smartrecruiters"; token: string }>; careersUrl: string | null } | null> {
     try {
       const r = await this.client.beta.messages.parse({
         model: MODEL,
@@ -88,8 +88,10 @@ export class ClaudeCareersLookup {
         betas: ["server-side-fallback-2026-07-01"],
         fallbacks: "default",
         output_config: { effort: "low", format: zodOutputFormat(Where) },
-        system: "You know where employers publish their job openings. Given an employer's name, say which public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and the address of its own careers listings if you know it. Never give LinkedIn, Indeed or other job aggregators. Say null or empty when unsure; never guess an address.",
-        messages: [{ role: "user", content: `<employer>${employer.slice(0, 200)}</employer>` }],
+        system: "You know where employers publish their job openings. Given an employer's name, say which public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and the address of its own careers listings if you know it. "
+          + "Prefer the hiring system's own job list over the employer's marketing careers page: for an employer on Workday, give its myworkdayjobs.com site (for example https://salesforce.wd12.myworkdayjobs.com/External_Career_Site), since marketing pages draw their jobs with scripts and can't be read. "
+          + "Never give an address listed as not_here: it was tried and shows no jobs. Never give LinkedIn, Indeed or other job aggregators. Say null or empty when unsure; never guess an address.",
+        messages: [{ role: "user", content: `<employer>${employer.slice(0, 200)}</employer>${notHere.slice(0, 5).map((u) => `<not_here>${u.slice(0, 300)}</not_here>`).join("")}` }],
       });
       if (r.stop_reason === "refusal" || !r.parsed_output) return null;
       const url = r.parsed_output.careers_url;
