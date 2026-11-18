@@ -36,6 +36,7 @@ describe("Workday sites read in the applicant's own browser (Yong, 2026-11-18)",
     const todo = await relayTodo(pool, owner);
     expect(todo.sources).toEqual([expect.objectContaining({ id, name: "Acme", page: "https://acme.wd5.myworkdayjobs.com/External", api: "/wday/cxs/acme/External" })]);
     expect(todo.terms).toContain("Operations Analyst");
+    expect(todo).toHaveProperty("nextSearchAt");  // TC Hunter for Mac reads ahead of the weekly search
 
     const plan = await relayPlan(pool, owner, id, [
       { title: "Senior Operations Analyst", path: "/job/Remote/Senior-Operations-Analyst_R1" },
@@ -68,5 +69,26 @@ describe("Workday sites read in the applicant's own browser (Yong, 2026-11-18)",
     await relayResult(pool, owner, { sourceId: id, listed: 0, checked: 0, details: [], error: "The site answered 500." });
     const row = (await ownerQuery("SELECT error FROM relayed_read WHERE job_source_id = $1", [id])).rows[0];
     expect(row.error).toBe("The site answered 500.");
+  });
+
+  it("TC Hunter for Mac shown a security check: the source says so, and the server is still not asked", async () => {
+    const id = (await listSources(pool, yong)).find((s) => s.name === "Acme")!.id;
+    await relayResult(pool, owner, { sourceId: id, listed: 0, checked: 0, details: [], error: "Blocked by a security check" });
+    const src = (await listSources(pool, yong)).find((s) => s.id === id)!;
+    expect(src.relayed_error).toBe("Blocked by a security check");
+    expect(src.relayed_at).toBeNull();
+    expect(src.relayed_tried_at).toBeTruthy();
+  });
+
+  it("a fresh read from the Mac is used even when the server itself is turned away (blocked)", async () => {
+    const id = (await listSources(pool, yong)).find((s) => s.name === "Acme")!.id;
+    await ownerQuery("UPDATE job_source SET health = 'blocked', health_reason = 'refused: answered 403', last_checked_at = now() WHERE id = $1", [id]);
+    await relayResult(pool, owner, { sourceId: id, listed: 1040, checked: 1, details: [
+      { path: "/job/Remote/Operations-Analyst_R3", data: { jobPostingInfo: { title: "Operations Analyst", jobDescription: "<p>Operations analysis with SQL.</p>", location: "Remote", jobReqId: "R3" }, hiringOrganization: { name: "Acme" } } },
+    ] });
+    asked.length = 0;
+    await drain();
+    expect(asked.filter((u) => u.includes("myworkdayjobs"))).toEqual([]);
+    expect((await listSources(pool, yong)).find((s) => s.id === id)).toMatchObject({ last_listed: 1040 });
   });
 });

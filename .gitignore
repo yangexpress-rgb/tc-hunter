@@ -9,3 +9,4 @@ coverage/
 next-env.d.ts
 deploy/.env
 deploy/rclone.conf
+desktop/dist/

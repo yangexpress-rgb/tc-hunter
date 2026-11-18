@@ -1,7 +1,7 @@
 import "server-only";
-import { deviceOwner, type DeviceOwner } from "@tc-hunter/db";
+import { deviceOwner, getSession, mustSetUpMfa, type DeviceOwner } from "@tc-hunter/db";
 import { errorCode, plainError } from "@tc-hunter/domain";
-import { app, log } from "@/lib/server";
+import { app, log, sessionToken } from "@/lib/server";
 
 /**
  * The browser extension's calls (design 5.5, Phase 4b). Each call carries the key
@@ -11,9 +11,24 @@ import { app, log } from "@/lib/server";
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 
-export async function extCall(req: Request, fn: (owner: DeviceOwner) => Promise<unknown>): Promise<Response> {
+/**
+ * TC Hunter desktop app (Yong, 2026-11-18): its Workday reader calls from the app's own signed-in window,
+ * so it uses that window's sign-in instead of a paired key. The X-TC-Desktop header can't be sent
+ * by another site's page without the browser asking first (which this app never allows), so a
+ * signed-in cookie alone, sent from elsewhere, isn't enough.
+ */
+async function desktopOwner(req: Request): Promise<DeviceOwner | null> {
+  if (req.headers.get("x-tc-desktop") !== "1") return null;
+  const { pool, cfg } = app();
+  const session = await getSession(pool, cfg, await sessionToken());
+  if (!session || mustSetUpMfa(session, cfg)) return null;
+  return { deviceId: "desktop-app", session };
+}
+
+export async function extCall(req: Request, fn: (owner: DeviceOwner) => Promise<unknown>, opts: { desktop?: boolean } = {}): Promise<Response> {
   const token = /^Bearer (\S+)$/.exec(req.headers.get("authorization") ?? "")?.[1];
-  const owner = await deviceOwner(app().pool, token);
+  const owner = token ? await deviceOwner(app().pool, token) : opts.desktop ? await desktopOwner(req) : null;
+  if (!owner && opts.desktop && !token) return json({ error: "TC_SIGNED_OUT", message: "Sign in to TC Hunter in this app." }, 401);
   if (!owner) return json({ error: "TC_EXT_NOT_PAIRED", message: "This browser isn't paired. In TC Hunter, go to Settings, then Your browser, and pair it again." }, 401);
   try {
     return json(await fn(owner));

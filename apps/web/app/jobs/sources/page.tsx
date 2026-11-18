@@ -10,6 +10,7 @@ import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { followSourceAction, refreshAction, saveScheduleAction, searchSourceAction, unfollowSourceAction } from "../actions";
 import { ScheduleForm } from "@/components/jobs/ScheduleForm";
+import { DesktopReader } from "@/components/jobs/DesktopReader";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ const whyText = (reason: string | null, kind?: string, failures = 0) => {
   const code = String(reason ?? "").split(":")[0]!.trim();
   // Workday's security check (2026-11-18): a JavaScript-and-cookies check in front of every Workday
   // site, shown to our server's address. Waiting doesn't clear it; a person's browser passes it.
-  if (/security check|enable javascript/i.test(String(reason ?? ""))) return "Workday shows our server a security check (\"Enable JavaScript and cookies to continue\") that only a person's browser can pass, so its jobs can't be read from here for now. We try again later, at a gentle pace. LinkedIn's alert emails, Adzuna, or pasting a job's link in Add a job still bring its jobs in. To read it from your own computer, use Read Workday sites now in the TC Hunter browser extension.";
+  if (/security check|enable javascript/i.test(String(reason ?? ""))) return "Workday shows our server a security check (\"Enable JavaScript and cookies to continue\") that only a person's browser can pass, so its jobs can't be read from here for now. We try again later, at a gentle pace. LinkedIn's alert emails, Adzuna, or pasting a job's link in Add a job still bring its jobs in. The TC Hunter desktop app reads it from your own computer instead: with the app open, its jobs come in.";
   // Turned away search after search, even after waiting (Yong, 2026-11-17: Salesforce's Workday) — not a passing slow-down.
   if (code === "rate_limited" && failures >= 2) return `The site has turned our reader away ${failures} searches in a row, even after waiting, though its jobs open fine in a browser. It seems to refuse automated readers like ours, so we can't read its jobs for now. LinkedIn's alert emails for this company, or pasting a job's link in Add a job, still bring its jobs in.`;
   // Only a job search site has a key to refuse; a company's site that says no blocks automated readers.
@@ -116,21 +117,28 @@ export default async function SourcesPage(props: PageProps) {
       const unproven = (failed && code === "not_found" && !s.last_success_at) || (empty && s.open_jobs === 0);
       // Asked to slow down: left alone until the time it gave, not a failure (Yong, 2026-11-17).
       const waitUntil = failed && code === "rate_limited" && s.retry_after_at && new Date(s.retry_after_at).getTime() > Date.now() ? new Date(s.retry_after_at) : null;
-      const status = unreadable ? "Can't be read directly" : never ? "Not searched yet" : suspect ? "Check the address"
+      // TC Hunter desktop app's own read (Yong, 2026-11-18): when it was, and whether Workday showed it a check too.
+      const appWhen = (d: Date | string) => new Date(d).toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit" });
+      const appBlocked = s.kind === "workday" && !!s.relayed_error && /security check/i.test(String(s.relayed_error));
+      const appNote = s.kind !== "workday" ? ""
+        : appBlocked ? ` The TC Hunter desktop app was shown a security check too (${appWhen(s.relayed_tried_at)}), so it stopped: it never tries to get past one.`
+        : s.relayed_error && s.relayed_tried_at ? ` The desktop app couldn't read it (${appWhen(s.relayed_tried_at)}): ${s.relayed_error}`
+        : s.relayed_at ? ` Read from this app · ${appWhen(s.relayed_at)}.` : "";
+      const status = unreadable ? "Can't be read directly" : appBlocked ? "Blocked by a security check" : never ? "Not searched yet" : suspect ? "Check the address"
         : (failed || empty) && unproven && s.kind !== "job_search" && s.kind !== "pasted_link" ? "Needs a correct address"
         : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? "Blocked by a security check"
         : waitUntil ? "Waiting to try again" : failed && code === "too_big" ? "Too large to read"
         : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded";
       return { key: s.id, name: s.name, detail, kind, listed: s.last_listed,
         status, last: s.last_checked_at, jobs: s.open_jobs,
-        reason: unreadable ? String(s.health_reason ?? "Its hiring system has no public feed we can read.")
+        reason: (unreadable ? String(s.health_reason ?? "Its hiring system has no public feed we can read.")
           : suspect ? `SmartRecruiters answers "0 jobs" for company names it doesn't know, so "${shortUrl(s.url)}" may not be ${s.name}'s exact name there. If you know its SmartRecruiters address, add it below.`
           : never ? "Waiting for the next search."
           : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? `${whyText(s.health_reason, s.kind)} Next try: ${waitUntil.toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}.`
           : waitUntil ? `The site asked us to slow down, so we leave it alone until ${waitUntil.toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" })} and try again then.${why(s.health_reason, s.kind, 0).replace(/^[^(]*/, " ")}`
           : failed ? why(s.health_reason, s.kind, Number(s.failures ?? 0)) : advice ? advice.reason
-          : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.${s.relayed_at ? ` Read in your browser ${ago(s.relayed_at)}.` : ""}`
-          : s.relayed_at ? `Read in your browser ${ago(s.relayed_at)}.` : "",
+          : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.`
+          : "").concat(appNote).trim(),
         link: advice?.link ?? (failed && s.kind !== "job_search" && /^(refused|robots)/.test(String(s.health_reason ?? "")) ? { href: "#add", label: "Add its jobs page" } : undefined),
         // LinkedIn's alerts come in with the email check, not a search.
         again: s.url === "https://www.linkedin.com/jobs/" || unreadable ? undefined : s.id,
@@ -142,6 +150,8 @@ export default async function SourcesPage(props: PageProps) {
     ...(!searchRows.has("https://www.linkedin.com/jobs/") ? [{ key: "linkedin", name: "LinkedIn job alerts", kind: "LinkedIn alert emails", status: "Not set up", last: null, jobs: 0,
       reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
   ];
+  const workday = sources.filter((s) => s.kind === "workday");
+  const lastAppRead = workday.map((s) => s.relayed_at).filter(Boolean).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
   const KINDS = [...new Set(table.map((r) => r.kind))].sort();
   const STATUSES = ["Succeeded", "None fit yet", "No jobs found", "Check the address", "Needs a correct address", "Too large to read", "Failed", "Blocked by a security check", "Waiting to try again", "Can't read", "Can't be read directly", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
   const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
@@ -183,6 +193,8 @@ export default async function SourcesPage(props: PageProps) {
         <ScanStatusBox initial={scan} />
         {/* The schedule sits in front of Look again now (Yong, 2026-11-17). */}
         <ScheduleForm action={saveScheduleAction} schedule={scan.schedule} day={scan.scanDay} time={scan.scanTime} tz={scan.scanTz} back="/jobs/sources#schedule" />
+        {workday.length ? <DesktopReader count={workday.length} downloadUrl={process.env.TC_DESKTOP_DOWNLOAD_URL || "https://github.com/yangexpress-rgb/tc-hunter/releases/latest"}
+          lastRead={lastAppRead ? new Date(lastAppRead).toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit" }) : null} /> : null}
         <form action={refreshAction}><input type="hidden" name="back" value="/jobs/sources" />
           <LookAgainButton title="Start a new search now with your latest goals: find employers, read every place again, and score every job again" /></form>
       </section>
