@@ -4,7 +4,7 @@ import {
   companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
-  type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
+  type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { runTailor, type TailorDeps } from "./documents";
@@ -161,6 +161,12 @@ async function profileFor(c: pg.PoolClient): Promise<MatchProfile> {
 }
 
 /** The search's settings plus each goal in use, one set of preferences per goal (match-2). */
+/** The applicant's goals as matching reads them (also for the browser's Workday reads, relay.ts). */
+export const prefsForRelay = (c: pg.PoolClient) => prefsFor(c);
+
+/** A browser's read of a source stands in for the server's for this long (relay.ts). */
+const RELAY_FRESH_MS = 24 * 3_600_000;
+
 async function prefsFor(c: pg.PoolClient): Promise<MatchPrefs[]> {
   const p = (await c.query("SELECT * FROM hunt_preference WHERE active")).rows[0] ?? {};
   const settings = {
@@ -447,14 +453,21 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
       return;
     }
+    // Read in the applicant's own browser (Yong, 2026-11-18: Workday shows our server a security check):
+    // a read from the last day stands in for fetching it from here.
+    const relayed = s.kind === "workday" ? await withApplicant(pool, ctx, async (c) => (await c.query(
+      "SELECT read_at, listed, checked, postings FROM relayed_read WHERE job_source_id = $1 AND error IS NULL AND read_at > now() - make_interval(secs => $2)",
+      [s.id, RELAY_FRESH_MS / 1000])).rows[0]) : null;
     // A site that asked us to slow down is left alone, quietly, until the time it gave (Yong, 2026-11-17),
     // unless its own "Search again" was pressed.
-    if (s.retry_after_at && new Date(s.retry_after_at).getTime() > wall && !readAgain.has(s.id)) return;
+    if (!relayed && s.retry_after_at && new Date(s.retry_after_at).getTime() > wall && !readAgain.has(s.id)) return;
     // A board another scan read in the last half hour is not fetched again.
-    if (s.last_success_at && wall - new Date(s.last_success_at).getTime() < freshFor(s.id)) return;
+    if (!relayed && s.last_success_at && wall - new Date(s.last_success_at).getTime() < freshFor(s.id)) return;
     const spec: SourceSpec = { type: s.type, kind: s.kind, key: s.source_key, name: s.name, url: s.url };
     try {
-      const got = await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets), 25, targets);
+      const got: SourceFetchResult = relayed
+        ? { postings: relayed.postings, complete: false, checked: Number(relayed.checked), listed: Number(relayed.listed), notes: [] }
+        : await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets), 25, targets);
       checked += got.checked;
       // Catalogue writes are shared rows; they run in the applicant's transaction scope but touch no personal data.
       // Only jobs whose titles relate to the goals are taken in (Databricks lists 901, each new one read
@@ -713,6 +726,7 @@ export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: 
 export async function listSources(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
     `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.failures, s.retry_after_at, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
+       (SELECT r.read_at FROM relayed_read r WHERE r.job_source_id = s.id AND r.error IS NULL) AS relayed_at,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }

@@ -32,7 +32,7 @@ const whyText = (reason: string | null, kind?: string, failures = 0) => {
   const code = String(reason ?? "").split(":")[0]!.trim();
   // Workday's security check (2026-11-18): a JavaScript-and-cookies check in front of every Workday
   // site, shown to our server's address. Waiting doesn't clear it; a person's browser passes it.
-  if (/security check|enable javascript/i.test(String(reason ?? ""))) return "Workday shows our server a security check (\"Enable JavaScript and cookies to continue\") that only a person's browser can pass, so its jobs can't be read from here for now. We try again later, at a gentle pace. LinkedIn's alert emails, Adzuna, or pasting a job's link in Add a job still bring its jobs in.";
+  if (/security check|enable javascript/i.test(String(reason ?? ""))) return "Workday shows our server a security check (\"Enable JavaScript and cookies to continue\") that only a person's browser can pass, so its jobs can't be read from here for now. We try again later, at a gentle pace. LinkedIn's alert emails, Adzuna, or pasting a job's link in Add a job still bring its jobs in. To read it from your own computer, use Read Workday sites now in the TC Hunter browser extension.";
   // Turned away search after search, even after waiting (Yong, 2026-11-17: Salesforce's Workday) — not a passing slow-down.
   if (code === "rate_limited" && failures >= 2) return `The site has turned our reader away ${failures} searches in a row, even after waiting, though its jobs open fine in a browser. It seems to refuse automated readers like ours, so we can't read its jobs for now. LinkedIn's alert emails for this company, or pasting a job's link in Add a job, still bring its jobs in.`;
   // Only a job search site has a key to refuse; a company's site that says no blocks automated readers.
@@ -129,7 +129,8 @@ export default async function SourcesPage(props: PageProps) {
           : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? `${whyText(s.health_reason, s.kind)} Next try: ${waitUntil.toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}.`
           : waitUntil ? `The site asked us to slow down, so we leave it alone until ${waitUntil.toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" })} and try again then.${why(s.health_reason, s.kind, 0).replace(/^[^(]*/, " ")}`
           : failed ? why(s.health_reason, s.kind, Number(s.failures ?? 0)) : advice ? advice.reason
-          : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.` : "",
+          : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.${s.relayed_at ? ` Read in your browser ${ago(s.relayed_at)}.` : ""}`
+          : s.relayed_at ? `Read in your browser ${ago(s.relayed_at)}.` : "",
         link: advice?.link ?? (failed && s.kind !== "job_search" && /^(refused|robots)/.test(String(s.health_reason ?? "")) ? { href: "#add", label: "Add its jobs page" } : undefined),
         // LinkedIn's alerts come in with the email check, not a search.
         again: s.url === "https://www.linkedin.com/jobs/" || unreadable ? undefined : s.id,

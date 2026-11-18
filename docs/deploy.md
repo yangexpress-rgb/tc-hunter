@@ -51,6 +51,7 @@ This is the household setup (design §7.1). It runs the same way on a small VPS.
     3. In TC Hunter: Settings › Your browser › *Pair this browser* (confirm it's you first). Paste the address and key it shows into the extension's settings (right-click the TC Hunter button › Options) and allow access to the TC Hunter address when asked.
     4. Each person pairs their own browser; a key only ever sees that person's applications. Removing it in Settings stops it at once.
     5. **Sending for you (Phase 5).** On Greenhouse, Lever, Ashby and SmartRecruiters forms the extension can press Submit once you approve sending in TC Hunter. The first time you choose *Send it*, the browser asks to let the extension see those four sites' pages, so it can read the employer's thank-you page. After updating the folder, choose *Reload* on `chrome://extensions`.
+    6. **Reading Workday sites (2026-11-18).** Workday shows the Railway server a security check, so the extension reads the Workday sites you follow from your own browser. Click the TC Hunter button › *Read Workday sites now* and allow access to `*.myworkdayjobs.com` when asked. After that it reads them about every 6 hours while Chrome is open: each site opens in a background tab for a minute or two, reads only the job list and the related jobs, and closes. The next search uses what it read (for up to a day).
 
 ## Backups
 
