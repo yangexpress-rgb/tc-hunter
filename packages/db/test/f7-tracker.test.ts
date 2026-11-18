@@ -2,7 +2,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { activityReport, reportCsv, RULES_VERSION, RulesRequirementsReader, SourceRefusedError, WEIGHTS, type Fetcher } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, budgetNow, calibrationState, getApplication, getReport, getWeeklyReview, listApplications, listMatches, requestLink,
+  addEvidence, addFact, budgetNow, calibrationState, getApplication, getReport, getWeeklyReview, journeyFacts, listApplications, listMatches, requestLink,
   requestTailor, resetCalibration, rescoreMatches, runNextWork, savePreferences, setInterview, setNextStep, setNotes, setOutcome, setStage, trackerSummary, trackJob,
   withApplicant, type AppConfig, type Session, type WorkDeps,
 } from "../src";
@@ -191,5 +191,16 @@ describe("interview times", () => {
     await ownerQuery("UPDATE applicant SET timezone = 'Mars/Olympus' WHERE id = $1", [yong.applicantId]);
     expect((await getReport(pool, yong, "activity")).input.timeZone).toBe("UTC");
     await ownerQuery("UPDATE applicant SET timezone = 'UTC' WHERE id = $1", [yong.applicantId]);
+  });
+});
+
+describe("journey facts (Tracker UI redesign: read-only, one applicant's own)", () => {
+  it("gives each application its documents, packet and run, and nothing of anyone else's", async () => {
+    const f = await journeyFacts(pool, yong);
+    expect(Object.keys(f).sort()).toEqual((await listApplications(pool, yong)).map((a) => a.public_ref).sort());
+    expect(f[apps.contoso!]).toMatchObject({ docs: { resume: null, letter: null }, packet: null, run: null });
+    expect(["writing", "draft", "approved"]).toContain(f[apps.fabrikam!]!.docs.resume);
+    expect(await journeyFacts(pool, leo)).toEqual({});
+    expect(Object.keys(await journeyFacts(pool, yong, apps.contoso!))).toEqual([apps.contoso]);
   });
 });

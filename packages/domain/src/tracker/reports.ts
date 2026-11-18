@@ -38,7 +38,7 @@ const OFFER: ApplicationStage[] = ["offer", "closed_won"];
 export const IN_PROGRESS: ApplicationStage[] = ["applied", "screening", "interview", "offer"];
 export const CLOSED: ApplicationStage[] = ["closed_won", "closed_lost", "withdrawn", "no_response"];
 export const STAGE_LABEL: Record<ApplicationStage, string> = {
-  interested: "Interested", tailoring: "Preparing", ready_to_apply: "Ready to apply", applied: "Applied", screening: "Screening",
+  interested: "Interested", tailoring: "Preparing", ready_to_apply: "Documents ready", applied: "Applied", screening: "Screening",
   interview: "Interviewing", offer: "Offer", closed_won: "Accepted", closed_lost: "Not successful", withdrawn: "Withdrew", no_response: "No reply",
 };
 export const OUTCOME_LABEL: Record<string, string> = {

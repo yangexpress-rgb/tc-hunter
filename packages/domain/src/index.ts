@@ -25,3 +25,4 @@ export * from "./apply/employerSite";
 export * from "./apply/securityCode";
 export * from "./apply/handover";
 export * from "./promptShared";
+export * from "./journey";
