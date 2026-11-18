@@ -354,7 +354,15 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
       // Read a page of 100 at a time (Veeva's 865 jobs come to 12 MB in one answer).
       const jobs: Obj[] = [];
       for (let skip = 0; skip < 5000; skip += 100) {
-        const r = JSON_OR((await f.get(`https://api.lever.co/v0/postings/${key}?mode=json&skip=${skip}&limit=100`)).text, "Lever");
+        // One page that doesn't answer in time is asked once more before the read counts as failed
+        // (2026-11-18: Veeva's fifth page timed out from the server, so all 865 jobs were lost).
+        const url = `https://api.lever.co/v0/postings/${key}?mode=json&skip=${skip}&limit=100`;
+        let res;
+        try { res = await f.get(url); } catch (e) {
+          if (!(e instanceof SourceRefusedError) || e.reason !== "unreachable") throw e;
+          res = await f.get(url);
+        }
+        const r = JSON_OR(res.text, "Lever");
         const page = (Array.isArray(r) ? r : []) as Obj[];
         jobs.push(...page);
         if (page.length < 100) break;
