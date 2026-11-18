@@ -11,3 +11,4 @@ export * from "./discover";
 export * from "./search";
 export * from "./country";
 export * from "./corrections";
+export * from "./portals";

@@ -1,6 +1,6 @@
 import { latestDiscovery, listAppSettings, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
 import { LookAgainButton, ScanStatusBox, SearchAgainButton } from "@/components/jobs/ScanStatus";
-import { companyKey, goalName, noBoardSentence, searchSites, t } from "@tc-hunter/domain";
+import { companyKey, goalName, noBoardSentence, portalFor, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -98,6 +98,10 @@ export default async function SourcesPage(props: PageProps) {
       const never = !s.last_checked_at;
       // A hiring system with no public feed we read (Yong's audit, 2026-11-17): a status, not a failure.
       const unreadable = s.health === "unreadable";
+      // ...unless the desktop app reads it from the applicant's computer (Yong, 2026-11-18).
+      const portal = unreadable ? portalFor(s.name) : null;
+      const fromApp = s.kind === "workday" || !!portal;
+      const readHere = unreadable && !(portal && (s.relayed_at || s.relayed_tried_at));
       const failed = !never && !unreadable && s.health !== "ok";
       const kind = kindOf(s);
       const where = s.kind !== "job_search" && s.kind !== "pasted_link" ? [KIND[s.kind] && kind !== KIND[s.kind] ? KIND[s.kind] : null, shortUrl(s.url)].filter(Boolean).join(" · ") : "";
@@ -119,19 +123,24 @@ export default async function SourcesPage(props: PageProps) {
       const waitUntil = failed && code === "rate_limited" && s.retry_after_at && new Date(s.retry_after_at).getTime() > Date.now() ? new Date(s.retry_after_at) : null;
       // TC Hunter desktop app's own read (Yong, 2026-11-18): when it was, and whether Workday showed it a check too.
       const appWhen = (d: Date | string) => new Date(d).toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit" });
-      const appBlocked = s.kind === "workday" && !!s.relayed_error && /security check/i.test(String(s.relayed_error));
-      const appNote = s.kind !== "workday" ? ""
+      const appBlocked = fromApp && !!s.relayed_error && /security check/i.test(String(s.relayed_error));
+      const labelNote = portal?.label ? ` (${portal.label} jobs)` : "";
+      // A careers portal read short of its own count says so (Yong, 2026-11-18: no partial read under a full-read label).
+      const partNote = portal && Number(s.relayed_listed) > 0 && Number(s.relayed_checked) < Number(s.relayed_listed) * 0.98
+        ? ` It read ${s.relayed_checked} of the ${s.relayed_listed} jobs the site lists, so some may be missing.` : "";
+      const appNote = !fromApp ? ""
+        : portal && readHere ? " The TC Hunter desktop app reads it from your own computer; it hasn't read it yet."
         : appBlocked ? ` The TC Hunter desktop app was shown a security check too (${appWhen(s.relayed_tried_at)}), so it stopped: it never tries to get past one.`
         : s.relayed_error && s.relayed_tried_at ? ` The desktop app couldn't read it (${appWhen(s.relayed_tried_at)}): ${s.relayed_error}`
-        : s.relayed_at ? ` Read from this app · ${appWhen(s.relayed_at)}.` : "";
-      const status = unreadable ? "Can't be read directly" : appBlocked ? "Blocked by a security check" : never ? "Not searched yet" : suspect ? "Check the address"
+        : s.relayed_at ? ` Read from this app · ${appWhen(s.relayed_at)}${labelNote}.${partNote}` : "";
+      const status = portal && readHere ? "Not searched yet" : readHere ? "Can't be read directly" : appBlocked ? "Blocked by a security check" : never ? "Not searched yet" : suspect ? "Check the address"
         : (failed || empty) && unproven && s.kind !== "job_search" && s.kind !== "pasted_link" ? "Needs a correct address"
         : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? "Blocked by a security check"
         : waitUntil ? "Waiting to try again" : failed && code === "too_big" ? "Too large to read"
         : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded";
       return { key: s.id, name: s.name, detail, kind, listed: s.last_listed,
         status, last: s.last_checked_at, jobs: s.open_jobs,
-        reason: (unreadable ? String(s.health_reason ?? "Its hiring system has no public feed we can read.")
+        reason: (portal ? "" : readHere ? String(s.health_reason ?? "Its hiring system has no public feed we can read.")
           : suspect ? `SmartRecruiters answers "0 jobs" for company names it doesn't know, so "${shortUrl(s.url)}" may not be ${s.name}'s exact name there. If you know its SmartRecruiters address, add it below.`
           : never ? "Waiting for the next search."
           : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? `${whyText(s.health_reason, s.kind)} Next try: ${waitUntil.toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}.`
@@ -150,7 +159,7 @@ export default async function SourcesPage(props: PageProps) {
     ...(!searchRows.has("https://www.linkedin.com/jobs/") ? [{ key: "linkedin", name: "LinkedIn job alerts", kind: "LinkedIn alert emails", status: "Not set up", last: null, jobs: 0,
       reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
   ];
-  const workday = sources.filter((s) => s.kind === "workday");
+  const workday = sources.filter((s) => s.kind === "workday" || (s.health === "unreadable" && portalFor(s.name)));
   const lastAppRead = workday.map((s) => s.relayed_at).filter(Boolean).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] ?? null;
   const KINDS = [...new Set(table.map((r) => r.kind))].sort();
   const STATUSES = ["Succeeded", "None fit yet", "No jobs found", "Check the address", "Needs a correct address", "Too large to read", "Failed", "Blocked by a security check", "Waiting to try again", "Can't read", "Can't be read directly", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));

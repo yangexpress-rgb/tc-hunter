@@ -13,7 +13,7 @@ type ReaderState = { state: string; running?: boolean; now?: string; done?: numb
 const desktop = (): Desktop | null => (typeof window !== "undefined" ? ((window as unknown as { tcDesktop?: Desktop }).tcDesktop ?? null) : null);
 
 /**
- * Workday sites are read by TC Hunter desktop app, from the applicant's own computer (Yong, 2026-11-18).
+ * Workday sites and some careers portals are read by the TC Hunter desktop app, from the applicant's own computer (Yong, 2026-11-18).
  * One line of status and one "Read now"; in a plain browser, where to get the app.
  */
 export function DesktopReader({ lastRead, count, downloadUrl }: { lastRead: string | null; count: number; downloadUrl: string }) {
@@ -37,19 +37,19 @@ export function DesktopReader({ lastRead, count, downloadUrl }: { lastRead: stri
     return () => clearInterval(t);
   }, [app, st?.running, router]);
 
-  const sites = `${count} Workday ${count === 1 ? "site" : "sites"}`;
+  const sites = `${count} ${count === 1 ? "site" : "sites"}`;
   if (app === undefined) return null;
   if (!app) {
     return <p className="muted small" id="desktop-app">
-      Workday shows our server a security check, so your {sites} are read by the TC Hunter desktop app, from your own computer.
+      Workday sites, and some company careers sites with no feed we can read, are read by the TC Hunter desktop app from your own computer ({sites} for you).
       {lastRead ? ` Last read from the app: ${lastRead}.` : " Not read from the app yet."} <a href={downloadUrl} target="_blank" rel="noreferrer">Get the desktop app</a>
     </p>;
   }
   const running = !!st?.running;
-  const line = running ? `Reading ${st?.now ?? "your Workday sites"}${st?.total ? ` (${(st.done ?? 0) + 1} of ${st.total})` : ""}…`
-    : st?.state === "signed_out" ? "This app isn't signed in, so it can't read your Workday sites. Sign in (tick Remember this device so it keeps reading)."
+  const line = running ? `Reading ${st?.now ?? "your sites"}${st?.total ? ` (${(st.done ?? 0) + 1} of ${st.total})` : ""}…`
+    : st?.state === "signed_out" ? "This app isn't signed in, so it can't read your job sites. Sign in (tick Remember this device so it keeps reading)."
     : st?.state === "failed" ? `The last read didn't finish: ${st.message ?? "TC Hunter didn't answer."}`
-    : lastRead ? `Your ${sites} are read from this app. Last read: ${lastRead}.` : `Your ${sites} are read from this app, shortly after it opens and every 6 hours.`;
+    : lastRead ? `${sites} ${count === 1 ? "is" : "are"} read from this app. Last read: ${lastRead}.` : `${sites} ${count === 1 ? "is" : "are"} read from this app, shortly after it opens and every 6 hours.`;
   return (
     <div className="stack" id="desktop-app">
       <p className={st?.state === "failed" || st?.state === "signed_out" ? "error small" : "muted small"}>{line}{" "}

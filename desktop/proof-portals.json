@@ -1,0 +1,127 @@
+[
+  {
+    "company": "Cognizant",
+    "home": "https://careers.cognizant.com/global-en/jobs/",
+    "hosts": [
+      "careers.cognizant.com"
+    ],
+    "how": "pages",
+    "list": "https://careers.cognizant.com/global-en/jobs/?page={n}",
+    "start": 1,
+    "step": 1,
+    "maxPages": 400,
+    "link": "^https://careers\\.cognizant\\.com/global-en/jobs/\\d{5,}/[a-z0-9-]+/",
+    "total": "Displaying\\s+[\\d,]+\\s+to\\s+[\\d,]+\\s+of\\s+([\\d,]+)"
+  },
+  {
+    "company": "Coastal Cloud",
+    "home": "https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c69b1375e0019bb78d357f7b9e",
+    "hosts": [
+      "recruitingbypaycor.com"
+    ],
+    "how": "pages",
+    "list": "https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c69b1375e0019bb78d357f7b9e",
+    "start": 0,
+    "step": 1,
+    "maxPages": 1,
+    "link": "JobIntroduction\\.action\\?clientId=8a7883c69b1375e0019bb78d357f7b9e&id=[0-9a-f]{32}",
+    "detail": "#gnewtonJobDescriptionText"
+  },
+  {
+    "company": "Deloitte",
+    "label": "Deloitte US",
+    "home": "https://apply.deloitte.com/en_US/careers/SearchJobs/",
+    "hosts": [
+      "apply.deloitte.com"
+    ],
+    "how": "pages",
+    "list": "https://apply.deloitte.com/en_US/careers/SearchJobs/?jobRecordsPerPage=10&jobOffset={n}",
+    "start": 0,
+    "step": 10,
+    "maxPages": 400,
+    "link": "^https://apply\\.deloitte\\.com/en_US/careers/JobDetail/(?:[^/?#]+/)?\\d+",
+    "total": "[\\d,]+\\s*-\\s*[\\d,]+\\s+of\\s+([\\d,]+)\\s+jobs",
+    "detail": "article.article--details",
+    "ld": false
+  },
+  {
+    "company": "IBM",
+    "home": "https://www.ibm.com/careers/search",
+    "hosts": [
+      "www.ibm.com",
+      "careers.ibm.com",
+      "www-api.ibm.com"
+    ],
+    "how": "json",
+    "api": {
+      "url": "https://www-api.ibm.com/search/api/v2",
+      "method": "POST",
+      "size": 100,
+      "hits": "hits.hits",
+      "totalAt": "hits.total.value",
+      "body": "{\"appId\":\"careers\",\"scopes\":[\"careers2\"],\"query\":{\"bool\":{\"must\":[]}},\"size\":100,\"from\":{from},\"sort\":[{\"_id\":\"asc\"}],\"lang\":\"zz\",\"localeSelector\":{},\"sm\":{\"query\":\"\",\"lang\":\"zz\"},\"_source\":[\"_id\",\"title\",\"url\",\"field_keyword_19\"]}",
+      "fields": {
+        "title": "title",
+        "url": "url",
+        "location": "field_keyword_19"
+      }
+    },
+    "detail": "article.article--details",
+    "ld": false
+  },
+  {
+    "company": "Infor",
+    "home": "https://careers.infor.com/",
+    "hosts": [
+      "careers.infor.com"
+    ],
+    "how": "json",
+    "api": {
+      "url": "https://careers.infor.com/postings.json",
+      "method": "GET",
+      "size": 100000,
+      "hits": "data",
+      "fields": {
+        "title": "title",
+        "url": "url",
+        "location": "location",
+        "description": "description",
+        "id": "job.requisition_id"
+      }
+    }
+  },
+  {
+    "company": "Lenovo",
+    "home": "https://jobs.lenovo.com/en_US/careers/SearchJobs/",
+    "hosts": [
+      "jobs.lenovo.com"
+    ],
+    "how": "pages",
+    "list": "https://jobs.lenovo.com/en_US/careers/SearchJobs/?jobRecordsPerPage=10&jobOffset={n}",
+    "start": 0,
+    "step": 10,
+    "maxPages": 400,
+    "link": "^https://jobs\\.lenovo\\.com/en_US/careers/JobDetail/(?:[^/?#]+/)?\\d+",
+    "total": "[\\d,]+\\s*-\\s*[\\d,]+\\s+of\\s+([\\d,]+)\\s+jobs",
+    "detail": "article.article--details",
+    "ld": false
+  },
+  {
+    "company": "Pegasystems",
+    "also": [
+      "Pega"
+    ],
+    "home": "https://www.pega.com/about/careers/job-listings",
+    "hosts": [
+      "www.pega.com"
+    ],
+    "how": "pages",
+    "list": "https://www.pega.com/about/careers/job-listings?page={n}",
+    "start": 0,
+    "step": 1,
+    "maxPages": 50,
+    "link": "^https://www\\.pega\\.com/about/careers/\\d+/[a-z0-9-]+",
+    "total": "Showing\\s+([\\d,]+)\\s+results",
+    "detail": ".c-text-block"
+  }
+]

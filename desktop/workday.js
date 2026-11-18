@@ -9,7 +9,7 @@ const { BrowserWindow } = require("electron");
 
 const GAP_MS = 3000, LOAD_MS = 45_000, SETTLE_MS = 15_000;
 const PARTITION = "persist:workday-reader";
-const CHECK = /security check|enable javascript and cookies|verify you are (a )?human|captcha/i;
+const CHECK = /security check|enable javascript and cookies|verify you are (a )?human|captcha|access denied|attention required|just a moment\.\.\./i;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -19,16 +19,18 @@ class SecurityCheck extends Error {
 
 const isWorkday = (u) => { try { const x = new URL(u); return x.protocol === "https:" && /(^|\.)myworkdayjobs\.com$/i.test(x.hostname); } catch { return false; } };
 
-function hiddenWindow() {
+const guarded = new Set();
+
+function hiddenWindow(allowed = isWorkday, partition = PARTITION) {
   const w = new BrowserWindow({
     show: false, width: 1280, height: 900,
-    webPreferences: { partition: PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+    webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
   w.webContents.setAudioMuted(true);
-  // Read-only: no new windows, no downloads, no leaving Workday.
+  // Read-only: no new windows, no downloads, no leaving the site being read.
   w.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  w.webContents.session.on("will-download", (e) => e.preventDefault());
-  w.webContents.on("will-navigate", (e, url) => { if (!isWorkday(url)) e.preventDefault(); });
+  if (!guarded.has(partition)) { guarded.add(partition); w.webContents.session.on("will-download", (e) => e.preventDefault()); }
+  w.webContents.on("will-navigate", (e, url) => { if (!allowed(url)) e.preventDefault(); });
   return w;
 }
 
@@ -138,4 +140,4 @@ async function countSite(page) {
   return out;
 }
 
-module.exports = { readSite, countSite, SecurityCheck };
+module.exports = { readSite, countSite, SecurityCheck, hiddenWindow, load, pageNow, sleep, CHECK, GAP_MS };

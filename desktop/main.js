@@ -17,7 +17,19 @@ const sameOrigin = (u) => { try { return new URL(u).origin === ORIGIN; } catch {
 // Proof mode
 // ---------------------------------------------------------------------------
 const proofAt = process.argv.indexOf("--proof");
-if (proofAt !== -1) {
+const portalProofAt = process.argv.indexOf("--proof-portals");
+if (portalProofAt !== -1) {
+  // --proof-portals <recipes.json>: reads each portal's whole list by its recipe and prints the count.
+  const recipes = JSON.parse(require("node:fs").readFileSync(process.argv[portalProofAt + 1], "utf8"));
+  app.dock?.hide();
+  app.whenReady().then(async () => {
+    const { countPortal } = require("./portal");
+    let ok = true;
+    for (const r of recipes) { const out = await countPortal(r); ok = ok && out.result === "read"; process.stdout.write(`${JSON.stringify(out)}\n`); }
+    app.exit(ok ? 0 : 1);
+  });
+  app.on("window-all-closed", () => {});
+} else if (proofAt !== -1) {
   const sites = process.argv.slice(proofAt + 1).filter((a) => /^https:\/\//.test(a));
   app.dock?.hide();
   app.whenReady().then(async () => {

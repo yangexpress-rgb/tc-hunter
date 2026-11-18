@@ -91,4 +91,34 @@ describe("Workday sites read in the applicant's own browser (Yong, 2026-11-18)",
     expect(asked.filter((u) => u.includes("myworkdayjobs"))).toEqual([]);
     expect((await listSources(pool, yong)).find((s) => s.id === id)).toMatchObject({ last_listed: 1040 });
   });
+
+  it("a careers portal the server can't read is read by the desktop app by its recipe, and the server still never fetches it", async () => {
+    const id = await followSource(pool, yong, "https://www.pega.com/about/careers", "Pegasystems");
+    await ownerQuery("UPDATE job_source SET health = 'unreadable', health_reason = 'no feed', last_checked_at = now() WHERE id = $1", [id]);
+    const todo = await relayTodo(pool, owner);
+    expect(todo.portals).toEqual([expect.objectContaining({ id, name: "Pegasystems", recipe: expect.objectContaining({ how: "pages", hosts: ["www.pega.com"] }) })]);
+    const plan = await relayPlan(pool, owner, id, [
+      { title: "Operations Analyst", path: "https://www.pega.com/about/careers/12345/operations-analyst" },
+      { title: "Operations Analyst", path: "https://evil.example.com/about/careers/1/x" },
+      { title: "Pastry Chef", path: "https://www.pega.com/about/careers/2/pastry-chef" },
+    ]);
+    expect(plan.paths).toEqual(["https://www.pega.com/about/careers/12345/operations-analyst"]);
+    const r = await relayResult(pool, owner, { sourceId: id, listed: 73, checked: 73, details: [
+      { path: "https://www.pega.com/about/careers/12345/operations-analyst", data: { title: "Operations Analyst", text: "Operations analysis with SQL reports for planners, five years of experience.", location: "Cambridge, MA" } },
+      { path: "https://evil.example.com/x", data: { title: "Operations Analyst", text: "x".repeat(100) } },
+    ] });
+    expect(r).toMatchObject({ postings: 1, listed: 73 });
+    asked.length = 0;
+    await drain();
+    expect(asked.filter((u) => u.includes("pega.com"))).toEqual([]);
+    const src = (await listSources(pool, yong)).find((s) => s.id === id)!;
+    expect(src).toMatchObject({ health: "unreadable", last_listed: 73, open_jobs: 1 });
+  });
+
+  it("an unreadable company without a recipe isn't offered to the desktop app", async () => {
+    const id = await followSource(pool, yong, "https://www.tcs.com/careers", "TCS");
+    await ownerQuery("UPDATE job_source SET health = 'unreadable' WHERE id = $1", [id]);
+    expect((await relayTodo(pool, owner)).portals.map((p) => p.name)).not.toContain("TCS");
+    await expect(relayPlan(pool, owner, id, [])).rejects.toThrow();
+  });
 });
