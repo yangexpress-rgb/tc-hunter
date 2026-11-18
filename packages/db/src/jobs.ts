@@ -454,9 +454,14 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
       const got = await fetchSource(spec, deps.fetcher, (t) => titleIsRelated(t, targets), 25, targets);
       checked += got.checked;
       // Catalogue writes are shared rows; they run in the applicant's transaction scope but touch no personal data.
+      // Only jobs whose titles relate to the goals are taken in (Databricks lists 901, each new one read
+      // by Claude: the search sat on it for over half an hour, 2026-11-17). The others still count as listed.
+      const take = got.postings.filter((p) => p.title && titleIsRelated(p.title, targets));
+      let n = 0;
       await withApplicant(pool, ctx, async (c) => {
-        for (const raw of got.postings) {
+        for (const raw of take) {
           if (!raw.title || !raw.employer || !raw.descriptionText) continue;
+          if (++n % 10 === 0) await progress(`Reading ${s.name} (${n} of ${take.length} jobs)`, done - 1, total, s.id);
           const o = await ingestPosting(c, s.id, raw, deps.reader);
           if (o.isNew) fresh0++; else if (o.changed) updated++;
           events.push(...o.eventIds);
