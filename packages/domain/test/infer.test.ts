@@ -8,7 +8,7 @@ describe("answers worked out from the profile: only ones that fit the question",
     { key: "c", label: "Start date: Month", type: "text" },
     { key: "d", label: "Open to travel?", type: "select", options: ["Select One", "Yes", "No"] },
   ];
-  it("keeps a real choice, a tick, a short text; drops placeholders, unsure answers and answers with no reason", () => {
+  it("keeps a real choice, a tick, a short text; drops placeholders and answers with no reason", () => {
     expect(acceptInferred(qs, [
       { key: "a", answer: "no", confidence: 0.95, basis: "Not in your work history" },
       { key: "b", answer: "true", confidence: 0.9, basis: "Your goal: full-time" },
@@ -19,7 +19,8 @@ describe("answers worked out from the profile: only ones that fit the question",
       { key: "b", answer: "Yes", basis: "Your goal: full-time" },
       { key: "c", answer: "12", basis: "2 weeks from next Monday" },
     ]);
-    expect(acceptInferred(qs, [{ key: "d", answer: "Yes", confidence: 0.6, basis: "maybe" }])).toEqual([]);
+    // The model's own confidence is no gate: a low number still goes to the verify pass (prompt review, 2026-11-17).
+    expect(acceptInferred(qs, [{ key: "d", answer: "Yes", confidence: 0.6, basis: "maybe" }])).toEqual([{ key: "d", answer: "Yes", basis: "maybe" }]);
     expect(acceptInferred([{ key: "p", label: "Please provide the percentage number that you are willing to travel.*", type: "text" }],
       [{ key: "p", answer: "Up to 25%", confidence: 0.9, basis: "Your saved answer" }])).toEqual([{ key: "p", answer: "25", basis: "Your saved answer" }]);
     expect(acceptInferred(qs, [{ key: "d", answer: "Yes", confidence: 0.9, basis: " " }])).toEqual([]);
@@ -112,5 +113,13 @@ describe("a drafted written answer keeps only paragraphs the facts support", () 
     expect(r.text).toBe("As Operations Analyst at Northwind, I built SQL and Excel reports for planners.\n\nWhen planners waited a week for numbers, I built daily reports.");
     expect(r.factIds).toEqual(["w1", "b1", "st1"]);
     expect(checkEssay([{ fact_ids: ["p1"], text: "I'm applying for the Analyst role at Premier." }], ctx, "p1")).toBeNull();
+  });
+  it("keeps within the form's character limit: a paragraph that would go over is left out, never cut", () => {
+    const paras = [
+      { fact_ids: ["w1", "b1"], text: "As Operations Analyst at Northwind, I built SQL and Excel reports for planners." },
+      { fact_ids: ["st1"], text: "When planners waited a week for numbers, I built daily reports." },
+    ];
+    expect(checkEssay(paras, ctx, "p1", 100)!.text).toBe("As Operations Analyst at Northwind, I built SQL and Excel reports for planners.");
+    expect(checkEssay(paras, ctx, "p1", 60)).toBeNull();
   });
 });

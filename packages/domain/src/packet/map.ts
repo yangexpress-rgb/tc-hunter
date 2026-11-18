@@ -20,7 +20,9 @@ export type StandingKind = "site_account" | "attestation" | "consent" | "backgro
 
 export interface FormField { key: string; label: string; type: FieldType; options?: string[]; required?: boolean;
   /** The site already shows a value here (Workday fills some questions from the resume). Server browser only. */
-  hasValue?: boolean }
+  hasValue?: boolean;
+  /** The field's maxlength, when the site sets one (written answers must fit it). */
+  maxLength?: number }
 
 export interface PacketProfile {
   firstName: string; lastName: string; fullName: string; preferredName: string;

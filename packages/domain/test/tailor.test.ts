@@ -165,7 +165,7 @@ describe("why-me cover letter (Claude writer)", () => {
     expect(calls[0].system).toMatch(/why is this applicant the right person for this role/);
     expect(calls[0].messages[0].content).toContain("<job_description>You will own the sales platform roadmap.</job_description>");
     expect(calls[0].messages[0].content).toContain('"kind":"skill"');
-    expect(meta.prompt_version).toBe("letter-claude-2");
+    expect(meta.prompt_version).toBe("letter-claude-3");
     const d = buildLetter(profile, withDesc, proposal);
     expect(d.blocked).toEqual([]);
     expect(d.source.paragraphs.map((p) => p.role)).toEqual(["opening", "fit", "standout", "closing"]);

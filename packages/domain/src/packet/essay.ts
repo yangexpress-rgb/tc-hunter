@@ -4,6 +4,7 @@ import { z } from "zod";
 import { checkLine, type CheckContext } from "../tailor/checker";
 import type { ProposedLine, TailorPosting, TailorProfile } from "../tailor/types";
 import { ANSWER_MODEL } from "./infer";
+import { VOICE_RULES, withPostingGuard } from "../promptShared";
 
 /**
  * Long free-text questions (Yong, 2026-11-17): "Why do you want to work here?", "Describe a time…",
@@ -19,7 +20,21 @@ export function isEssayQuestion(f: { label: string; type: string; options?: stri
   return f.type === "textarea" && !f.options?.length && ESSAY_QUESTION.test(f.label);
 }
 
-export interface EssayQuestion { key: string; label: string }
+export interface EssayQuestion { key: string; label: string; /** The form's character limit for this answer, when it has one. */ maxChars?: number }
+
+/** A "describe a time" question: answered in STAR shape (situation, what they did, the result). */
+export const TIME_QUESTION = /\b(a time (when|you|that)|example of a time|give (us )?an example|tell (us|me) about a (time|situation)|describe a (situation|time|project|challenge)|walk (us|me) through)\b/i;
+
+/**
+ * The character limit a field shows: its maxlength, or one stated in its label ("(500 characters max)",
+ * "limit 1,000 characters"). The smaller when both are given; undefined when neither is.
+ */
+export function essayLimit(f: { label: string; maxLength?: number }): number | undefined {
+  const m = f.label.match(/(\d[\d,]*)\s*(?:characters?|chars?)\b(?:\s*(?:max(?:imum)?|or (?:less|fewer)|limit))?|(?:max(?:imum)?|limit(?:ed)?(?: to| of)?|up to|no more than)\s*(\d[\d,]*)\s*(?:characters?|chars?)\b/i);
+  const fromLabel = m ? Number((m[1] ?? m[2])!.replace(/,/g, "")) : undefined;
+  const all = [f.maxLength, fromLabel].filter((n): n is number => typeof n === "number" && n >= 50);
+  return all.length ? Math.min(...all) : undefined;
+}
 export interface EssayDraft { key: string; paragraphs: ProposedLine[] }
 export interface EssayDrafter {
   readonly version: string;
@@ -34,7 +49,7 @@ export const ESSAY_CAP = 4_000;
  * The draft as it may be shown: only paragraphs the claim checker passes, each citing real facts,
  * with at least one resting on the applicant's experience or stories. Null when nothing survives.
  */
-export function checkEssay(paragraphs: ProposedLine[], ctx: CheckContext, postingId: string): { text: string; factIds: string[]; blocked: number } | null {
+export function checkEssay(paragraphs: ProposedLine[], ctx: CheckContext, postingId: string, maxChars = ESSAY_CAP): { text: string; factIds: string[]; blocked: number } | null {
   const kept: Array<{ text: string; factIds: string[] }> = [];
   let blocked = 0;
   for (const p of paragraphs) {
@@ -43,10 +58,12 @@ export function checkEssay(paragraphs: ProposedLine[], ctx: CheckContext, postin
   }
   const evidence = kept.some((k) => k.factIds.some((id) => id !== postingId && ["experience_bullet", "experience_item", "story", "answer", "about"].includes(ctx.facts.get(id)?.kind ?? "")));
   if (!kept.length || !evidence) return null;
+  if (kept[0]!.text.length > Math.min(maxChars, ESSAY_CAP)) return null;
   let text = "";
   for (const k of kept) {
     const next = text ? `${text}\n\n${k.text}` : k.text;
-    if (next.length > ESSAY_CAP) break;
+    // The form's limit (or the cap) holds: a paragraph that would go over it is left out, never cut mid-sentence.
+    if (next.length > Math.min(maxChars, ESSAY_CAP)) break;
     text = next;
   }
   return { text, factIds: [...new Set(kept.flatMap((k) => k.factIds))], blocked };
@@ -62,19 +79,29 @@ const DraftOut = z.object({
   })),
 });
 
-const SYSTEM = `You draft answers to written application questions for an applicant, from their own facts only. Each draft is checked against the facts and then read by the applicant before anything is sent.
+export const ESSAY_SYSTEM = withPostingGuard(`You draft answers to written application questions for an applicant, from their own facts only. Each draft is checked against the facts and then read by the applicant before anything is sent.
 Rules you must never break:
 - Answer the question asked. Every paragraph cites the fact ids it rests on.
 - Never add a skill, tool, employer, product, place, credential, number, date or level that is not in the cited facts. Use {metric} for a bullet's own number.
 - Never claim a skill listed under "gaps".
 - Reasons for wanting this job or employer come only from the applicant's approved answers and stories ("motivation" facts). With none, don't invent a reason: write about what their experience brings to the job instead.
-- A "describe a time" question is answered from one approved story or the bullets of one role.
+- A "describe a time" question is answered from one approved story or the bullets of one role, in STAR shape: the situation in one line, what the applicant did, then the result with its number when the facts give one.
 - "Tell us about yourself" or "summarise your background": start from the applicant's About (the "about" fact, their own executive summary), in first person, and support it with their roles and bullets.
-- 1 to 3 short paragraphs per question, first person, plain and specific, no flattery, no clichés.
-- If the facts don't give enough to answer a question honestly, return no paragraphs for it.`;
+- 1 to 3 short paragraphs per question, first person.
+- A question with max_chars has a character limit (count every character, spaces included). Fit the draft within the limit; if you must cut, cut the weakest sentence first.
+- If the facts don't give enough to answer a question honestly, return no paragraphs for it.
+
+${VOICE_RULES}
+
+# Example: a "describe a time" question
+Question: "Describe a time you improved a process."
+Fact s3 (a story): "Clinic scheduling backlog: new patients waited 19 days for a first visit; I mapped the intake steps, moved scheduling into Epic and trained 40 front-desk staff; the wait fell to 6 days."
+Draft, citing s3:
+"New patients were waiting 19 days for a first visit. I mapped every intake step, moved scheduling into Epic and trained 40 front-desk staff on the new flow. The wait fell to 6 days."
+Situation in one line, what they did, the result with its number, and nothing the story doesn't say.`);
 
 export class ClaudeEssayDrafter implements EssayDrafter {
-  readonly version = `essay-claude-1:${ANSWER_MODEL}`;
+  readonly version = `essay-claude-2:${ANSWER_MODEL}`;
   constructor(private client: Anthropic = new Anthropic()) {}
 
   async draft(questions: EssayQuestion[], profile: TailorProfile, posting: TailorPosting): Promise<EssayDraft[]> {
@@ -96,8 +123,8 @@ export class ClaudeEssayDrafter implements EssayDrafter {
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       output_config: { effort: "high", format: zodOutputFormat(DraftOut) },
-      system: SYSTEM,
-      messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>\n<motivation>${JSON.stringify(motivation)}</motivation>\n<questions>${JSON.stringify(questions.map((q) => ({ key: q.key, question: q.label })))}</questions>` }],
+      system: ESSAY_SYSTEM,
+      messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>\n<motivation>${JSON.stringify(motivation)}</motivation>\n<questions>${JSON.stringify(questions.map((q) => ({ key: q.key, question: q.label, ...(TIME_QUESTION.test(q.label) ? { shape: "STAR" } : {}), ...(q.maxChars ? { max_chars: q.maxChars } : {}) })))}</questions>` }],
     });
     if (r.stop_reason === "refusal") throw new Error("Claude declined to draft");
     if (!r.parsed_output) throw new Error(`no drafts came back (${r.stop_reason})`);

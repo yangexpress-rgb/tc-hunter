@@ -153,6 +153,8 @@ export const PAGE_SCRIPT = String.raw`
         if (qt && qt !== label && ok(qt)) label = qt + ": " + label;
       }
       var f = { key: key, label: label, type: type, required: isRequired(el, label), hasValue: false };
+      var ml = (tag === "textarea" || tag === "input") ? Number(el.getAttribute("maxlength")) : 0;
+      if (ml > 0) f.maxLength = ml;
       if (tag === "select") {
         f.options = Array.prototype.filter.call(el.options, function (o) { return o.value !== ""; }).map(function (o) { return clean(o.textContent); });
         f.hasValue = el.value !== "";
