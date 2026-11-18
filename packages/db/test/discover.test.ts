@@ -214,6 +214,27 @@ describe("Search again pressed while a whole search runs (Yong, 2026-11-17: noth
   });
 });
 
+describe("Yong's audit of failing sources (2026-11-17)", () => {
+  it("moves a company to its verified address, and marks one whose system can't be read without reading it", async () => {
+    while (await runNextWork(pool, { ...deps, discover: undefined })) { /* earlier tests' work */ }
+    const ivy = (await newApplicant(pool, cfg, "Ivy")).session;
+    await followSource(pool, ivy, "https://www.cencora.com/careers", "Cencora");
+    await followSource(pool, ivy, "https://apply.deloitte.com/careers", "Deloitte");
+    await followSource(pool, ivy, "https://jobs.smartrecruiters.com/SAP", "SAP");
+    const before = web.calls.length;
+    await requestScan(pool, ivy);
+    while (await runNextWork(pool, { ...deps, discover: undefined })) { /* drain */ }
+    const calls = web.calls.slice(before);
+    const rows = await listSources(pool, ivy);
+    expect(rows.map((r) => [r.name, r.kind, r.health]).sort()).toEqual([
+      ["Cencora", "workday", "degraded"], ["Deloitte", "careers_page", "unreadable"], ["SAP", "smartrecruiters", "degraded"]]);
+    expect(rows.find((r) => r.name === "Cencora")!.url).toBe("https://myhrabc.wd5.myworkdayjobs.com/Global");
+    expect(calls.some((u) => u.includes("myhrabc.wd5.myworkdayjobs.com"))).toBe(true);
+    expect(calls.some((u) => u.includes("deloitte"))).toBe(false);
+    expect(calls.some((u) => u.toLowerCase().includes("sapitbusinesssysteme"))).toBe(true);
+  });
+});
+
 describe("a new link for a company already in the list (Yong, 2026-11-17: Salesforce showed twice)", () => {
   it("replaces the old place instead of adding a second row", async () => {
     const lee = (await newApplicant(pool, cfg, "Lee")).session;

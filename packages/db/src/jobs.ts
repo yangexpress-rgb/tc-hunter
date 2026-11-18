@@ -3,7 +3,7 @@ import { runEmailCheck, type EmailDeps } from "./email";
 import {
   companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
-  SourceRefusedError, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, type SearchSite, type SearchSiteId,
+  SourceRefusedError, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -305,6 +305,47 @@ const PLAIN_REFUSAL: Record<string, string> = {
   too_big: "That page is too large to read.",
 };
 
+/**
+ * Yong's audit (2026-11-17): every followed source of a company in the audit is put right once per
+ * applicant. A company with a verified address follows it instead of what it had; a company whose
+ * hiring system can't be read is marked so, not counted as failed and not read every search.
+ */
+export async function applySourceFixes(c: pg.PoolClient, applicantId: string): Promise<number> {
+  const done = (await c.query("SELECT source_fixes FROM applicant WHERE id = $1", [applicantId])).rows[0]?.source_fixes ?? 0;
+  if (done >= SOURCE_FIX_VERSION) return 0;
+  const rows = (await c.query(
+    `SELECT s.id, s.name, s.kind, s.source_key, f.origin, f.goal_id, f.reason FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id
+      WHERE NOT f.muted AND s.kind NOT IN ('job_search','pasted_link')`)).rows;
+  const of = (names: string[]) => { const keys = new Set(names.map(companyKey)); return rows.filter((r) => keys.has(companyKey(String(r.name)))); };
+  let changed = 0;
+  for (const v of VERIFIED_SOURCES) {
+    const mine = of([v.company, ...(v.also ?? [])]);
+    if (!mine.length) continue;
+    const spec = detectSource(v.url, v.company)!;
+    const id = await upsertSource(c, spec);
+    const first = mine.find((r) => r.id === id) ?? mine[0]!;
+    await c.query(
+      `INSERT INTO applicant_job_source (applicant_id, job_source_id, origin, goal_id, reason) VALUES (app_applicant_id(), $1, $2, $3, $4)
+       ON CONFLICT (applicant_id, job_source_id) DO UPDATE SET muted = false, updated_at = now()`, [id, first.origin, first.goal_id, first.reason]);
+    // Read with the next search, whenever it was last read.
+    await c.query("UPDATE job_source SET health = CASE WHEN health = 'unreadable' THEN 'ok' ELSE health END, last_success_at = NULL WHERE id = $1", [id]);
+    for (const old of mine.filter((r) => r.id !== id)) {
+      await c.query("UPDATE applicant_job_source SET muted = true, updated_at = now() WHERE job_source_id = $1", [old.id]);
+      await c.query("UPDATE employer_board SET job_source_id = $2, note = NULL, checked_at = now() WHERE job_source_id = $1", [old.id, id]);
+      await recordAudit(c, "source.replaced", { objectType: "job_source", objectId: id, payload: { from: old.kind, to: spec.kind } });
+      changed++;
+    }
+  }
+  for (const u of UNREADABLE_COMPANIES) {
+    for (const r of of([u.company, ...(u.also ?? [])])) {
+      await c.query("UPDATE job_source SET health = 'unreadable', health_reason = $2, last_checked_at = now() WHERE id = $1", [r.id, unreadableReason(u.company, u.system)]);
+      changed++;
+    }
+  }
+  await c.query("UPDATE applicant SET source_fixes = $2 WHERE id = $1", [applicantId, SOURCE_FIX_VERSION]);
+  return changed;
+}
+
 /** One scan for one applicant (design 5.2): every followed source, then matching, then posting watch. */
 /**
  * What one scan covers. `only`: just these sources (the person pressed "Search again" on one
@@ -347,6 +388,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   const freshMs = opts.fresh ? 0 : (deps.freshMinutes ?? 30) * 60_000;
   const readAgain = new Set([...(opts.only ?? []), ...(opts.freshIds ?? [])]);
   const freshFor = (id: string) => (readAgain.has(id) ? 0 : freshMs);
+  await withApplicant(pool, ctx, (c) => applySourceFixes(c, ctx.applicantId));
   const { sources, firstCount, targets, queries } = await withApplicant(pool, ctx, async (c) => {
     const src = (await c.query(
       `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted AND s.kind <> 'job_search' ORDER BY s.name`)).rows;
@@ -399,6 +441,8 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   };
   const readBoard = async (s: Record<string, any>, again = true): Promise<void> => {
     await progress(`Reading ${s.name}`, done++, total, s.id);
+    // A hiring system with no public feed we read (Yong's audit): not read, not a failure.
+    if (s.health === "unreadable") return;
     if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
       return;

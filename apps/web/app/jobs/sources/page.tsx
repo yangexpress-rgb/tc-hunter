@@ -23,6 +23,12 @@ const WHY: Record<string, string> = {
   too_big: "Its job list was too large to read.",
 };
 const why = (reason: string | null, kind?: string, failures = 0) => {
+  // What the site itself answered, when it said something (Yong's audit: show the real reason).
+  const said = /answered (\d{3})(?: \(try again in ([^)]+)\))?(?: — "(.*)")?/.exec(String(reason ?? ""));
+  const tail = said ? ` (It answered ${said[1]}${said[2] ? `, asking us to wait ${said[2]}` : ""}${said[3] ? `: "${said[3]}"` : ""}.)` : "";
+  return whyText(reason, kind, failures) + tail;
+};
+const whyText = (reason: string | null, kind?: string, failures = 0) => {
   const code = String(reason ?? "").split(":")[0]!.trim();
   // Turned away search after search, even after waiting (Yong, 2026-11-17: Salesforce's Workday) — not a passing slow-down.
   if (code === "rate_limited" && failures >= 2) return `The site has turned our reader away ${failures} searches in a row, even after waiting, though its jobs open fine in a browser. It seems to refuse automated readers like ours, so we can't read its jobs for now. LinkedIn's alert emails for this company, or pasting a job's link in Add a job, still bring its jobs in.`;
@@ -86,7 +92,9 @@ export default async function SourcesPage(props: PageProps) {
       last: null, jobs: 0, reason: "On. It's searched with the next search." })),
     ...sources.map((s) => {
       const never = !s.last_checked_at;
-      const failed = !never && s.health !== "ok";
+      // A hiring system with no public feed we read (Yong's audit, 2026-11-17): a status, not a failure.
+      const unreadable = s.health === "unreadable";
+      const failed = !never && !unreadable && s.health !== "ok";
       const kind = kindOf(s);
       const where = s.kind !== "job_search" && s.kind !== "pasted_link" ? [KIND[s.kind] && kind !== KIND[s.kind] ? KIND[s.kind] : null, shortUrl(s.url)].filter(Boolean).join(" · ") : "";
       const detail = s.origin === "search" ? covers.get(s.url) ?? (s.url === "https://www.linkedin.com/jobs/" ? "Jobs from LinkedIn's alert emails in your Gmail" : undefined)
@@ -95,13 +103,22 @@ export default async function SourcesPage(props: PageProps) {
       const empty = !never && !failed && (s.last_listed === 0 || (s.last_listed == null && s.open_jobs === 0));
       const noneFit = !never && !failed && !empty && s.open_jobs === 0 && (s.last_listed ?? 0) > 0;
       const advice = empty ? noJobsAdvice(s) : null;
+      // SmartRecruiters answers 0 jobs for a name it doesn't know (Yong's audit: "SAP"), so 0 there is suspect.
+      const suspect = empty && s.kind === "smartrecruiters";
+      // Never read with any jobs, from the day it was added: the address itself is likely wrong.
+      const unproven = !s.last_success_at || (empty && s.open_jobs === 0);
+      const status = unreadable ? "Can't be read directly" : never ? "Not searched yet" : suspect ? "Check the address"
+        : (failed || empty) && unproven && s.kind !== "job_search" && s.kind !== "pasted_link" ? "Needs a correct address"
+        : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded";
       return { key: s.id, name: s.name, detail, kind, listed: s.last_listed,
-        status: never ? "Not searched yet" : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
-        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason, s.kind, Number(s.failures ?? 0)) : advice ? advice.reason
+        status, last: s.last_checked_at, jobs: s.open_jobs,
+        reason: unreadable ? String(s.health_reason ?? "Its hiring system has no public feed we can read.")
+          : suspect ? `SmartRecruiters answers "0 jobs" for company names it doesn't know, so "${shortUrl(s.url)}" may not be ${s.name}'s exact name there. If you know its SmartRecruiters address, add it below.`
+          : never ? "Waiting for the next search." : failed ? why(s.health_reason, s.kind, Number(s.failures ?? 0)) : advice ? advice.reason
           : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.` : "",
         link: advice?.link ?? (failed && s.kind !== "job_search" && /^(refused|robots)/.test(String(s.health_reason ?? "")) ? { href: "#add", label: "Add its jobs page" } : undefined),
         // LinkedIn's alerts come in with the email check, not a search.
-        again: s.url === "https://www.linkedin.com/jobs/" ? undefined : s.id,
+        again: s.url === "https://www.linkedin.com/jobs/" || unreadable ? undefined : s.id,
         action: { id: s.id, label: s.origin === "you" ? "Stop following" : "Don't use" } };
     }),
     ...named.filter((n) => !namedWithSource.has(n.key)).map((n) => ({ key: `named-${n.key}`, name: n.name, kind: "Company you named",
@@ -111,23 +128,23 @@ export default async function SourcesPage(props: PageProps) {
       reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
   ];
   const KINDS = [...new Set(table.map((r) => r.kind))].sort();
-  const STATUSES = ["Succeeded", "None fit yet", "No jobs found", "Failed", "Can't read", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
+  const STATUSES = ["Succeeded", "None fit yet", "No jobs found", "Check the address", "Needs a correct address", "Failed", "Can't read", "Can't be read directly", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
   const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
   const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
   const fQ = (params.q ?? "").slice(0, 60);
   // Order (Yong, 2026-11-17): name, then how it went and Search again on the left; the rest after.
-  const COLS = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["last", "Last searched"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"]] as const;
-  const HEAD: [string, string][] = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["last", "Last searched"], ["again", "Search again"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"], ["remove", "Don't use"]];
+  const COLS = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"]] as const;
+  const HEAD: [string, string][] = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["again", "Search again"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"], ["remove", "Don't use"]];
   const BACK = "/jobs/sources#status";
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "name") as (typeof COLS)[number][0];
-  const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
-  const RANK: Record<string, number> = { Failed: 0, "No jobs found": 0.3, "Can't read": 0.5, Off: 1, "None fit yet": 3.5, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
+  const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "listed" || sortBy === "last" ? "desc" : "asc";
+  const RANK: Record<string, number> = { Failed: 0, "Needs a correct address": 0.1, "Check the address": 0.2, "No jobs found": 0.3, "Can't be read directly": 3.8, "Can't read": 0.5, Off: 1, "None fit yet": 3.5, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
   const val = (r: StatusRow): string | number => sortBy === "status" ? RANK[r.status] ?? 9 : sortBy === "last" ? r.last ? new Date(r.last).getTime() : -1
-    : sortBy === "jobs" ? r.jobs : String(r[sortBy] ?? "").toLowerCase();
+    : sortBy === "jobs" ? r.jobs : sortBy === "listed" ? r.listed ?? -1 : String(r[sortBy] ?? "").toLowerCase();
   const shown = table.filter((r) => (!fKind || r.kind === fKind) && (!fStatus || r.status === fStatus) && (!fQ || `${r.name} ${r.detail ?? ""}`.toLowerCase().includes(fQ.toLowerCase())))
     .sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : a.name.localeCompare(b.name)) * (dir === "asc" ? 1 : -1); });
-  const bad = (st: string) => st === "Failed" || st === "Off" || st === "Can't read" || st === "No jobs found";
-  const failedCount = table.filter((r) => r.status === "Failed" || r.status === "Can't read").length;
+  const bad = (st: string) => st === "Failed" || st === "Off" || st === "Can't read" || st === "No jobs found" || st === "Needs a correct address" || st === "Check the address";
+  const failedCount = table.filter((r) => r.status === "Failed" || r.status === "Can't read" || r.status === "Needs a correct address" || r.status === "Check the address").length;
   const emptyCount = table.filter((r) => r.status === "No jobs found").length;
   const href = (over: Record<string, string>) => {
     const p = new URLSearchParams();
@@ -173,8 +190,8 @@ export default async function SourcesPage(props: PageProps) {
               {HEAD.map(([k, label]) => {
                 if (!COLS.some(([c]) => c === k)) return <th key={k} scope="col">{label}</th>;
                 const on = sortBy === k;
-                const next = on ? (dir === "asc" ? "desc" : "asc") : k === "jobs" || k === "last" ? "desc" : "asc";
-                return <th key={k} scope="col" className={k === "jobs" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
+                const next = on ? (dir === "asc" ? "desc" : "asc") : k === "jobs" || k === "listed" || k === "last" ? "desc" : "asc";
+                return <th key={k} scope="col" className={k === "jobs" || k === "listed" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
                   <a href={href({ sort: k, dir: next })}>{label}{on ? (dir === "asc" ? " ▲" : " ▼") : ""}</a></th>;
               })}
             </tr></thead>
@@ -184,6 +201,7 @@ export default async function SourcesPage(props: PageProps) {
                   <td><strong>{r.name}</strong></td>
                   <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
                   <td className="num">{r.jobs}</td>
+                  <td className="num" title="Jobs the place listed in its last read, before matching to your goals">{r.listed ?? ""}</td>
                   <td>{r.last ? ago(r.last) : "Never"}</td>
                   {/* Each button in its own column (Yong, 2026-11-17). */}
                   <td>{r.again ? (
@@ -204,7 +222,7 @@ export default async function SourcesPage(props: PageProps) {
                     </form>) : null}</td>
                 </tr>
               ))}
-              {shown.length === 0 ? <tr><td colSpan={9} className="muted">No sources match these filters.</td></tr> : null}
+              {shown.length === 0 ? <tr><td colSpan={10} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>

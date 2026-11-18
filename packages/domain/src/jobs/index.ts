@@ -9,3 +9,4 @@ export * from "./fetcher";
 export * from "./sources";
 export * from "./discover";
 export * from "./search";
+export * from "./corrections";

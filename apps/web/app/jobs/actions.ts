@@ -44,8 +44,9 @@ export async function refreshAction(form: FormData) {
 export async function followSourceAction(form: FormData) {
   const s = await requireSession();
   await act(form, async () => {
-    await followSource(app().pool, s, String(form.get("address") ?? ""), String(form.get("name") ?? "") || undefined);
-    await requestScan(app().pool, s);
+    // Read at once (Yong's audit): the row shows right away whether the address really lists jobs.
+    const id = await followSource(app().pool, s, String(form.get("address") ?? ""), String(form.get("name") ?? "") || undefined);
+    await requestSourceScan(app().pool, s, id);
   }, "/jobs/sources");
 }
 
