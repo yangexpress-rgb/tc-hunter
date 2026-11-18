@@ -141,7 +141,12 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
           if (!b || b.kind === "careers_page" || b.kind === "workday" || skip.has(`${b.kind}:${b.key}`)) continue;
           if (boardAnswer(b.kind as AtsKind, (await f.get(PROBE_URL[b.kind as AtsKind](encodeURIComponent(b.key)))).text)) return { ...b, name: idea.name };
         }
-        if (jobPostingsFromHtml(page.text, page.url).length || jobLinksFromHtml(page.text, page.url).length) return spec;
+        // Only a page that really shows jobs (Yong, 2026-11-17 audit: Deloitte, Infosys and Slalom were saved
+        // from pages with links but no readable jobs, then failed every week). Its job links are read to check.
+        if (jobPostingsFromHtml(page.text, page.url).length) return spec;
+        for (const link of jobLinksFromHtml(page.text, page.url).slice(0, 3)) {
+          try { if (jobPostingsFromHtml((await f.get(link, { kind: "page" })).text, link).length) return spec; } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
+        }
       }
     } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
   }

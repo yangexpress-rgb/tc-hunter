@@ -129,13 +129,16 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
   if (!terms.length) for (const j of (all.jobPostings ?? []) as Obj[]) if (j.externalPath) list.set(String(j.externalPath), j);
   const searches = terms.length ? terms.slice(0, 6) : [""];
   search: for (const searchText of searches) {
-    for (let offset = searchText ? 0 : 20; offset < (searchText ? 60 : 200); offset += 20) {
+    // Each role's search goes on while its pages still bring related titles, up to 100 (Yong's audit:
+    // on boards of 1,000+ jobs the first 60 can miss some), so "no jobs" isn't concluded too early.
+    for (let offset = searchText ? 0 : 20; offset < (searchText ? 100 : 200); offset += 20) {
       if (!searchText && offset >= listed) break;
       const r = await ask(`${api}/jobs`, { appliedFacets: {}, limit: 20, offset, searchText });
       if (!r) break search;
       const page = (r.jobPostings ?? []) as Obj[];
       for (const j of page) if (j.externalPath) list.set(String(j.externalPath), j);
       if (page.length < 20 || offset + 20 >= Number(r.total ?? 0)) break;
+      if (searchText && offset >= 40 && !page.some((j) => wanted(String(j.title ?? "")))) break;
     }
   }
   const related = [...list.values()].filter((j) => wanted(String(j.title ?? "")));

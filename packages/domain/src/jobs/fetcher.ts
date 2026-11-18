@@ -7,6 +7,12 @@ export const USER_AGENT = "TCHunter/1.0 (personal job search for one household; 
 
 export interface FetchResult { status: number; text: string; url: string; contentType: string; /** Retry-After, when the site sent one. */ retryAfter?: string }
 /** headers: extra request headers (an API key a job-search site asks for). body: sends a JSON POST instead of a GET. */
+/** The start of an error page, as plain text: ` — "Access denied …"`. */
+export function excerpt(text: string): string {
+  const t = String(text ?? "").replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 140);
+  return t ? ` — "${t}"` : "";
+}
+
 export interface FetchOpts { kind?: "api" | "page"; headers?: Record<string, string>; body?: unknown }
 export interface Fetcher { get(url: string, opts?: FetchOpts): Promise<FetchResult> }
 
@@ -100,8 +106,10 @@ export class PoliteFetcher implements Fetcher {
       if (rules && !robotsAllows(rules, u.pathname + u.search)) throw new SourceRefusedError("robots", `${u.host} asks automated readers not to open ${u.pathname}`);
     }
     const r = await this.once(url, opts.kind === "page" ? "text/html,application/xhtml+xml" : "application/json", { headers: opts.headers, body: opts.body });
-    if (r.status === 401 || r.status === 403) throw new SourceRefusedError("refused", `${u.host} answered ${r.status}`);
-    if (r.status === 429) throw new SourceRefusedError("rate_limited", `${u.host} answered 429${r.retryAfter ? ` (try again in ${r.retryAfter})` : ""}`);
+    // What the site said, briefly, so a refusal can be told apart from a real slow-down (Yong, 2026-11-17: Salesforce).
+    const said = r.status >= 400 ? excerpt(r.text) : "";
+    if (r.status === 401 || r.status === 403) throw new SourceRefusedError("refused", `${u.host} answered ${r.status}${said}`);
+    if (r.status === 429) throw new SourceRefusedError("rate_limited", `${u.host} answered 429${r.retryAfter ? ` (try again in ${r.retryAfter})` : ""}${said}`);
     if (r.status === 404 || r.status === 410) throw new SourceRefusedError("not_found", `${u.host} answered ${r.status}`);
     if (r.status >= 400) throw new SourceRefusedError("unreachable", `${u.host} answered ${r.status}`);
     return r;
