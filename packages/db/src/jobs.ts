@@ -5,6 +5,7 @@ import {
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
+  readRequirementsText, withUsageScope, type BatchPosting, type Requirements, type RequirementsBatcher,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { runTailor, type TailorDeps } from "./documents";
@@ -42,7 +43,11 @@ const reqHash = (r: unknown) => sha256Hex(canonicalJson(r));
 export interface IngestOutcome { postingId: string; isNew: boolean; changed: boolean; eventIds: string[] }
 
 /** One posting into the catalogue: link to an existing posting when it's the same job (F3), else add it. */
-export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: RawPosting, reader: RequirementsReader): Promise<IngestOutcome> {
+/**
+ * `newReader`: reads postings new to the catalogue (a scheduled search's batch placeholder); postings
+ * already known and changed are always read with `reader`, in real time.
+ */
+export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: RawPosting, reader: RequirementsReader, newReader: RequirementsReader = reader): Promise<IngestOutcome> {
   const key = dedupeKey(raw.employer, raw.title, raw.locationRaw);
   const fp = descriptionFingerprint(raw.descriptionText);
   const events: string[] = [];
@@ -105,7 +110,7 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
     }
   }
 
-  const req = await reader.read(raw.descriptionText, raw.title);
+  const req = await newReader.read(raw.descriptionText, raw.title);
   const rh = reqHash({ must: [...req.must_have].sort(), nice: [...req.nice_to_have].sort(), years: req.years });
   const ins = await c.query(
     `INSERT INTO job_posting (employer_canonical, employer_aliases, title, title_normalized, location_raw, locations_normalized, workplace_type, seniority,
@@ -113,7 +118,7 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
        posted_at, apply_url, ats_type, dedupe_key, reposted_from)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id`,
     [raw.employer, [raw.employer], raw.title, normalizeTitle(raw.title), raw.locationRaw, JSON.stringify(raw.locationRaw ? [normalizeLocation(raw.locationRaw)] : []),
-      raw.workplaceType, levelOf(raw.title), raw.descriptionText, fp, JSON.stringify(req), rh, reader.version,
+      raw.workplaceType, levelOf(raw.title), raw.descriptionText, fp, JSON.stringify(req), rh, newReader.version,
       raw.salary?.min ?? null, raw.salary?.max ?? null, raw.salary?.currency ?? null, raw.salary?.period ?? null,
       raw.postedAt && !Number.isNaN(Date.parse(raw.postedAt)) ? raw.postedAt : null, raw.applyUrl || raw.url || null, raw.atsType, key, reposted]);
   const id = ins.rows[0].id;
@@ -300,6 +305,21 @@ export interface WorkDeps {
   apply?: ApplyDeps;
   /** Told when a piece of work starts (the worker logs it and watches how long it takes). */
   onStart?: (w: { kind: string; attempt: number }) => void;
+  /** Reading new postings at batch price, for scheduled searches (Yong, 2026-11-17). */
+  batch?: RequirementsBatcher;
+}
+
+/** How long a scheduled search waits for its batch before reading what's left in real time, and how often it checks. */
+export const BATCH_WINDOW_MINUTES = 60;
+export const BATCH_CHECK_MINUTES = 2;
+/** The version stored on a posting whose reading is waiting in a batch (the rule reading stands in until then). */
+export const pendingVersion = (b: RequirementsBatcher) => `pending:${b.reader.version}`;
+
+/** Stands in for the Claude reader while a new posting waits in the batch: the rule reading, marked pending. */
+class DeferredReader implements RequirementsReader {
+  readonly ids: string[] = [];
+  constructor(readonly version: string) {}
+  async read(text: string, title: string): Promise<Requirements> { return readRequirementsText(text, title); }
 }
 
 const PLAIN_REFUSAL: Record<string, string> = {
@@ -358,7 +378,7 @@ export async function applySourceFixes(c: pg.PoolClient, applicantId: string): P
  * row of Where we look; Yong, 2026-11-17), read again however recently, with no employer lookup.
  * `freshIds`: sources to read again however recently, within a whole scan.
  */
-export interface ScanOpts { discover?: boolean; fresh?: boolean; only?: string[]; freshIds?: string[] }
+export interface ScanOpts { discover?: boolean; fresh?: boolean; only?: string[]; freshIds?: string[]; scheduled?: boolean }
 
 export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: ScanOpts = {}): Promise<Record<string, number>> {
   // The run is recorded first, so the screens can show what it's doing as it goes (Yong, 2026-11-14).
@@ -383,6 +403,11 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   // First, find places to look from the goals, when goals changed or a week has passed (or the person pressed Refresh).
   let found: Record<string, number> = {};
   const only = opts.only?.length ? new Set(opts.only) : null;
+  // The scheduled search is not interactive: new postings are read in a batch at half price after the
+  // places are read (Yong, 2026-11-17). "Search again" and "Look again now" stay real time.
+  const deferred = opts.scheduled && !only && deps.batch ? new DeferredReader(pendingVersion(deps.batch)) : null;
+  const newReader = deferred ?? deps.reader;
+  const pendingIds: string[] = [];
   if (deps.discover && !only && (opts.discover || await withApplicant(pool, ctx, (c) => discoveryDue(c)))) {
     await progress("Finding employers for your goals");
     const d = await runDiscovery(pool, ctx, deps.fetcher, deps.discover, progress);
@@ -478,8 +503,8 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
         for (const raw of take) {
           if (!raw.title || !raw.employer || !raw.descriptionText) continue;
           if (++n % 10 === 0) await progress(`Reading ${s.name} (${n} of ${take.length} jobs)`, done - 1, total, s.id);
-          const o = await ingestPosting(c, s.id, raw, deps.reader);
-          if (o.isNew) fresh0++; else if (o.changed) updated++;
+          const o = await ingestPosting(c, s.id, raw, deps.reader, newReader);
+          if (o.isNew) { fresh0++; if (deferred) pendingIds.push(o.postingId); } else if (o.changed) updated++;
           events.push(...o.eventIds);
         }
         if (got.complete) {
@@ -574,8 +599,8 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
         taken += take.length;
         await withApplicant(pool, ctx, async (c) => {
           for (const raw of take) {
-            const o = await ingestPosting(c, follow.id, raw, deps.reader);
-            if (o.isNew) fresh0++; else if (o.changed) updated++;
+            const o = await ingestPosting(c, follow.id, raw, deps.reader, newReader);
+            if (o.isNew) { fresh0++; if (deferred) pendingIds.push(o.postingId); } else if (o.changed) updated++;
             events.push(...o.eventIds);
           }
         });
@@ -598,7 +623,25 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   for (const s of sources.slice(firstCount)) await readInTurn(s);
   await jumpQueue();
 
+  const tally: ScanTally = { found, sources: sources.length, searched, checked, fresh0, updated, closed, events, notes };
+  // New postings waiting to be read in a batch: the search finishes when the batch is back.
+  if (deferred && pendingIds.length) {
+    const handed = await handToBatch(pool, ctx, deps, runId, pendingIds, tally, progress);
+    if (handed) return handed;
+  }
   await progress("Scoring what we found against your goals", total, total);
+  return finishScan(pool, ctx, runId, now, tally);
+}
+
+/** What one search found, carried to the end of the search (also across a batch wait). */
+interface ScanTally {
+  found: Record<string, number>; sources: number; searched: number; checked: number; fresh0: number; updated: number; closed: number;
+  events: string[]; notes: Array<{ source: string; note: string }>;
+}
+
+/** Scores what the search found, raises posting alerts and closes the run. */
+async function finishScan(pool: pg.Pool, ctx: RequestContext, runId: string, now: Date, t: ScanTally): Promise<Record<string, number>> {
+  const { found, sources, searched, checked, fresh0, updated, closed, events, notes } = t;
   return withApplicant(pool, ctx, async (c) => {
     // Postings read for this applicant may have been closed or changed by another scan: include recent events too.
     const recent = (await c.query("SELECT id FROM job_posting_event WHERE detected_at > now() - interval '8 days'")).rows.map((r) => r.id as string);
@@ -607,10 +650,90 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     await c.query(
       `UPDATE scan_run SET finished_at = now(), progress = '{}', sources_checked = $2, new_count = $3, updated_count = $4, expired_count = $5,
          jobs_checked = $6, related_count = $7, source_notes = $8 WHERE id = $1`,
-      [runId, sources.length + searched, m.newMatches, updated, closed, checked, m.related, JSON.stringify(notes)]);
-    await recordAudit(c, "scan.finished", { objectType: "scan_run", objectId: runId, payload: { sources: sources.length, checked, new_jobs: m.newMatches, updated, closed } });
-    return { ...found, sources: sources.length, search_sites: searched, checked, newPostings: fresh0, newMatches: m.newMatches, updated, closed, alerts };
+      [runId, sources + searched, m.newMatches, updated, closed, checked, m.related, JSON.stringify(notes)]);
+    await recordAudit(c, "scan.finished", { objectType: "scan_run", objectId: runId, payload: { sources, checked, new_jobs: m.newMatches, updated, closed } });
+    return { ...found, sources, search_sites: searched, checked, newPostings: fresh0, newMatches: m.newMatches, updated, closed, alerts };
   });
+}
+
+const postingsToRead = async (c: pg.PoolClient, ids: string[]): Promise<BatchPosting[]> =>
+  (await c.query("SELECT id, title, description_text FROM job_posting WHERE id = ANY($1::uuid[])", [ids])).rows
+    .map((r) => ({ id: r.id as string, title: String(r.title), text: String(r.description_text ?? "") }));
+
+/** Writes a posting's reading, only while it still waits for one (another search may have read it since). */
+async function writeReading(c: pg.PoolClient, id: string, req: Requirements, version: string, waitingAs: string): Promise<void> {
+  const rh = reqHash({ must: [...req.must_have].sort(), nice: [...req.nice_to_have].sort(), years: req.years });
+  await c.query("UPDATE job_posting SET requirements = $2, requirements_hash = $3, parser_version = $4 WHERE id = $1 AND parser_version = $5",
+    [id, JSON.stringify(req), rh, version, waitingAs]);
+}
+
+/**
+ * Sends the search's new postings for reading in one batch and leaves a 'scan_finish' item to collect
+ * it. If the batch can't be sent, they are read in real time now (null: carry on as usual).
+ */
+async function handToBatch(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, runId: string, ids: string[], tally: ScanTally,
+  progress: (step: string, done?: number, total?: number, source?: string) => Promise<void>): Promise<Record<string, number> | null> {
+  const batch = deps.batch!;
+  const items = await withApplicant(pool, ctx, (c) => postingsToRead(c, ids));
+  let batchId: string | null = null;
+  try { batchId = await batch.submit(items); } catch { batchId = null; }
+  if (!batchId) {
+    await progress(`Reading ${plural(items.length, "new posting")}`);
+    await readNow(pool, ctx, deps, items, pendingVersion(batch));
+    return null;
+  }
+  await progress(`Reading ${plural(items.length, "new posting")}`);
+  await withApplicant(pool, ctx, (c) => c.query(
+    "INSERT INTO work_item (applicant_id, kind, payload, run_after) VALUES (app_applicant_id(), 'scan_finish', $1, now() + $2::interval)",
+    [JSON.stringify({ run_id: runId, batch_id: batchId, posting_ids: ids, sent_at: new Date().toISOString(), version: pendingVersion(batch), tally }), `${BATCH_CHECK_MINUTES} minutes`]));
+  return { ...tally.found, sources: tally.sources, search_sites: tally.searched, checked: tally.checked, newPostings: tally.fresh0, updated: tally.updated, closed: tally.closed, batched: items.length };
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+/** Reads postings still waiting for a reading, one by one in real time. */
+async function readNow(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, items: BatchPosting[], waitingAs: string): Promise<number> {
+  let n = 0;
+  for (const p of items) {
+    const req = await deps.reader.read(p.text, p.title);
+    await withApplicant(pool, ctx, (c) => writeReading(c, p.id, req, deps.reader.version, waitingAs));
+    n++;
+  }
+  return n;
+}
+
+/**
+ * The second half of a scheduled search: collects the batch, writes each reading, reads in real time
+ * whatever didn't come back usable, then scores and closes the search. Still waiting and within the
+ * window: `{ waiting: 1 }` (checked again in a couple of minutes). Past the window, the batch is
+ * cancelled and what's left is read in real time.
+ */
+export async function runScanFinish(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps,
+  p: { run_id: string; batch_id: string; posting_ids: string[]; sent_at: string; version: string; tally: ScanTally }): Promise<Record<string, number>> {
+  const items = await withApplicant(pool, ctx, (c) => postingsToRead(c, p.posting_ids));
+  let results: Map<string, Requirements | null> | null = null;
+  let checkFailed = false;
+  try { results = deps.batch ? await deps.batch.collect(p.batch_id, items) : new Map(); } catch { checkFailed = true; }
+  const waited = (Date.now() - new Date(p.sent_at).getTime()) / 60_000;
+  if (!results && waited < BATCH_WINDOW_MINUTES) {
+    await withApplicant(pool, ctx, (c) => c.query("UPDATE scan_run SET updated_at = now() WHERE id = $1 AND finished_at IS NULL", [p.run_id]));
+    return { waiting: 1, minutes: Math.round(waited), check_failed: checkFailed ? 1 : 0 };
+  }
+  if (!results && deps.batch) await deps.batch.cancel(p.batch_id);
+  let fromBatch = 0;
+  const left: BatchPosting[] = [];
+  for (const it of items) {
+    const req = results?.get(it.id);
+    if (req) {
+      await withApplicant(pool, ctx, (c) => writeReading(c, it.id, req, deps.batch?.reader.version ?? deps.reader.version, p.version));
+      fromBatch++;
+    } else left.push(it);
+  }
+  const live = await readNow(pool, ctx, deps, left, p.version);
+  await withApplicant(pool, ctx, (c) => c.query("UPDATE scan_run SET progress = $2, updated_at = now() WHERE id = $1",
+    [p.run_id, JSON.stringify({ step: "Scoring what we found against your goals" })]));
+  const done = await finishScan(pool, ctx, p.run_id, new Date(), p.tally);
+  return { ...done, read_in_batch: fromBatch, read_live: live, waited_minutes: Math.round(waited) };
 }
 
 /** Reads one pasted job and matches it for the applicant. LinkedIn, Indeed and similar sites use the text the applicant pasted. */
@@ -637,7 +760,7 @@ export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload:
   });
 }
 
-export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "ingest_link" | "tailor" | "email_check" | "resume_digest" | "apply"; payload: Record<string, any>; attempts: number }
+export interface ClaimedWork { id: string; applicant_id: string; user_account_id: string; kind: "scan" | "scan_finish" | "ingest_link" | "tailor" | "email_check" | "resume_digest" | "apply"; payload: Record<string, any>; attempts: number }
 
 const SEARCH_HOME: Record<SearchSiteId, string> = {
   adzuna: "https://www.adzuna.com", jooble: "https://jooble.org", usajobs: "https://www.usajobs.gov", remotive: "https://remotive.com",
@@ -655,15 +778,22 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
   let done: WorkDone;
   const ctx: RequestContext = { userAccountId: item.user_account_id, applicantId: item.applicant_id, actor: "system" };
   try {
-    const p = item.payload as { discover?: boolean; fresh?: boolean; only?: unknown; fresh_ids?: unknown };
+    const p = item.payload as { discover?: boolean; fresh?: boolean; only?: unknown; fresh_ids?: unknown; scheduled?: boolean };
     const ids = (x: unknown) => (Array.isArray(x) ? x.map(String).slice(0, 50) : undefined);
-    const result = item.kind === "scan" ? await runScan(pool, ctx, deps, { discover: p.discover === true, fresh: p.fresh === true, only: ids(p.only), freshIds: ids(p.fresh_ids) })
+    // Every AI call made for this item is tagged with it, so one application's or search's cost can be read back.
+    const result = await withUsageScope({ run: `${item.kind}:${item.id}` }, async () => item.kind === "scan"
+      ? await runScan(pool, ctx, deps, { discover: p.discover === true, fresh: p.fresh === true, only: ids(p.only), freshIds: ids(p.fresh_ids), scheduled: p.scheduled === true })
+      : item.kind === "scan_finish" ? await runScanFinish(pool, ctx, deps, item.payload as never)
       : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))
       : item.kind === "resume_digest" ? { status: await (deps.digest ? runDigest(pool, ctx, String((item.payload as { digest_id?: string }).digest_id), deps.digest) : Promise.reject(new Error("resume reading not set up"))) }
       : item.kind === "tailor" ? await (deps.tailor ? runTailor(pool, ctx, item.payload as never, deps.tailor) : Promise.reject(new Error("tailoring not set up")))
       : item.kind === "apply" ? await (deps.apply ? runApply(pool, ctx, item.payload as never, { fetcher: deps.fetcher, ...deps.apply }) : Promise.reject(new Error("the application browser isn't set up")))
-      : await runIngestLink(pool, ctx, item.payload as never, deps);
-    await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
+      : await runIngestLink(pool, ctx, item.payload as never, deps));
+    // A search waiting for its batch is looked at again in a couple of minutes.
+    if (item.kind === "scan_finish" && (result as { waiting?: number }).waiting) await withApplicant(pool, ctx, (c) => c.query(
+      "UPDATE work_item SET status = 'queued', attempts = 0, locked_until = NULL, run_after = now() + $2::interval, updated_at = now() WHERE id = $1",
+      [item.id, `${BATCH_CHECK_MINUTES} minutes`]));
+    else await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
     const counts = Object.fromEntries(Object.entries((result ?? {}) as Record<string, unknown>).filter(([, v]) => typeof v === "number"));
     done = { kind: item.kind, ok: true, ms: Date.now() - t0, attempt: item.attempts, result: counts };
   } catch (e) {

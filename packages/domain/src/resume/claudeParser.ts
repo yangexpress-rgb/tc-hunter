@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
+import { recordUsage } from "../ai/meter";
 import { stripContactDetails } from "./pii";
 import { parseResumeText } from "./rulesParser";
 import { contactBlockEnd, DIGEST_TARGETS } from "./digest";
@@ -137,7 +138,8 @@ export class ClaudeResumeParser implements ResumeParser {
         output_config: { effort: "high", format: zodOutputFormat(schema) },
         system,
         messages: [{ role: "user", content }],
-      } as never, { timeout: 15 * 60 * 1000 }) as unknown as { stop_reason: string; model: string; parsed_output: z.infer<T> | null };
+      } as never, { timeout: 15 * 60 * 1000 }) as unknown as { stop_reason: string; model: string; usage: never; parsed_output: z.infer<T> | null };
+      recordUsage("resume_read", response, MODEL);
       this.trace.parts[part] = response.stop_reason ?? "unknown";
       if (response.stop_reason === "refusal" || response.stop_reason === "max_tokens" || !response.parsed_output) return null;
       this.model = response.model;

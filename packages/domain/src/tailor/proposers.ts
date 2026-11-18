@@ -1,6 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
+import { recordUsage } from "../ai/meter";
 import { findSkills } from "../jobs/skills";
 import { relevance } from "./build";
 import { aboutFactText, checkContext, checkLine } from "./checker";
@@ -149,6 +150,7 @@ export class ClaudeResumeProposer implements ResumeProposer {
         system: RESUME_SYSTEM,
         messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<about>${JSON.stringify(about)}</about>\n<roles>${JSON.stringify(roles)}</roles>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>\n<background>${JSON.stringify(background)}</background>${feedbackBlock(opts)}` }],
       });
+      recordUsage("resume_tailor", r, MODEL);
       if (r.stop_reason === "refusal" || !r.parsed_output) return this.fallback.propose(profile, posting, opts);
       return { proposal: r.parsed_output as ResumeProposal, meta: { proposer: this.version, model: MODEL, prompt_version: PROMPT_VERSION } };
     } catch {
@@ -260,7 +262,7 @@ export class ClaudeLetterProposer implements LetterProposer {
       output_config: { effort: "high", format: zodOutputFormat(LetterOut) },
       system: LETTER_SYSTEM,
       messages,
-    });
+    }).then((r) => { recordUsage("cover_letter", r, MODEL); return r; });
     try {
       const first = await ask([{ role: "user", content }]);
       if (first.stop_reason === "refusal" || !first.parsed_output) return this.fallback.propose(profile, posting, opts);

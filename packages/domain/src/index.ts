@@ -26,3 +26,4 @@ export * from "./apply/securityCode";
 export * from "./apply/handover";
 export * from "./promptShared";
 export * from "./journey";
+export * from "./ai";

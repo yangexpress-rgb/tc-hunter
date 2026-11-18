@@ -5,31 +5,64 @@ import {
   type GenCase, type RubricResult, type TailorProfile,
   ClaudeAnswerInferrer, ClaudeRequirementsReader, F9_BAR, passesF9, readRequirementsText, scoreAnswers, scoreRequirements, summariseRequirements,
   type EvalQuestion, type GoldenPosting, type InferFacts,
+  ClaudeAboutFinder, ClaudeCareersLookup, EXTRACT_MODEL_DEFAULT, VERIFIED_SOURCES, cacheHitRate, setUsageSink, withUsageScope, type AiUsage, type UsageSink,
 } from "@tc-hunter/domain";
+
+type Log = { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void };
+
+/**
+ * Collects the usage of every call made inside `fn` (as well as handing it to the meter), so an eval
+ * can report its cost and cache hit rate next to its score.
+ */
+async function metered<T>(run: string, fn: () => Promise<T>): Promise<{ out: T; usage: AiUsage[] }> {
+  const prev = (globalThis as unknown as { __tcUsageSink?: UsageSink | null }).__tcUsageSink ?? null;
+  const usage: AiUsage[] = [];
+  // A collector for this run's tag, passing everything on to the real meter.
+  setUsageSink((u) => { if (u.run === run) usage.push(u); return prev?.(u); });
+  try { return { out: await withUsageScope({ run, test: true }, fn), usage }; }
+  finally { setUsageSink(prev); }
+}
+const costLine = (usage: AiUsage[]) => ({
+  calls: usage.length, cost_usd: Number(usage.reduce((s, u) => s + u.costUsd, 0).toFixed(4)),
+  input: usage.reduce((s, u) => s + u.inputTokens, 0), output: usage.reduce((s, u) => s + u.outputTokens, 0),
+  cache_write: usage.reduce((s, u) => s + u.cacheWriteTokens, 0), cache_read: usage.reduce((s, u) => s + u.cacheReadTokens, 0),
+  cache_hit: Math.round(cacheHitRate(usage) * 1000) / 10,
+});
+/** The models the extraction evals compare (Yong, 2026-11-17: the smaller tier first, then the mid tier, Opus as the baseline). */
+const evalModels = () => (process.env.TC_EVAL_MODELS ?? `${EXTRACT_MODEL_DEFAULT},claude-haiku-5-5,claude-sonnet-5-5`).split(",").map((m) => m.trim()).filter(Boolean);
 
 /**
  * The F9 answer eval, run once on the server with its own Anthropic key (Yong, 2026-11-17: "run it
  * yourself with the Railway key"). Turned on by TC_EVAL_F9=1; the fixture is synthetic, so its
  * questions and answers may be logged in full.
  */
-export async function runF9(log: { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void }) {
+export async function runF9(log: Log) {
+  // Both arms on the same fixture (Yong, 2026-11-17: caching must not change a single answer): without
+  // and with the cached evidence pack. TC_EVAL_F9_ARMS picks one or both ("plain,cached").
+  for (const arm of (process.env.TC_EVAL_F9_ARMS ?? "plain,cached").split(",").map((x) => x.trim()).filter(Boolean)) {
+    await runF9Arm(log, arm === "cached");
+  }
+}
+
+async function runF9Arm(log: Log, cache: boolean) {
   const dir = join(process.cwd(), "fixtures", "f9");
   const { _about: _a, ...facts } = JSON.parse(await readFile(join(dir, "profile.json"), "utf8")) as InferFacts & { _about?: string };
   const questions = (JSON.parse(await readFile(join(dir, "questions.json"), "utf8")) as { questions: EvalQuestion[] }).questions;
-  const inferrer = new ClaudeAnswerInferrer();
+  const inferrer = new ClaudeAnswerInferrer(undefined, { cache });
+  const arm = cache ? "cached" : "plain";
   const started = Date.now();
-  log.info("eval.f9_started", { questions: questions.length, by: inferrer.version });
-  const out = await inferrer.infer(questions, facts as InferFacts);
+  log.info("eval.f9_started", { questions: questions.length, by: inferrer.version, arm });
+  const { out, usage } = await metered(`eval:f9:${arm}`, () => inferrer.infer(questions, facts as InferFacts));
   const score = scoreAnswers(questions, out.answers);
   log.info("eval.f9_score", {
-    by: inferrer.version, passed: passesF9(score), correct: score.correct, total: score.total, wrong: score.wrong, missed: score.missed,
+    by: inferrer.version, arm, ...costLine(usage), passed: passesF9(score), correct: score.correct, total: score.total, wrong: score.wrong, missed: score.missed,
     fabricated: score.fabricated, bar: `${F9_BAR.minCorrect * 100}% right, ${F9_BAR.maxFabricated} made up`, seconds: Math.round((Date.now() - started) / 1000),
     problems: out.problems.join(" | ").slice(0, 1000),
   });
   for (const r of score.rows) {
     const a = out.answers.find((x) => x.key === r.key);
     const rej = out.rejected?.find((x) => x.key === r.key);
-    log.info("eval.f9_row", { key: r.key, result: r.result, question: r.label.slice(0, 120), answer: r.answer, expect: r.expect.map((e) => e ?? "(left for you)").join(" / "),
+    log.info("eval.f9_row", { arm, key: r.key, result: r.result, question: r.label.slice(0, 120), answer: r.answer, expect: r.expect.map((e) => e ?? "(left for you)").join(" / "),
       basis: a?.basis ?? null, rejected: rej?.why ?? null });
   }
 }
@@ -39,21 +72,56 @@ export async function runF9(log: { info: (e: string, d: Record<string, unknown>)
  * TC_EVAL_REQ=1: the posting reader's must-have recall and the rest, with the rule reader alongside
  * as a baseline. The postings are public job ads, so they may be logged.
  */
-export async function runRequirementsEval(log: { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void }) {
+export async function runRequirementsEval(log: Log) {
   const file = join(process.cwd(), "fixtures", "req-golden", "postings.json");
   const { postings } = JSON.parse(await readFile(file, "utf8")) as { postings: GoldenPosting[] };
-  const reader = new ClaudeRequirementsReader();
-  const started = Date.now();
-  log.info("eval.req_started", { postings: postings.length, by: reader.version });
-  const rows = await Promise.all(postings.map(async (p) => ({ p, out: await reader.readDetailed(p.text, p.title) })));
-  const scores = rows.map(({ p, out }) => scoreRequirements(p, out.requirements));
+  // The set is small (5 postings), so each model reads it several times and every pass is reported.
+  const passes = Math.max(1, Math.min(5, Number(process.env.TC_EVAL_REQ_PASSES ?? 3) || 3));
+  log.info("eval.req_started", { postings: postings.length, models: evalModels().join(","), passes });
   const rules = postings.map((p) => scoreRequirements(p, readRequirementsText(p.text, p.title)));
-  log.info("eval.req_score", { by: reader.version, ...summariseRequirements(scores), fell_back_to_rules: rows.filter((r) => r.out.by === "rules").map((r) => `${r.p.key}: ${r.out.problem}`).join(" | "),
-    rules_baseline: summariseRequirements(rules), seconds: Math.round((Date.now() - started) / 1000) });
-  for (const [i, s] of scores.entries()) {
-    const r = rows[i]!.out.requirements;
-    log.info("eval.req_row", { key: s.key, must: `${s.mustFound}/${s.mustTotal}`, nice: `${s.niceFound}/${s.niceTotal}`, missed: s.missed, extra: s.extra, promoted: s.promoted, demoted: s.demoted,
-      years: `${r.years ?? "none"} (${s.yearsRight ? "right" : "wrong"})`, education: s.educationRight, authorisation: s.authorisationRight });
+  log.info("eval.req_rules_baseline", summariseRequirements(rules));
+  for (const model of evalModels()) {
+    const reader = new ClaudeRequirementsReader(undefined, model);
+    for (let pass = 1; pass <= passes; pass++) {
+      const started = Date.now();
+      const { out: rows, usage } = await metered(`eval:req:${model}:${pass}`, () =>
+        Promise.all(postings.map(async (p) => ({ p, out: await reader.readDetailed(p.text, p.title) }))));
+      const scores = rows.map(({ p, out }) => scoreRequirements(p, out.requirements));
+      log.info("eval.req_score", { by: reader.version, model, pass, ...summariseRequirements(scores), ...costLine(usage),
+        fell_back_to_rules: rows.filter((r) => r.out.by === "rules").map((r) => `${r.p.key}: ${r.out.problem}`).join(" | "),
+        seconds: Math.round((Date.now() - started) / 1000) });
+      for (const [i, s] of scores.entries()) {
+        const r = rows[i]!.out.requirements;
+        log.info("eval.req_row", { model, pass, key: s.key, must: `${s.mustFound}/${s.mustTotal}`, nice: `${s.niceFound}/${s.niceTotal}`, missed: s.missed, extra: s.extra, promoted: s.promoted, demoted: s.demoted,
+          years: `${r.years ?? "none"} (${s.yearsRight ? "right" : "wrong"})`, education: s.educationRight, authorisation: s.authorisationRight });
+      }
+    }
+  }
+  await runLookupSpotCheck(log);
+}
+
+/**
+ * Spot checks for the other extraction calls, per model: where an employer lists its jobs (scored
+ * against the addresses Yong's audit verified), and the About finder on the F9 resume (kept only if
+ * it is word for word in the file, so a weaker model can only miss, never invent).
+ */
+async function runLookupSpotCheck(log: Log) {
+  const sample = VERIFIED_SOURCES.slice(0, 16);
+  const host = (u: string | null | undefined) => { try { return u ? new URL(u).host.toLowerCase() : null; } catch { return null; } };
+  const f9 = JSON.parse(await readFile(join(process.cwd(), "fixtures", "f9", "profile.json"), "utf8")) as { masterResumeText?: string };
+  for (const model of evalModels()) {
+    const lookup = new ClaudeCareersLookup(undefined, model);
+    const { out: hits, usage } = await metered(`eval:careers:${model}`, () => Promise.all(sample.map(async (v) => {
+      const got = await lookup.find(v.company);
+      return { company: v.company, right: !!got?.careersUrl && host(got.careersUrl) === host(v.url), got: got?.careersUrl ?? null };
+    })));
+    log.info("eval.careers_score", { model, right: hits.filter((h) => h.right).length, of: sample.length, ...costLine(usage),
+      wrong: hits.filter((h) => !h.right).map((h) => `${h.company}: ${h.got ?? "none"}`).join(" | ").slice(0, 1500) });
+    if (f9.masterResumeText) {
+      const finder = new ClaudeAboutFinder(undefined, model);
+      const { out: about, usage: u2 } = await metered(`eval:about:${model}`, () => finder.find(f9.masterResumeText!));
+      log.info("eval.about_find", { model, found: about ? about.slice(0, 400) : null, ...costLine(u2) });
+    }
   }
 }
 

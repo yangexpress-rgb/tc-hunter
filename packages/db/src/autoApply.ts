@@ -11,7 +11,7 @@ import {
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { hasFreshStepUp, type Session } from "./auth";
-import { answerEvidence } from "./answerFacts";
+import { answerEvidence, type AnswerEvidence } from "./answerFacts";
 import { smartAnswersStatus, type AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
 import { exportDocument } from "./documents";
@@ -263,7 +263,11 @@ export interface ApplyDeps {
 }
 
 /** What was worked out for a question this run, by its words and choices (Workday asks page by page). */
-export type InferCache = Map<string, Worked | null>;
+/**
+ * Per run: answers already worked out, by question, and the evidence pack gathered once at the start
+ * of the run, so every call of the run sends the same bytes (the cached prefix; Yong, 2026-11-17).
+ */
+export type InferCache = Map<string, Worked | null> & { evidence?: AnswerEvidence };
 /** An answer worked out for a question: filled when it passed every check, or a draft the applicant approves first. */
 export interface Worked { answer: string; basis: string; replace?: boolean; draft?: boolean }
 const cacheKey = (f: FormField) => `${f.label}|${(f.options ?? []).join("/")}`;
@@ -298,7 +302,8 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
     });
     if (!open.length) return null;
     if (!deps.inferrer && !deps.drafter) return { open, evidence: null };
-    return { open, evidence: await answerEvidence(c, dk, profile, app) };
+    cache.evidence ??= await answerEvidence(c, dk, profile, app);
+    return { open, evidence: cache.evidence };
   });
   if (!gathered) return { answers: out, problems };
   if (!gathered.evidence) {
