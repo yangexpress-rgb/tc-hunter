@@ -77,3 +77,27 @@ count), the page title. Sends nothing to TC Hunter.
 5. Sign in as usual and tick **Remember this device**, so the app keeps reading after a restart.
 6. macOS may show "Background item added: TC Hunter": that's the "open when this computer starts"
    setting. Turn it off in Where we look if you don't want it.
+
+## Careers portals read by the app (0.2, Yong 2026-11-18)
+
+Seven companies marked "Can't be read directly" have no feed the server reads, but list every job at
+stable public addresses. Their recipes are in `packages/domain/src/jobs/portals.ts` and go to the app
+with `GET /api/ext/workday` (`portals`); the app (`desktop/portal.js`) reads them read-only, 3 s apart,
+and hands them over through the same plan/result relay. The server never fetches them (health stays
+`unreadable`); a fresh read from the app stands in at the next search. Recipe fixes need no reinstall.
+
+Proof on Yong's Mac (0.2.1), app read vs the site's own total, no security check anywhere:
+
+| Company | System | Read | Site total |
+| --- | --- | --- | --- |
+| Cognizant | own site, 10 a page | 2,032 | 2,032 |
+| Coastal Cloud | Paycor, one page | 40 | 40 |
+| Deloitte US | Avature | 1,490 | 1,490 |
+| IBM | own public job search (JSON) | 3,550 | 3,550 |
+| Infor | Pinpoint postings.json | 232 | 232 |
+| Lenovo | Avature | 1,144 | 1,144 |
+| Pegasystems | own site, 30 a page | 73 | 73 |
+
+Stay "Can't be read directly": TCS and Infosys (Akamai "Access Denied" to the app on the first page),
+Slalom (reachable only by clicking its pager; Yong chose to leave it).
+A portal read short of its own count by more than 2% says so in Where we look.
