@@ -15,6 +15,7 @@
     "imapflow": "2.10.0",
     "mailparser": "3.14.1",
     "mammoth": "^1.13.0",
+    "openai": "^7.60.0",
     "pdf-lib": "^1.17.1",
     "unpdf": "^2.1.0",
     "zod": "^4.6.7"

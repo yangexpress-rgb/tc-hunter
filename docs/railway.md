@@ -197,7 +197,8 @@ the database's public address from Railway and a one-off copy of the vault onto 
   shown inside another site, and session cookies are HTTPS-only and not readable by scripts.
 - The app connects to Postgres as `tc_app`, which can't bypass per-person isolation: Yong
   can't see Leo's data or the other way round, even through a bug in a page.
-- The web app can reach out only to `api.anthropic.com` and `oauth2.googleapis.com`. The
+- The web app can reach out only to `api.anthropic.com`, `api.openai.com` (only used once an OpenAI
+  key is saved), `oauth2.googleapis.com` and `imap.gmail.com`. The
   worker can reach public HTTPS sites, never Railway's private network or other private
   addresses. Both gates run inside the container on local-only ports.
 - The container starts as root only to take ownership of the volume, then runs as an

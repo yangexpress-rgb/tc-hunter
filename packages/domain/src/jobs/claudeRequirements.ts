@@ -5,6 +5,7 @@ import { groundRequirements, readRequirementsText } from "./requirements";
 import type { Requirements, RequirementsReader } from "./types";
 import { withPostingGuard } from "../promptShared";
 import { extractModel, fallbackParams, recordUsage } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 
 /**
  * Optional AI reader for posting requirements (design 7: AI may assist parsing, never
@@ -36,13 +37,12 @@ const MAX_TOKENS = 4000;
 const EFFORT = "low" as const;
 
 export class ClaudeRequirementsReader implements RequirementsReader {
-  /** Shows on every stored reading which prompt and model made it (parser_version). */
-  readonly version: string;
   readonly model: string;
-  constructor(private client: Anthropic = new Anthropic(), model: string = extractModel()) {
+  constructor(private client: Anthropic = aiClient("extraction"), model: string = extractModel()) {
     this.model = model;
-    this.version = `req-claude-3:${model}`;
   }
+  /** Shows on every stored reading which prompt and model made it (parser_version): the run's provider's model. */
+  get version(): string { return `req-claude-3:${modelFor("extraction", this.model)}`; }
 
   async read(text: string, title: string): Promise<Requirements> {
     return (await this.readDetailed(text, title)).requirements;
@@ -111,7 +111,7 @@ export interface RequirementsBatcher {
 }
 
 export class ClaudeRequirementsBatcher implements RequirementsBatcher {
-  constructor(readonly reader: ClaudeRequirementsReader, private client: Anthropic = new Anthropic()) {}
+  constructor(readonly reader: ClaudeRequirementsReader, private client: Anthropic = aiClient("extraction")) {}
 
   async submit(items: BatchPosting[]): Promise<string> {
     const b = await this.client.beta.messages.batches.create({

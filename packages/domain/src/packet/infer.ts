@@ -5,6 +5,7 @@ import { matchChoice } from "./equivalents";
 import { NUMBER_QUESTION, type FieldType } from "./map";
 import { withPostingGuard } from "../promptShared";
 import { recordUsage, type AiPurpose } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 
 /**
  * Working out an application question's answer from what the applicant already told TC Hunter
@@ -339,9 +340,9 @@ export async function warmThenFan<T, R>(items: T[], cache: boolean, run: (item: 
 }
 
 export class ClaudeAnswerInferrer implements AnswerInferrer {
-  readonly version = `answers-claude-4:${ANSWER_MODEL}`;
+  get version(): string { return `answers-claude-4:${modelFor("judgment", ANSWER_MODEL)}`; }
   readonly cache: boolean;
-  constructor(private client: Anthropic = new Anthropic(), opts: { cache?: boolean } = {}) {
+  constructor(private client: Anthropic = aiClient("judgment"), opts: { cache?: boolean } = {}) {
     this.cache = opts.cache ?? promptCacheOn();
   }
 
@@ -367,7 +368,7 @@ export class ClaudeAnswerInferrer implements AnswerInferrer {
     }
     started();
     recordUsage(purpose, r, ANSWER_MODEL);
-    if (r.stop_reason === "refusal") throw new Error("Claude declined to answer");
+    if (r.stop_reason === "refusal") throw new Error("The AI declined to answer");
     if (!r.parsed_output) throw new Error(`no answers came back (${r.stop_reason})`);
     return r.parsed_output as z.infer<T>;
   }

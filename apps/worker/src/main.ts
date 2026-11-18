@@ -3,15 +3,16 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { aiUsageSink, createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
+import { aiProviderSource, aiUsageSink, createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeCareersLookup, ClaudeLetterProposer, ClaudeProofreader, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
-  HeldSessions, handoverHours, ClaudeRequirementsBatcher, setUsageSink, promptCacheOn,
+  HeldSessions, handoverHours, ClaudeRequirementsBatcher, setUsageSink, promptCacheOn, setAiProviderSource, setAiEventLog, currentAiProvider, aiModels,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
 import { liveServer } from "./apply/live";
-import { dumpPostings, runF9, runGenEval, runRequirementsEval } from "./evalF9";
+import { dumpPostings, evalProviders, runF9, runGenEval, runRequirementsEval } from "./evalF9";
+import { runApplyEval } from "./evalApply";
 import { stuckVerdict } from "./watchdog";
 
 const log = createLogger();
@@ -19,6 +20,10 @@ const cfg = loadConfig();
 const pool = createPool(cfg.databaseUrl);
 // The AI cost meter (Yong, 2026-11-17): every Claude call's usage goes into ai_usage and the log.
 setUsageSink(aiUsageSink(pool, log));
+// Claude or OpenAI (Yong, 2026-11-18): every AI task follows Settings › AI provider. Each piece of work
+// keeps the provider it started on; the OpenAI key comes from the vault.
+setAiProviderSource(aiProviderSource(pool, process.env.TC_VAULT_DIR ? loadSecretStore() : undefined));
+setAiEventLog((e, d) => log.warn(e, d));
 const reader: RequirementsReader = resumeReaderName() === "claude" && process.env.TC_POSTING_READER !== "rules"
   ? new ClaudeRequirementsReader() : new RulesRequirementsReader();
 // Scheduled searches read new postings in a batch at half price (Yong, 2026-11-17). On with TC_REQ_BATCH=on (until the before/after measurement is in).
@@ -94,7 +99,8 @@ let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
 async function main() {
-  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", answers: apply?.inferrer?.version ?? "off", answers_effort: apply?.inferrer ? smart.effort : undefined, essays: apply?.drafter?.version ?? "off", companies: discover.proposer.version, careers: discover.careers?.version ?? "off", req_batch: batch ? "on" : "off", prompt_cache: promptCacheOn() ? "on" : "off", search: search.map((s) => s.id).join(",") || "none" });
+  const provider = await currentAiProvider();
+  log.info("worker.started", { ai_provider: provider, ai_models: JSON.stringify(aiModels()), reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", answers: apply?.inferrer?.version ?? "off", answers_effort: apply?.inferrer ? smart.effort : undefined, essays: apply?.drafter?.version ?? "off", companies: discover.proposer.version, careers: discover.careers?.version ?? "off", req_batch: batch ? "on" : "off", prompt_cache: promptCacheOn() ? "on" : "off", search: search.map((s) => s.id).join(",") || "none" });
   if (!apply?.inferrer) log.warn("worker.smart_answers_off", { reason: smart.problem ?? "apply browser off" });
   // The F9 answer eval, once, when TC_EVAL_F9=1 is set on the server (it uses the server's own key).
   if (process.env.TC_EVAL_F9 === "1" && smart.on) {
@@ -107,6 +113,11 @@ async function main() {
   // The letter, About and essay golden sets, once, when TC_EVAL_GEN=1.
   if (process.env.TC_EVAL_GEN === "1" && smart.on) {
     runGenEval(log).catch((e) => log.warn("eval.gen_failed", { message: String((e as Error)?.message ?? e).slice(0, 300) }));
+  }
+  // One application end to end on a sandbox form, per provider (TC_EVAL_APPLY=1, providers from TC_EVAL_PROVIDERS).
+  if (process.env.TC_EVAL_APPLY === "1" && smart.on) {
+    (async () => { for (const p of evalProviders()) await runApplyEval(log, p, { executablePath: process.env.TC_CHROMIUM_PATH || undefined }); })()
+      .catch((e) => log.warn("eval.apply_failed", { message: String((e as Error)?.message ?? e).slice(0, 300) }));
   }
   // Scanned job ads, word for word, for the golden sets (TC_EVAL_DUMP_POSTINGS=1).
   if (process.env.TC_EVAL_DUMP_POSTINGS === "1") {

@@ -2,8 +2,8 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type pg from "pg";
-import { aiUsageSink, createPool, getSession, loadConfig, mustSetUpMfa, type AppConfig, type Session } from "@tc-hunter/db";
-import { createLogger, deviceLabel, setUsageSink } from "@tc-hunter/domain";
+import { aiProviderSource, aiUsageSink, createPool, getSession, loadConfig, loadSecretStore, mustSetUpMfa, type AppConfig, type Session } from "@tc-hunter/db";
+import { createLogger, deviceLabel, setAiEventLog, setAiProviderSource, setUsageSink, type SecretStore } from "@tc-hunter/domain";
 
 export const SESSION_COOKIE = "tc_session";
 export const log = createLogger();
@@ -16,8 +16,16 @@ export function app(): { pool: pg.Pool; cfg: AppConfig } {
     g.__tc = { cfg, pool: createPool(cfg.databaseUrl) };
     // Claude calls made by the web app (reading a resume, finding its About) go on the cost meter too.
     setUsageSink(aiUsageSink(g.__tc.pool, log));
+    // Which AI provider they use (Settings › AI provider), and the OpenAI key from the vault.
+    setAiProviderSource(aiProviderSource(g.__tc.pool, vault()));
+    setAiEventLog((e, d) => log.warn(e, d));
   }
   return g.__tc;
+}
+
+/** The vault, when the server has one (TC_VAULT_DIR). */
+export function vault(): SecretStore | undefined {
+  return process.env.TC_VAULT_DIR ? loadSecretStore() : undefined;
 }
 
 export async function sessionToken(): Promise<string | undefined> {

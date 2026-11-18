@@ -5,7 +5,7 @@ import {
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, bestGoalFit, candidateFit, FIT_VERSION, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, retryWaitMs, titleIsRelated, outsideCountries, scanCountries, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, portalFor, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
-  readRequirementsText, withUsageScope, type BatchPosting, type Requirements, type RequirementsBatcher,
+  readRequirementsText, withUsageScope, AI_PROVIDERS, currentAiProvider, scopedProvider, type AiProvider, type BatchPosting, type Requirements, type RequirementsBatcher,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { runTailor, type TailorDeps } from "./documents";
@@ -718,7 +718,7 @@ async function handToBatch(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, r
   await progress(`Reading ${plural(items.length, "new posting")}`);
   await withApplicant(pool, ctx, (c) => c.query(
     "INSERT INTO work_item (applicant_id, kind, payload, run_after) VALUES (app_applicant_id(), 'scan_finish', $1, now() + $2::interval)",
-    [JSON.stringify({ run_id: runId, batch_id: batchId, posting_ids: ids, sent_at: new Date().toISOString(), version: pendingVersion(batch), tally }), `${BATCH_CHECK_MINUTES} minutes`]));
+    [JSON.stringify({ run_id: runId, batch_id: batchId, posting_ids: ids, sent_at: new Date().toISOString(), version: pendingVersion(batch), tally, ...(scopedProvider() ? { ai_provider: scopedProvider() } : {}) }), `${BATCH_CHECK_MINUTES} minutes`]));
   return { ...tally.found, sources: tally.sources, search_sites: tally.searched, checked: tally.checked, newPostings: tally.fresh0, updated: tally.updated, closed: tally.closed, batched: items.length };
 }
 
@@ -804,6 +804,17 @@ const SEARCH_HOME: Record<SearchSiteId, string> = {
 /** What the worker did, for its log (no personal data): false when there was nothing to do. */
 export type WorkDone = false | { kind: string; ok: boolean; ms: number; attempt: number; result?: Record<string, unknown>; error?: string };
 
+/** The AI provider a piece of work runs on: the one it was first taken on, or the setting's now (then kept on the item). */
+async function workProvider(pool: pg.Pool, ctx: RequestContext, item: ClaimedWork): Promise<AiProvider> {
+  const kept = item.payload?.ai_provider;
+  if (AI_PROVIDERS.includes(kept)) return kept as AiProvider;
+  const now = await currentAiProvider();
+  try {
+    await withApplicant(pool, ctx, (c) => c.query("UPDATE work_item SET payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('ai_provider', $2::text) WHERE id = $1", [item.id, now]));
+  } catch { /* the run still uses it; only a retry would look again */ }
+  return now;
+}
+
 export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDone> {
   const item = (await pool.query("SELECT * FROM claim_work()")).rows[0] as ClaimedWork | undefined;
   if (!item) return false;
@@ -814,8 +825,11 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
   try {
     const p = item.payload as { discover?: boolean; fresh?: boolean; only?: unknown; fresh_ids?: unknown; scheduled?: boolean };
     const ids = (x: unknown) => (Array.isArray(x) ? x.map(String).slice(0, 50) : undefined);
+    // One piece of work runs on one AI provider (Yong, 2026-11-18): the one the setting named when it was
+    // first taken, kept on the item so a retry, or a search's batch collected later, stays on it.
+    const provider = await workProvider(pool, ctx, item);
     // Every AI call made for this item is tagged with it, so one application's or search's cost can be read back.
-    const result = await withUsageScope({ run: `${item.kind}:${item.id}` }, async () => item.kind === "scan"
+    const result = await withUsageScope({ run: `${item.kind}:${item.id}`, provider }, async () => item.kind === "scan"
       ? await runScan(pool, ctx, deps, { discover: p.discover === true, fresh: p.fresh === true, only: ids(p.only), freshIds: ids(p.fresh_ids), scheduled: p.scheduled === true })
       : item.kind === "scan_finish" ? await runScanFinish(pool, ctx, deps, item.payload as never)
       : item.kind === "email_check" ? await (deps.email ? runEmailCheck(pool, ctx, deps.email) : Promise.reject(new Error("email not set up")))

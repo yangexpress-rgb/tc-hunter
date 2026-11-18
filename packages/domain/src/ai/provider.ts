@@ -1,0 +1,116 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { OpenAiMessages } from "./openai";
+import { aiModels, scopedProvider, withUsageScope, type AiProvider, type AiTier } from "./meter";
+
+/**
+ * One setting switches every AI task between Claude and OpenAI (Yong, 2026-11-18). Every call site
+ * keeps talking to an Anthropic-shaped client; the client below routes each call to the provider the
+ * run is pinned to (or, outside a run, the provider the setting names now). Claude calls go to the
+ * Anthropic SDK unchanged; OpenAI calls go through OpenAiMessages, which carries the same prompts and
+ * the same schemas to OpenAI's Responses API.
+ */
+
+/** Where the setting and the OpenAI key come from (the worker and the web app set this once at start). */
+export interface AiProviderSource {
+  /** The provider the setting names now. */
+  provider(): Promise<AiProvider>;
+  /** The OpenAI key from the vault, or null when none is saved. Never logged. */
+  openaiKey(): Promise<string | null>;
+}
+/** Things worth a log line that only the AI layer sees: a refusal on a provider with no fallback. */
+export type AiEventLog = (event: "ai.refused" | "ai.failed", data: Record<string, unknown>) => void;
+
+// Kept on globalThis: a bundler may load this module more than once in one process.
+const holder = globalThis as unknown as { __tcAiSource?: AiProviderSource | null; __tcAiLast?: AiProvider; __tcAiLog?: AiEventLog | null };
+export function setAiProviderSource(s: AiProviderSource | null) { holder.__tcAiSource = s; }
+export function setAiEventLog(l: AiEventLog | null) { holder.__tcAiLog = l; }
+export const aiEvent: AiEventLog = (e, d) => { try { holder.__tcAiLog?.(e, d); } catch { /* logging never stops the work */ } };
+
+/** The provider the setting names now (Claude when nothing is set up, as before the switch existed). */
+export async function currentAiProvider(): Promise<AiProvider> {
+  let p: AiProvider = "claude";
+  try { p = (await holder.__tcAiSource?.provider()) ?? "claude"; } catch { p = holder.__tcAiLast ?? "claude"; }
+  holder.__tcAiLast = p;
+  return p;
+}
+
+/** The provider a call made now uses: the run's, when it is pinned; otherwise the setting's. */
+export async function activeAiProvider(): Promise<AiProvider> {
+  return scopedProvider() ?? currentAiProvider();
+}
+
+/** Runs `fn` with every AI call inside it on `provider`, whatever the setting says meanwhile. */
+export function withAiProvider<T>(provider: AiProvider, fn: () => Promise<T>): Promise<T> {
+  return withUsageScope({ provider }, fn);
+}
+
+/** Runs `fn` on the provider the setting names as it starts: a switch meanwhile only affects later work. */
+export async function pinAiProvider<T>(fn: () => Promise<T>): Promise<T> {
+  return withAiProvider(scopedProvider() ?? await currentAiProvider(), fn);
+}
+
+/**
+ * The model a tier runs on for the run in scope (for the version labels stored with what the AI made).
+ * `claudeModel` is the call site's own Claude model.
+ */
+export function modelFor(tier: AiTier, claudeModel: string): string {
+  const p = scopedProvider() ?? holder.__tcAiLast ?? "claude";
+  return p === "openai" ? aiModels().openai[tier] : claudeModel;
+}
+
+type Clients = { claude?: Anthropic; openai?: OpenAiMessages };
+const testing = globalThis as unknown as { __tcAiClients?: Clients | null };
+/** Tests only: stand-in clients for both providers. */
+export function setAiClientsForTest(c: Clients | null) { testing.__tcAiClients = c; }
+
+let anthropic: Anthropic | null = null;
+const claude = () => testing.__tcAiClients?.claude ?? (anthropic ??= new Anthropic());
+const openaiByKey = new Map<string, OpenAiMessages>();
+async function openai(): Promise<OpenAiMessages> {
+  if (testing.__tcAiClients?.openai) return testing.__tcAiClients.openai;
+  const key = await holder.__tcAiSource?.openaiKey().catch(() => null);
+  if (!key) throw new Error("No OpenAI key is saved (Settings › AI provider), so this was not read by AI");
+  let c = openaiByKey.get(key);
+  if (!c) { openaiByKey.clear(); c = new OpenAiMessages(key, aiEvent); openaiByKey.set(key, c); }
+  return c;
+}
+
+type Streamish = { once(ev: string, fn: (...a: unknown[]) => void): Streamish; finalMessage(): Promise<unknown> };
+/** A stream whose provider is still being looked up: listeners and the result wait for it. */
+function lazyStream(p: Promise<Streamish>): Streamish {
+  const s: Streamish = {
+    once(ev, fn) { p.then((x) => x.once(ev, fn), () => undefined); return s; },
+    finalMessage: () => p.then((x) => x.finalMessage()),
+  };
+  return s;
+}
+
+/** Whose batch an id is: OpenAI's start "batch_", Anthropic's "msgbatch_". */
+const batchProvider = (id: string): AiProvider => (id.startsWith("batch_") ? "openai" : "claude");
+
+/**
+ * The client every AI call site uses. `tier` picks the OpenAI model (judgment or extraction); a call
+ * that names an OpenAI model itself (the evals) gets that one.
+ */
+export function aiClient(tier: AiTier): Anthropic {
+  const route = async () => ((await activeAiProvider()) === "openai" ? { kind: "openai" as const, c: await openai() } : { kind: "claude" as const, c: claude() });
+  const messages = {
+    parse: async (params: Record<string, unknown>, opts?: unknown) => {
+      const r = await route();
+      return r.kind === "openai" ? r.c.parse(params, tier) : r.c.beta.messages.parse(params as never, opts as never);
+    },
+    stream: (params: Record<string, unknown>, opts?: unknown) => lazyStream(route().then((r) =>
+      (r.kind === "openai" ? r.c.stream(params, tier) : r.c.beta.messages.stream(params as never, opts as never)) as unknown as Streamish)),
+    batches: {
+      create: async (params: { requests: Array<{ custom_id: string; params: Record<string, unknown> }> }) => {
+        const r = await route();
+        return r.kind === "openai" ? r.c.batchCreate(params.requests, tier) : r.c.beta.messages.batches.create(params as never);
+      },
+      retrieve: async (id: string) => (batchProvider(id) === "openai" ? (await openai()).batchRetrieve(id) : claude().beta.messages.batches.retrieve(id)),
+      results: async (id: string) => (batchProvider(id) === "openai" ? (await openai()).batchResults(id) : claude().beta.messages.batches.results(id)),
+      cancel: async (id: string) => (batchProvider(id) === "openai" ? (await openai()).batchCancel(id) : claude().beta.messages.batches.cancel(id)),
+    },
+  };
+  return { beta: { messages }, messages } as unknown as Anthropic;
+}
+

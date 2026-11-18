@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { AI_GROUP, type AiGroup, type AiPurpose, type AiUsage } from "@tc-hunter/domain";
+import { AI_GROUP, type AiGroup, type AiProvider, type AiPurpose, type AiUsage } from "@tc-hunter/domain";
 
 /**
  * The AI cost meter's rows (Yong, 2026-11-17). The worker and the web app hand every Claude call's
@@ -8,13 +8,13 @@ import { AI_GROUP, type AiGroup, type AiPurpose, type AiUsage } from "@tc-hunter
 export function aiUsageSink(pool: pg.Pool, log?: { info: (e: string, d: Record<string, unknown>) => void }) {
   return async (u: AiUsage) => {
     log?.info("ai.usage", {
-      purpose: u.purpose, model: u.model, input: u.inputTokens, output: u.outputTokens, cache_write: u.cacheWriteTokens, cache_read: u.cacheReadTokens,
+      purpose: u.purpose, provider: u.provider, model: u.model, input: u.inputTokens, output: u.outputTokens, cache_write: u.cacheWriteTokens, cache_read: u.cacheReadTokens,
       batch: u.batch, test: u.test, cost_usd: Number(u.costUsd.toFixed(6)), run: u.run,
     });
     await pool.query(
-      `INSERT INTO ai_usage (purpose, model, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, batch, test, cost_usd, run)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [u.purpose, u.model.slice(0, 80), u.inputTokens, u.outputTokens, u.cacheWriteTokens, u.cacheReadTokens, u.batch, u.test, u.costUsd.toFixed(6), u.run?.slice(0, 100) ?? null]);
+      `INSERT INTO ai_usage (purpose, model, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, batch, test, cost_usd, run, provider)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [u.purpose, u.model.slice(0, 80), u.inputTokens, u.outputTokens, u.cacheWriteTokens, u.cacheReadTokens, u.batch, u.test, u.costUsd.toFixed(6), u.run?.slice(0, 100) ?? null, u.provider]);
   };
 }
 
@@ -27,6 +27,8 @@ export interface AiCostSummary {
   /** This month's calls and how much of the repeated evidence came from the cache. */
   calls: number;
   cacheShare: number | null;
+  /** This month's real use by provider (Claude / OpenAI), dollars and calls. */
+  byProvider: Partial<Record<AiProvider, { cost: number; calls: number }>>;
 }
 
 const groupOf = (purpose: string, test: boolean): AiGroup => (test ? "tests" : AI_GROUP[purpose as AiPurpose] ?? "documents");
@@ -48,7 +50,14 @@ export async function aiCostSummary(pool: pg.Pool, now = new Date()): Promise<Ai
   }
   const mine = rows.filter((r) => r.month === current && !r.test);
   const input = mine.reduce((s, r) => s + r.input, 0);
+  const byProvider: AiCostSummary["byProvider"] = {};
+  for (const r of (await pool.query(
+    `SELECT provider, sum(cost_usd)::float AS cost, count(*)::int AS calls FROM ai_usage
+      WHERE NOT test AND at >= date_trunc('month', $1::timestamptz) GROUP BY 1`, [now])).rows as Array<{ provider: AiProvider; cost: number; calls: number }>) {
+    byProvider[r.provider] = { cost: r.cost, calls: r.calls };
+  }
   return {
+    byProvider,
     thisMonth: months.get(current)?.total ?? 0,
     months: [...months.values()],
     calls: mine.reduce((s, r) => s + r.calls, 0),
@@ -59,7 +68,7 @@ export async function aiCostSummary(pool: pg.Pool, now = new Date()): Promise<Ai
 /** One run's calls (an application, a search's batch), for the before/after report. */
 export async function aiRunCost(pool: pg.Pool, run: string) {
   return (await pool.query(
-    `SELECT purpose, model, batch, count(*)::int AS calls, sum(input_tokens)::int AS input, sum(output_tokens)::int AS output,
+    `SELECT purpose, provider, model, batch, count(*)::int AS calls, sum(input_tokens)::int AS input, sum(output_tokens)::int AS output,
             sum(cache_write_tokens)::int AS cache_write, sum(cache_read_tokens)::int AS cache_read, sum(cost_usd)::float AS cost
-       FROM ai_usage WHERE run = $1 GROUP BY 1, 2, 3 ORDER BY 1`, [run])).rows;
+       FROM ai_usage WHERE run = $1 GROUP BY 1, 2, 3, 4 ORDER BY 1`, [run])).rows;
 }

@@ -5,6 +5,7 @@ import { checkLine, maskMetric, type CheckContext } from "../tailor/checker";
 import type { ProposedLine, TailorPosting, TailorProfile } from "../tailor/types";
 import { ANSWER_MODEL, cachedTurn, promptCacheOn } from "./infer";
 import { recordUsage } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 import { VOICE_RULES, withPostingGuard } from "../promptShared";
 
 /**
@@ -102,9 +103,9 @@ Draft, citing s3:
 Situation in one line, what they did, the result with its number, and nothing the story doesn't say.`);
 
 export class ClaudeEssayDrafter implements EssayDrafter {
-  readonly version = `essay-claude-2:${ANSWER_MODEL}`;
+  get version(): string { return `essay-claude-2:${modelFor("judgment", ANSWER_MODEL)}`; }
   readonly cache: boolean;
-  constructor(private client: Anthropic = new Anthropic(), opts: { cache?: boolean } = {}) {
+  constructor(private client: Anthropic = aiClient("judgment"), opts: { cache?: boolean } = {}) {
     this.cache = opts.cache ?? promptCacheOn();
   }
 
@@ -132,7 +133,7 @@ export class ClaudeEssayDrafter implements EssayDrafter {
       messages: [{ role: "user", content: cachedTurn(`<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>\n<motivation>${JSON.stringify(motivation)}</motivation>`, `\n<questions>${JSON.stringify(questions.map((q) => ({ key: q.key, question: q.label, ...(TIME_QUESTION.test(q.label) ? { shape: "STAR" } : {}), ...(q.maxChars ? { max_chars: q.maxChars } : {}) })))}</questions>`, this.cache) }],
     } as never) as unknown as { stop_reason: string; model: string; usage: never; parsed_output: z.infer<typeof DraftOut> | null };
     recordUsage("essays", r, ANSWER_MODEL);
-    if (r.stop_reason === "refusal") throw new Error("Claude declined to draft");
+    if (r.stop_reason === "refusal") throw new Error("The AI declined to draft");
     if (!r.parsed_output) throw new Error(`no drafts came back (${r.stop_reason})`);
     return r.parsed_output.drafts.filter((d) => questions.some((q) => q.key === d.key));
   }
