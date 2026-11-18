@@ -118,7 +118,10 @@ export default async function SourcesPage(props: PageProps) {
       const waitUntil = failed && code === "rate_limited" && s.retry_after_at && new Date(s.retry_after_at).getTime() > Date.now() ? new Date(s.retry_after_at) : null;
       const status = unreadable ? "Can't be read directly" : never ? "Not searched yet" : suspect ? "Check the address"
         : (failed || empty) && unproven && s.kind !== "job_search" && s.kind !== "pasted_link" ? "Needs a correct address"
+<<<<<<< HEAD
         : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? "Blocked by a security check"
+=======
+>>>>>>> b833a9d3759436b44b63b932103b56485c712c10
         : waitUntil ? "Waiting to try again" : failed && code === "too_big" ? "Too large to read"
         : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded";
       return { key: s.id, name: s.name, detail, kind, listed: s.last_listed,
@@ -126,7 +129,10 @@ export default async function SourcesPage(props: PageProps) {
         reason: unreadable ? String(s.health_reason ?? "Its hiring system has no public feed we can read.")
           : suspect ? `SmartRecruiters answers "0 jobs" for company names it doesn't know, so "${shortUrl(s.url)}" may not be ${s.name}'s exact name there. If you know its SmartRecruiters address, add it below.`
           : never ? "Waiting for the next search."
+<<<<<<< HEAD
           : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? `${whyText(s.health_reason, s.kind)} Next try: ${waitUntil.toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" })}.`
+=======
+>>>>>>> b833a9d3759436b44b63b932103b56485c712c10
           : waitUntil ? `The site asked us to slow down, so we leave it alone until ${waitUntil.toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" })} and try again then.${why(s.health_reason, s.kind, 0).replace(/^[^(]*/, " ")}`
           : failed ? why(s.health_reason, s.kind, Number(s.failures ?? 0)) : advice ? advice.reason
           : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.` : "",
@@ -142,7 +148,11 @@ export default async function SourcesPage(props: PageProps) {
       reason: "No alert emails read yet.", link: { href: "/profile/goals#linkedin", label: "How to turn it on" } }] : []),
   ];
   const KINDS = [...new Set(table.map((r) => r.kind))].sort();
+<<<<<<< HEAD
   const STATUSES = ["Succeeded", "None fit yet", "No jobs found", "Check the address", "Needs a correct address", "Too large to read", "Failed", "Blocked by a security check", "Waiting to try again", "Can't read", "Can't be read directly", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
+=======
+  const STATUSES = ["Succeeded", "None fit yet", "No jobs found", "Check the address", "Needs a correct address", "Too large to read", "Failed", "Waiting to try again", "Can't read", "Can't be read directly", "Off", "Not searched yet", "Not set up"].filter((x) => table.some((r) => r.status === x));
+>>>>>>> b833a9d3759436b44b63b932103b56485c712c10
   const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
   const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
   const fQ = (params.q ?? "").slice(0, 60);
@@ -152,13 +162,22 @@ export default async function SourcesPage(props: PageProps) {
   const BACK = "/jobs/sources#status";
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "name") as (typeof COLS)[number][0];
   const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "listed" || sortBy === "last" ? "desc" : "asc";
+<<<<<<< HEAD
   const RANK: Record<string, number> = { Failed: 0, "Needs a correct address": 0.1, "Check the address": 0.2, "Too large to read": 0.25, "Waiting to try again": 2.5, "Blocked by a security check": 0.4, "No jobs found": 0.3, "Can't be read directly": 3.8, "Can't read": 0.5, Off: 1, "None fit yet": 3.5, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
+=======
+  const RANK: Record<string, number> = { Failed: 0, "Needs a correct address": 0.1, "Check the address": 0.2, "Too large to read": 0.25, "Waiting to try again": 2.5, "No jobs found": 0.3, "Can't be read directly": 3.8, "Can't read": 0.5, Off: 1, "None fit yet": 3.5, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
+>>>>>>> b833a9d3759436b44b63b932103b56485c712c10
   const val = (r: StatusRow): string | number => sortBy === "status" ? RANK[r.status] ?? 9 : sortBy === "last" ? r.last ? new Date(r.last).getTime() : -1
     : sortBy === "jobs" ? r.jobs : sortBy === "listed" ? r.listed ?? -1 : String(r[sortBy] ?? "").toLowerCase();
   const shown = table.filter((r) => (!fKind || r.kind === fKind) && (!fStatus || r.status === fStatus) && (!fQ || `${r.name} ${r.detail ?? ""}`.toLowerCase().includes(fQ.toLowerCase())))
     .sort((a, b) => { const x = val(a), y = val(b); return (x < y ? -1 : x > y ? 1 : a.name.localeCompare(b.name)) * (dir === "asc" ? 1 : -1); });
+<<<<<<< HEAD
   const bad = (st: string) => st === "Failed" || st === "Blocked by a security check" || st === "Too large to read" || st === "Off" || st === "Can't read" || st === "No jobs found" || st === "Needs a correct address" || st === "Check the address";
   const failedCount = table.filter((r) => r.status === "Failed" || r.status === "Blocked by a security check" || r.status === "Too large to read" || r.status === "Can't read" || r.status === "Needs a correct address" || r.status === "Check the address").length;
+=======
+  const bad = (st: string) => st === "Failed" || st === "Too large to read" || st === "Off" || st === "Can't read" || st === "No jobs found" || st === "Needs a correct address" || st === "Check the address";
+  const failedCount = table.filter((r) => r.status === "Failed" || r.status === "Too large to read" || r.status === "Can't read" || r.status === "Needs a correct address" || r.status === "Check the address").length;
+>>>>>>> b833a9d3759436b44b63b932103b56485c712c10
   const emptyCount = table.filter((r) => r.status === "No jobs found").length;
   const href = (over: Record<string, string>) => {
     const p = new URLSearchParams();
