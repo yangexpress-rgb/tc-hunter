@@ -83,8 +83,9 @@ describe("F3 — deduplication", () => {
   it("scanning again adds nothing new", async () => {
     clock = new Date("2026-11-14T12:00:00Z");
     await scan(yong);
-    expect((await ownerQuery("SELECT count(*)::int AS n FROM job_posting")).rows[0].n).toBe(2);
-    expect((await ownerQuery("SELECT count(*)::int AS n FROM job_posting_source")).rows[0].n).toBe(3);
+    // Only jobs related to the roles wanted are taken in (the board's other job is listed, not kept).
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM job_posting")).rows[0].n).toBe(1);
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM job_posting_source")).rows[0].n).toBe(2);
   });
 });
 

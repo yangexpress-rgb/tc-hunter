@@ -106,7 +106,9 @@ export default async function SourcesPage(props: PageProps) {
       // SmartRecruiters answers 0 jobs for a name it doesn't know (Yong's audit: "SAP"), so 0 there is suspect.
       const suspect = empty && s.kind === "smartrecruiters";
       // Never read with any jobs, from the day it was added: the address itself is likely wrong.
-      const unproven = !s.last_success_at || (empty && s.open_jobs === 0);
+      // A site that turns us away isn't a wrong address (Yong's verified Workday sites answer 429).
+      const turnedAway = /^(rate_limited|refused|robots)/.test(String(s.health_reason ?? ""));
+      const unproven = (!s.last_success_at && !turnedAway) || (empty && s.open_jobs === 0);
       const status = unreadable ? "Can't be read directly" : never ? "Not searched yet" : suspect ? "Check the address"
         : (failed || empty) && unproven && s.kind !== "job_search" && s.kind !== "pasted_link" ? "Needs a correct address"
         : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded";
