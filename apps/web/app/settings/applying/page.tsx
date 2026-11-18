@@ -1,8 +1,9 @@
-import { getApplySettings, getProfile, hasFreshStepUp, listDevices, smartAnswersStatus } from "@tc-hunter/db";
-import { STANDING_ANSWERS, t, type ApplyMode } from "@tc-hunter/domain";
+import { AI_PROVIDER_REFUSALS, aiProviderView, getApplySettings, getProfile, hasFreshStepUp, listDevices, smartAnswersStatus, type AiProviderRefusal } from "@tc-hunter/db";
+import { AI_PROVIDER_LABEL, AI_PROVIDERS, STANDING_ANSWERS, t, type ApplyMode } from "@tc-hunter/domain";
 import { headers } from "next/headers";
 import { Details, Status } from "@/components/Layers";
-import { app, requireSession } from "@/lib/server";
+import { app, requireSession, vault } from "@/lib/server";
+import { aiProviderAction, openAiKeyAction } from "../ai-actions";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { PairBrowser } from "../PairBrowser";
 import { removeBrowserAction } from "../browser-actions";
@@ -26,12 +27,63 @@ export default async function ApplyingSettingsPage(props: PageProps) {
     { id: "check_answers", title: "Let me check the answers first", does: "TC Hunter fills in the form, then waits for you to approve its answers. After that it presses Submit by itself." },
     { id: "approve_each", title: "Approve each application (recommended)", does: "You approve the answers, and you approve sending each application, with a quick \"confirm it's you\"." },
   ];
-  const smart = smartAnswersStatus();
+  const ai = await aiProviderView(pool, vault());
+  const smart = smartAnswersStatus(process.env, ai.provider);
+  const aiDone: Record<string, string> = {
+    switched_claude: "Switched to Claude. New work uses it from now on; anything already running finishes on the provider it started with.",
+    switched_openai: "Switched to OpenAI. New work uses it from now on; anything already running finishes on the provider it started with.",
+    key_saved: "OpenAI key saved. OpenAI checked it and it works.",
+    key_removed: "OpenAI key removed.",
+  };
+  const aiNote = typeof params.ai === "string" ? params.ai : null;
+  const aiRefused = aiNote && aiNote in AI_PROVIDER_REFUSALS ? AI_PROVIDER_REFUSALS[aiNote as AiProviderRefusal] : aiNote === "failed" ? "That didn't work. Try again in a minute." : null;
   const h = await headers();
   const origin = process.env.TC_PUBLIC_ORIGIN || `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost"}`;
   return (
     <>
       <SettingsHeader title="Applying for you" params={params} saved={saved} error={error} />
+      <section className="card" id="ai-provider">
+        <h2>AI provider</h2>
+        <p className="muted">Every AI task in TC Hunter — reading jobs, answering questions, writing documents — uses the provider you pick here.</p>
+        {aiNote && aiDone[aiNote] ? <Status>{aiDone[aiNote]}</Status> : null}
+        {aiRefused ? <p className="error">{aiRefused}</p> : null}
+        <form action={aiProviderAction} className="stack">
+          <fieldset>
+            <legend>AI provider: {AI_PROVIDER_LABEL[ai.provider]}</legend>
+            {AI_PROVIDERS.map((p) => (
+              <label key={p} className="choice">
+                <input type="radio" name="provider" value={p} defaultChecked={ai.provider === p} disabled={!fresh} /> <strong>{AI_PROVIDER_LABEL[p]}</strong>{" "}
+                {ai.connected[p] ? <span className="ok small">Connected</span> : <span className="error small">Not connected</span>}
+              </label>
+            ))}
+          </fieldset>
+          {fresh ? <button>Save</button> : <NeedsConfirm what="Changing this" />}
+        </form>
+        <Details summary="OpenAI key">
+          <p className="small">Paste a key from your OpenAI account (platform.openai.com). TC Hunter checks it with OpenAI, then locks it in the server&apos;s vault. It is never shown again, here or anywhere.</p>
+          {fresh ? (
+            <>
+              <form action={openAiKeyAction} className="inline-form">
+                <label className="small">OpenAI key<input name="key" type="password" autoComplete="off" placeholder={ai.connected.openai ? "Connected: paste a new key to replace it" : "sk-..."} /></label>
+                <button className="small">Save key</button>
+              </form>
+              {ai.connected.openai ? (
+                <form action={openAiKeyAction} className="inline-form"><input type="hidden" name="remove" value="1" /><button className="small secondary">Remove the OpenAI key</button></form>
+              ) : null}
+            </>
+          ) : <NeedsConfirm what="Adding a key" />}
+          <p className="muted small">The Claude key stays where it is today: ANTHROPIC_API_KEY on Railway.</p>
+        </Details>
+        <Details summary="Which model each kind of work uses">
+          <table>
+            <thead><tr><th scope="col">Work</th><th scope="col">Claude</th><th scope="col">OpenAI</th></tr></thead>
+            <tbody>
+              <tr><th scope="row">Answers, the check of answers, essays, resumes, cover letters, reading your resume</th><td>{ai.models.claude.judgment}</td><td>{ai.models.openai.judgment}</td></tr>
+              <tr><th scope="row">Reading job requirements, finding your About, finding careers sites</th><td>{ai.models.claude.extraction}</td><td>{ai.models.openai.extraction}</td></tr>
+            </tbody>
+          </table>
+        </Details>
+      </section>
       <section className="card" id="applying">
         <h2>Applying for you</h2>
         {params.apply === "mode" ? <Status>Saved. This applies to the next application TC Hunter starts.</Status> : null}
@@ -39,7 +91,7 @@ export default async function ApplyingSettingsPage(props: PageProps) {
         {params.apply === "standing_off" ? <Status>Turned off. TC Hunter will stop and ask you instead.</Status> : null}
         <div className="smart-answers" id="smart-answers" role="status">
           {smart.on ? (
-            <p><strong>Smart answers: on</strong> <span className="muted">· model {smart.model} · effort {smart.effort} · every answer checked against your profile</span></p>
+            <p><strong>Smart answers: on · {AI_PROVIDER_LABEL[smart.provider]} · {smart.model}</strong> <span className="muted">· effort {smart.effort} · every answer checked against your profile</span></p>
           ) : (
             <p className="error"><strong>Smart answers: off.</strong> {smart.problem} Applications still run, but only on answers the rules are sure of.</p>
           )}
@@ -122,7 +174,7 @@ export default async function ApplyingSettingsPage(props: PageProps) {
         </Details>
       </section>
 
-      <ConfirmCard session={session} back="/settings/applying" why="Changing how TC Hunter applies, turning on an answer it gives for you, or pairing a browser needs a fresh check that it's you." />
+      <ConfirmCard session={session} back="/settings/applying" why="Changing the AI provider or its key, changing how TC Hunter applies, turning on an answer it gives for you, or pairing a browser needs a fresh check that it's you." />
     </>
   );
 }

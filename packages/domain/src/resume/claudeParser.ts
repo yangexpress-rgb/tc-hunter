@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { recordUsage } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 import { stripContactDetails } from "./pii";
 import { parseResumeText } from "./rulesParser";
 import { contactBlockEnd, DIGEST_TARGETS } from "./digest";
@@ -121,11 +122,11 @@ export interface ReadTrace { parts: Record<string, string>; unplacedBefore: numb
   raw: { roles: number; schools: number; certs: number; awards: number; skills: number } }
 
 export class ClaudeResumeParser implements ResumeParser {
-  readonly name = `claude:${MODEL}`;
+  get name(): string { return `claude:${modelFor("judgment", MODEL)}`; }
   readonly sortsSections = true;
   /** Filled in by the last parse(). */
   trace: ReadTrace = { parts: {}, unplacedBefore: 0, unplacedAfter: 0, sentChars: 0, raw: { roles: 0, schools: 0, certs: 0, awards: 0, skills: 0 } };
-  constructor(private client: Anthropic = new Anthropic(), private names: string[] = [], private prompt: string | null = null) {}
+  constructor(private client: Anthropic = aiClient("judgment"), private names: string[] = [], private prompt: string | null = null) {}
 
   private async ask<T extends z.ZodTypeAny>(part: string, schema: T, system: string, content: string): Promise<z.infer<T> | null> {
     try {

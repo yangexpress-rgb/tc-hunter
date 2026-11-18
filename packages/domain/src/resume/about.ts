@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { extractModel, fallbackParams, recordUsage } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 import { headingOf } from "./rulesParser";
 
 /**
@@ -104,12 +105,11 @@ If the resume has no such summary, answer null.`;
 const FinderOut = z.object({ summary: z.string().nullable().describe("the summary copied exactly, or null") });
 
 export class ClaudeAboutFinder implements AboutFinder {
-  readonly version: string;
   readonly model: string;
-  constructor(private client: Anthropic = new Anthropic(), model: string = extractModel()) {
+  constructor(private client: Anthropic = aiClient("extraction"), model: string = extractModel()) {
     this.model = model;
-    this.version = `about-claude-2:${model}`;
   }
+  get version(): string { return `about-claude-2:${modelFor("extraction", this.model)}`; }
   async find(resumeText: string): Promise<string | null> {
     try {
       const r = await this.client.beta.messages.parse({

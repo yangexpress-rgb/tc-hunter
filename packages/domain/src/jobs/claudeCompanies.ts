@@ -3,6 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import type { CompanyIdea, CompanyProposer, GoalBrief } from "./discover";
 import { extractModel, fallbackParams, JUDGMENT_MODEL, recordUsage } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 
 /**
  * Suggests employers worth watching for one goal. It sees only the goal (roles,
@@ -31,12 +32,11 @@ const Output = z.object({
 const SYSTEM = `You help one person find employers to watch for job openings. Given a career goal, list real employers that hire for it, mixing well-known and mid-size employers, and favour employers that hire in the places named. When countries are given, suggest only employers that hire in those countries. Include every company the person named. For each employer, give the public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and its careers page if you know it (for employers that use Workday, give their myworkdayjobs.com careers address). Never invent employers. Never suggest job aggregators or recruiting agencies.`;
 
 export class ClaudeCompanyProposer implements CompanyProposer {
-  readonly version: string;
   readonly model: string;
-  constructor(private client: Anthropic = new Anthropic(), model: string = proposerModel()) {
+  constructor(private client: Anthropic = aiClient("judgment"), model: string = proposerModel()) {
     this.model = model;
-    this.version = `companies-claude-3:${model}`;
   }
+  get version(): string { return `companies-claude-3:${modelFor("judgment", this.model)}`; }
 
   async propose(goal: GoalBrief, avoid: string[], n: number): Promise<CompanyIdea[]> {
     const lines = [
@@ -87,12 +87,11 @@ const Where = z.object({
  * place to look: TC Hunter then reads that site itself and uses a job only if it is really there.
  */
 export class ClaudeCareersLookup {
-  readonly version: string;
   readonly model: string;
-  constructor(private client: Anthropic = new Anthropic(), model: string = extractModel()) {
+  constructor(private client: Anthropic = aiClient("extraction"), model: string = extractModel()) {
     this.model = model;
-    this.version = `careers-claude-2:${model}`;
   }
+  get version(): string { return `careers-claude-2:${modelFor("extraction", this.model)}`; }
 
   async find(employer: string, notHere: string[] = []): Promise<{ boards: Array<{ kind: "greenhouse" | "lever" | "ashby" | "smartrecruiters"; token: string }>; careersUrl: string | null } | null> {
     try {

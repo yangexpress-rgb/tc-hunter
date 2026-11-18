@@ -6,6 +6,7 @@ import {
   ClaudeAnswerInferrer, ClaudeRequirementsReader, F9_BAR, passesF9, readRequirementsText, scoreAnswers, scoreRequirements, summariseRequirements,
   type EvalQuestion, type GoldenPosting, type InferFacts,
   ClaudeAboutFinder, ClaudeCareersLookup, EXTRACT_MODEL_DEFAULT, VERIFIED_SOURCES, cacheHitRate, setUsageSink, withUsageScope, type AiUsage, type UsageSink,
+  AI_PROVIDERS, withAiProvider, type AiProvider,
 } from "@tc-hunter/domain";
 
 type Log = { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void };
@@ -29,7 +30,19 @@ const costLine = (usage: AiUsage[]) => ({
   cache_hit: Math.round(cacheHitRate(usage) * 1000) / 10,
 });
 /** The models the extraction evals compare (Yong, 2026-11-17: the smaller tier first, then the mid tier, Opus as the baseline). */
-const evalModels = () => (process.env.TC_EVAL_MODELS ?? `${EXTRACT_MODEL_DEFAULT},claude-haiku-5-5,claude-sonnet-5-5`).split(",").map((m) => m.trim()).filter(Boolean);
+const evalModels = (provider: AiProvider = "claude") => (provider === "openai"
+  ? process.env.TC_EVAL_OPENAI_MODELS ?? "gpt-5.4-mini,gpt-5.4,gpt-5.5"
+  : process.env.TC_EVAL_MODELS ?? `${EXTRACT_MODEL_DEFAULT},claude-haiku-5-5,claude-sonnet-5-5`).split(",").map((m) => m.trim()).filter(Boolean);
+
+/**
+ * The providers an eval runs on (Yong, 2026-11-18: every number side by side for Claude and OpenAI).
+ * TC_EVAL_PROVIDERS="claude,openai"; Claude only when unset, as before. Each provider's run is pinned to it.
+ */
+export const evalProviders = (): AiProvider[] => (process.env.TC_EVAL_PROVIDERS ?? "claude").split(",").map((x) => x.trim())
+  .filter((x): x is AiProvider => AI_PROVIDERS.includes(x as AiProvider));
+async function eachProvider(fn: (p: AiProvider) => Promise<void>) {
+  for (const p of evalProviders()) await withAiProvider(p, () => fn(p));
+}
 
 /**
  * The F9 answer eval, run once on the server with its own Anthropic key (Yong, 2026-11-17: "run it
@@ -39,30 +52,32 @@ const evalModels = () => (process.env.TC_EVAL_MODELS ?? `${EXTRACT_MODEL_DEFAULT
 export async function runF9(log: Log) {
   // Both arms on the same fixture (Yong, 2026-11-17: caching must not change a single answer): without
   // and with the cached evidence pack. TC_EVAL_F9_ARMS picks one or both ("plain,cached").
-  for (const arm of (process.env.TC_EVAL_F9_ARMS ?? "plain,cached").split(",").map((x) => x.trim()).filter(Boolean)) {
-    await runF9Arm(log, arm === "cached");
-  }
+  await eachProvider(async (provider) => {
+    for (const arm of (process.env.TC_EVAL_F9_ARMS ?? "plain,cached").split(",").map((x) => x.trim()).filter(Boolean)) {
+      await runF9Arm(log, arm === "cached", provider);
+    }
+  });
 }
 
-async function runF9Arm(log: Log, cache: boolean) {
+async function runF9Arm(log: Log, cache: boolean, provider: AiProvider) {
   const dir = join(process.cwd(), "fixtures", "f9");
   const { _about: _a, ...facts } = JSON.parse(await readFile(join(dir, "profile.json"), "utf8")) as InferFacts & { _about?: string };
   const questions = (JSON.parse(await readFile(join(dir, "questions.json"), "utf8")) as { questions: EvalQuestion[] }).questions;
   const inferrer = new ClaudeAnswerInferrer(undefined, { cache });
   const arm = cache ? "cached" : "plain";
   const started = Date.now();
-  log.info("eval.f9_started", { questions: questions.length, by: inferrer.version, arm });
-  const { out, usage } = await metered(`eval:f9:${arm}`, () => inferrer.infer(questions, facts as InferFacts));
+  log.info("eval.f9_started", { provider, questions: questions.length, by: inferrer.version, arm });
+  const { out, usage } = await metered(`eval:f9:${provider}:${arm}`, () => inferrer.infer(questions, facts as InferFacts));
   const score = scoreAnswers(questions, out.answers);
   log.info("eval.f9_score", {
-    by: inferrer.version, arm, ...costLine(usage), passed: passesF9(score), correct: score.correct, total: score.total, wrong: score.wrong, missed: score.missed,
+    provider, by: inferrer.version, arm, ...costLine(usage), passed: passesF9(score), correct: score.correct, total: score.total, wrong: score.wrong, missed: score.missed,
     fabricated: score.fabricated, bar: `${F9_BAR.minCorrect * 100}% right, ${F9_BAR.maxFabricated} made up`, seconds: Math.round((Date.now() - started) / 1000),
     problems: out.problems.join(" | ").slice(0, 1000),
   });
   for (const r of score.rows) {
     const a = out.answers.find((x) => x.key === r.key);
     const rej = out.rejected?.find((x) => x.key === r.key);
-    log.info("eval.f9_row", { arm, key: r.key, result: r.result, question: r.label.slice(0, 120), answer: r.answer, expect: r.expect.map((e) => e ?? "(left for you)").join(" / "),
+    log.info("eval.f9_row", { provider, arm, key: r.key, result: r.result, question: r.label.slice(0, 120), answer: r.answer, expect: r.expect.map((e) => e ?? "(left for you)").join(" / "),
       basis: a?.basis ?? null, rejected: rej?.why ?? null });
   }
 }
@@ -77,27 +92,29 @@ export async function runRequirementsEval(log: Log) {
   const { postings } = JSON.parse(await readFile(file, "utf8")) as { postings: GoldenPosting[] };
   // The set is small (5 postings), so each model reads it several times and every pass is reported.
   const passes = Math.max(1, Math.min(5, Number(process.env.TC_EVAL_REQ_PASSES ?? 3) || 3));
-  log.info("eval.req_started", { postings: postings.length, models: evalModels().join(","), passes });
+  log.info("eval.req_started", { postings: postings.length, providers: evalProviders().join(","), passes });
   const rules = postings.map((p) => scoreRequirements(p, readRequirementsText(p.text, p.title)));
   log.info("eval.req_rules_baseline", summariseRequirements(rules));
-  for (const model of evalModels()) {
+  await eachProvider(async (provider) => {
+  for (const model of evalModels(provider)) {
     const reader = new ClaudeRequirementsReader(undefined, model);
     for (let pass = 1; pass <= passes; pass++) {
       const started = Date.now();
-      const { out: rows, usage } = await metered(`eval:req:${model}:${pass}`, () =>
+      const { out: rows, usage } = await metered(`eval:req:${provider}:${model}:${pass}`, () =>
         Promise.all(postings.map(async (p) => ({ p, out: await reader.readDetailed(p.text, p.title) }))));
       const scores = rows.map(({ p, out }) => scoreRequirements(p, out.requirements));
-      log.info("eval.req_score", { by: reader.version, model, pass, ...summariseRequirements(scores), ...costLine(usage),
+      log.info("eval.req_score", { provider, by: reader.version, model, pass, ...summariseRequirements(scores), ...costLine(usage),
         fell_back_to_rules: rows.filter((r) => r.out.by === "rules").map((r) => `${r.p.key}: ${r.out.problem}`).join(" | "),
         seconds: Math.round((Date.now() - started) / 1000) });
       for (const [i, s] of scores.entries()) {
         const r = rows[i]!.out.requirements;
-        log.info("eval.req_row", { model, pass, key: s.key, must: `${s.mustFound}/${s.mustTotal}`, nice: `${s.niceFound}/${s.niceTotal}`, missed: s.missed, extra: s.extra, promoted: s.promoted, demoted: s.demoted,
+        log.info("eval.req_row", { provider, model, pass, key: s.key, must: `${s.mustFound}/${s.mustTotal}`, nice: `${s.niceFound}/${s.niceTotal}`, missed: s.missed, extra: s.extra, promoted: s.promoted, demoted: s.demoted,
           years: `${r.years ?? "none"} (${s.yearsRight ? "right" : "wrong"})`, education: s.educationRight, authorisation: s.authorisationRight });
       }
     }
   }
-  await runLookupSpotCheck(log);
+  await runLookupSpotCheck(log, provider);
+  });
 }
 
 /**
@@ -105,22 +122,22 @@ export async function runRequirementsEval(log: Log) {
  * against the addresses Yong's audit verified), and the About finder on the F9 resume (kept only if
  * it is word for word in the file, so a weaker model can only miss, never invent).
  */
-async function runLookupSpotCheck(log: Log) {
+async function runLookupSpotCheck(log: Log, provider: AiProvider) {
   const sample = VERIFIED_SOURCES.slice(0, 16);
   const host = (u: string | null | undefined) => { try { return u ? new URL(u).host.toLowerCase() : null; } catch { return null; } };
   const f9 = JSON.parse(await readFile(join(process.cwd(), "fixtures", "f9", "profile.json"), "utf8")) as { masterResumeText?: string };
-  for (const model of evalModels()) {
+  for (const model of evalModels(provider)) {
     const lookup = new ClaudeCareersLookup(undefined, model);
-    const { out: hits, usage } = await metered(`eval:careers:${model}`, () => Promise.all(sample.map(async (v) => {
+    const { out: hits, usage } = await metered(`eval:careers:${provider}:${model}`, () => Promise.all(sample.map(async (v) => {
       const got = await lookup.find(v.company);
       return { company: v.company, right: !!got?.careersUrl && host(got.careersUrl) === host(v.url), got: got?.careersUrl ?? null };
     })));
-    log.info("eval.careers_score", { model, right: hits.filter((h) => h.right).length, of: sample.length, ...costLine(usage),
+    log.info("eval.careers_score", { provider, model, right: hits.filter((h) => h.right).length, of: sample.length, ...costLine(usage),
       wrong: hits.filter((h) => !h.right).map((h) => `${h.company}: ${h.got ?? "none"}`).join(" | ").slice(0, 1500) });
     if (f9.masterResumeText) {
       const finder = new ClaudeAboutFinder(undefined, model);
-      const { out: about, usage: u2 } = await metered(`eval:about:${model}`, () => finder.find(f9.masterResumeText!));
-      log.info("eval.about_find", { model, found: about ? about.slice(0, 400) : null, ...costLine(u2) });
+      const { out: about, usage: u2 } = await metered(`eval:about:${provider}:${model}`, () => finder.find(f9.masterResumeText!));
+      log.info("eval.about_find", { provider, model, found: about ? about.slice(0, 400) : null, ...costLine(u2) });
     }
   }
 }
@@ -154,30 +171,35 @@ export async function dumpPostings(pool: { query: (sql: string) => Promise<{ row
  * packages/domain/src/tailor/genEval.ts, and logged with its text so a person can read it too.
  */
 export async function runGenEval(log: { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void }) {
+  await eachProvider((provider) => metered(`eval:gen:${provider}`, () => runGenEvalOn(log, provider)).then(({ usage }) =>
+    log.info("eval.gen_cost", { provider, ...costLine(usage) })));
+}
+
+async function runGenEvalOn(log: { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void }, provider: AiProvider) {
   const dir = join(process.cwd(), "fixtures", "gen-golden");
   const { _about: _p, ...profile } = JSON.parse(await readFile(join(dir, "profile.json"), "utf8")) as TailorProfile & { _about?: string };
   const { cases } = JSON.parse(await readFile(join(dir, "cases.json"), "utf8")) as { cases: GenCase[] };
   const letter = new ClaudeLetterProposer(), resume = new ClaudeResumeProposer(), essays = new ClaudeEssayDrafter();
   const started = Date.now();
-  log.info("eval.gen_started", { cases: cases.length, letter: letter.version, about: resume.version, essays: essays.version });
+  log.info("eval.gen_started", { provider, cases: cases.length, letter: letter.version, about: resume.version, essays: essays.version });
   const rows: RubricResult[] = [];
   const show = (r: RubricResult, by: string, text: string) => {
     rows.push(r);
-    log.info("eval.gen_row", { case: r.key, writer: r.writer, by, passed: r.passed, total: r.total,
+    log.info("eval.gen_row", { provider, case: r.key, writer: r.writer, by, passed: r.passed, total: r.total,
       failed: r.checks.filter((c) => !c.pass).map((c) => `${c.check}${c.detail ? ` [${c.detail}]` : ""}`).join(" | "), text: text.slice(0, 3000) });
   };
   await Promise.all(cases.map(async (c) => {
     const posting = genPosting(c, profile);
     const [l, r, e] = await Promise.allSettled([letter.propose(profile, posting), resume.propose(profile, posting), essays.draft(c.essays, profile, posting)]);
     if (l.status === "fulfilled") show(letterRubric(c.key, profile, posting, l.value.proposal), l.value.meta.proposer, l.value.proposal.paragraphs.map((p) => `[${p.role}] ${p.text}`).join("\n\n"));
-    else log.warn("eval.gen_failed", { case: c.key, writer: "letter", message: String(l.reason).slice(0, 200) });
+    else log.warn("eval.gen_failed", { provider, case: c.key, writer: "letter", message: String(l.reason).slice(0, 200) });
     if (r.status === "fulfilled") show(aboutRubric(c.key, profile, posting, r.value.proposal), r.value.meta.proposer, r.value.proposal.summary?.text ?? "(none)");
-    else log.warn("eval.gen_failed", { case: c.key, writer: "about", message: String(r.reason).slice(0, 200) });
+    else log.warn("eval.gen_failed", { provider, case: c.key, writer: "about", message: String(r.reason).slice(0, 200) });
     if (e.status === "fulfilled") for (const q of c.essays) {
       const d = e.value.find((x) => x.key === q.key);
       show(essayRubric(c.key, profile, posting, q, d?.paragraphs ?? []), essays.version, (d?.paragraphs ?? []).map((p) => p.text).join("\n\n"));
     }
-    else log.warn("eval.gen_failed", { case: c.key, writer: "essay", message: String(e.reason).slice(0, 200) });
+    else log.warn("eval.gen_failed", { provider, case: c.key, writer: "essay", message: String(e.reason).slice(0, 200) });
   }));
-  log.info("eval.gen_score", { ...Object.fromEntries(Object.entries(summariseRubric(rows)).map(([k, v]) => [k, JSON.stringify(v)])), seconds: Math.round((Date.now() - started) / 1000) });
+  log.info("eval.gen_score", { provider, ...Object.fromEntries(Object.entries(summariseRubric(rows)).map(([k, v]) => [k, JSON.stringify(v)])), seconds: Math.round((Date.now() - started) / 1000) });
 }

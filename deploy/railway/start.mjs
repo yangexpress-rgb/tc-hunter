@@ -5,7 +5,7 @@
 //   worker  scans, pasted links, tailoring, Gmail checks
 //   gates   two outbound gates on 127.0.0.1, same rules as the Compose setup:
 //             :3128 worker  any public HTTPS host, never a private or internal address
-//             :3129 web     only api.anthropic.com and oauth2.googleapis.com
+//             :3129 web     only api.anthropic.com, api.openai.com and oauth2.googleapis.com
 //   backup  nightly encrypted off-site copy (deploy/backup/backup.sh), when configured
 //
 // If the web app or the worker stops, everything stops and Railway restarts the container.
@@ -67,7 +67,7 @@ if (env.DATABASE_OWNER_URL && env.DB_APP_PASSWORD) {
 const NO_PROXY = "localhost,127.0.0.1,.railway.internal";
 await Promise.all([
   [3128, "*"],
-  [3129, env.WEB_ALLOW_HOSTS || "api.anthropic.com,oauth2.googleapis.com,imap.gmail.com"],
+  [3129, env.WEB_ALLOW_HOSTS || "api.anthropic.com,api.openai.com,oauth2.googleapis.com,imap.gmail.com"],
 ].map(([port, hosts]) => new Promise((ok) => createGate(gateOptions(hosts)).listen(port, "127.0.0.1", () => {
   log("egress.ready", { port, allow: hosts });
   ok();

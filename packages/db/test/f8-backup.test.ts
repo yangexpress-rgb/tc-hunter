@@ -190,7 +190,7 @@ describe("F8 private network only", () => {
     const web = /\n  web:\n([\s\S]*?)\n  \w[\w-]*:\n/.exec(compose)?.[1] ?? "";
     expect(web).toMatch(/HTTPS_PROXY: http:\/\/egress-proxy:3128/);
     const gate = /\n  egress-proxy:\n([\s\S]*?)\n  \w[\w-]*:\n/.exec(compose)?.[1] ?? "";
-    expect(gate).toMatch(/ALLOW_HOSTS: api\.anthropic\.com,oauth2\.googleapis\.com,imap\.gmail\.com\n/);  // exactly these (Gmail sign-in 13.3; app password, Yong 2026-11-15)
+    expect(gate).toMatch(/ALLOW_HOSTS: api\.anthropic\.com,api\.openai\.com,oauth2\.googleapis\.com,imap\.gmail\.com\n/);  // exactly these (Gmail sign-in 13.3; app password, Yong 2026-11-15; OpenAI key check, Yong 2026-11-18)
     expect(gate).not.toMatch(/ports\s*:/);
     const { allowed } = await import(join(ROOT, "deploy", "egress-proxy", "proxy.mjs"));
     expect(allowed("api.anthropic.com:443")).toBe(true);

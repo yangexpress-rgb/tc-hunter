@@ -1,5 +1,5 @@
 import { aiCostSummary, emailStatus, hasFreshStepUp, listPasskeys, passkeysAvailable, verifyOwnAuditChain, withApplicant } from "@tc-hunter/db";
-import { AI_GROUP_LABEL, AI_PRICES, t, type AiGroup } from "@tc-hunter/domain";
+import { AI_GROUP_LABEL, AI_PRICES, AI_PROVIDER_LABEL, AI_PROVIDERS, t, type AiGroup } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { app, requireSession } from "@/lib/server";
@@ -52,6 +52,7 @@ export default async function DataSettingsPage(props: PageProps) {
               </tbody>
             </table>
           ) : <p className="muted">Nothing yet: the meter counts from the first AI use after it was added.</p>}
+          <p>By provider this month: {AI_PROVIDERS.map((p) => `${AI_PROVIDER_LABEL[p]} ${dollars(cost.byProvider[p]?.cost ?? 0)} (${cost.byProvider[p]?.calls ?? 0} calls)`).join(" · ")}</p>
           <p className="muted">Quality tests are the checks run on the AI&apos;s answers after a change; they aren&apos;t counted in the total.</p>
         </Details>
       </section>
@@ -81,7 +82,7 @@ export default async function DataSettingsPage(props: PageProps) {
         <AdvancedRow label="Session idle timeout" value={`${cfg.sessionIdleMinutes} min`} />
         <AdvancedRow label="Fresh check window" value={`${cfg.stepUpMinutes} min before submission approval`} />
         <AdvancedRow label="Applicant id" value={session.applicantId} />
-        <AdvancedRow label="AI cost meter" value={`${cost.calls} calls this month; ${cost.cacheShare === null ? "no input yet" : `${Math.round(cost.cacheShare * 100)}% of input read from the prompt cache`}; prices per million tokens (input / output): ${Object.entries(AI_PRICES).slice(0, 3).map(([m, p]) => `${m} $${p.input} / $${p.output}`).join(", ")}; batch half price`} />
+        <AdvancedRow label="AI cost meter" value={`${cost.calls} calls this month; ${cost.cacheShare === null ? "no input yet" : `${Math.round(cost.cacheShare * 100)}% of input read from the prompt cache`}; prices per million tokens (input / output): ${Object.entries(AI_PRICES).filter(([m]) => ["claude-opus-5-5", "gpt-5.5", "gpt-5.4-mini"].includes(m)).map(([m, p]) => `${m} $${p.input} / $${p.output}`).join(", ")}; batch half price`} />
         <AdvancedRow label="Email" value={!emailReady ? "off: no Google sign-in in Settings › Email (or TC_GOOGLE_CLIENT_ID / TC_GOOGLE_CLIENT_SECRET), or TC_PUBLIC_ORIGIN not set" : email ? `gmail.readonly, ${email.status}${email.lastError ? ` (last error: ${email.lastError})` : ""}, connected ${new Date(email.connectedAt).toISOString()}` : "not connected"} />
         <AdvancedRow label="Passkeys" value={canPasskey ? `${passkeys.length} registered (WebAuthn, relying party ${new URL(cfg.publicOrigin!).hostname})` : "off: TC_PUBLIC_ORIGIN not set"} />
       </Advanced>

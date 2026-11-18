@@ -8,6 +8,7 @@ import {
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
+  AI_PROVIDERS, currentAiProvider, scopedProvider, withAiProvider, type AiProvider,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { hasFreshStepUp, type Session } from "./auth";
@@ -553,7 +554,23 @@ class Hand {
 }
 
 /** The background job: one application, start to finish (or to the step that needs the applicant). */
+/**
+ * One application is answered on one AI provider (Yong, 2026-11-18): a run that already started keeps
+ * the provider it started on (it is stored on the run), even when the setting is switched meanwhile,
+ * and carries on with it after the applicant's turn. A new run takes the provider the work was claimed on.
+ */
 export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string }> {
+  const kept = await withApplicant(pool, { ...ctx, actor: "automation" }, async (c) => (await c.query(
+    `SELECT r.ai_provider FROM apply_run r
+      WHERE r.ai_provider IS NOT NULL AND (
+            r.id = (SELECT run_id FROM apply_handover WHERE id = $2::uuid AND application_id = $1)
+         OR r.id = (SELECT id FROM apply_run WHERE application_id = $1 AND status = 'queued' ORDER BY created_at DESC LIMIT 1))
+      LIMIT 1`, [payload.application_id ?? null, payload.handover ?? null])).rows[0]?.ai_provider as AiProvider | undefined);
+  const provider = kept && AI_PROVIDERS.includes(kept) ? kept : scopedProvider() ?? await currentAiProvider();
+  return withAiProvider(provider, () => runApplyOn(pool, ctx, payload, deps));
+}
+
+async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string }> {
   const auto: RequestContext = { ...ctx, actor: "automation" };
   // The applicant's turn on this application's page: no run touches it until they hand it back (Yong, 2026-11-17).
   const theirs = deps.held?.all().find((h) => h.applicationId === payload.application_id && h.purpose === "handover");
@@ -573,7 +590,7 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
     let run = (await c.query("SELECT id FROM apply_run WHERE application_id = $1 AND status = 'queued' ORDER BY created_at DESC LIMIT 1", [app.id])).rows[0];
     if (!run && handover && handover.state !== "closed") run = { id: handover.run_id };
     if (!run) run = (await c.query("INSERT INTO apply_run (applicant_id, application_id) VALUES (app_applicant_id(), $1) RETURNING id", [app.id])).rows[0];
-    await c.query("UPDATE apply_run SET status = 'running', started_at = coalesce(started_at, now()), finished_at = NULL, updated_at = now() WHERE id = $1", [run.id]);
+    await c.query("UPDATE apply_run SET status = 'running', started_at = coalesce(started_at, now()), finished_at = NULL, updated_at = now(), ai_provider = coalesce(ai_provider, $2) WHERE id = $1", [run.id, scopedProvider() ?? null]);
     const mode = ((await c.query("SELECT mode FROM apply_setting")).rows[0]?.mode ?? DEFAULT_APPLY_MODE) as ApplyMode;
     return { app, runId: run.id as string, mode, handover };
   });

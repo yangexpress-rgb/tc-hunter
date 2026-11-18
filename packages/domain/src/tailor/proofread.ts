@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { recordUsage } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 import { checkContext, checkLine, fillMetric } from "./checker";
 import type { Blocked, LetterProposal, ResumeProposal, TailorPosting, TailorProfile } from "./types";
 
@@ -53,8 +54,8 @@ const ProofOut = z.object({
 });
 
 export class ClaudeProofreader implements Proofreader {
-  readonly version = `${PROMPT_VERSION}:${MODEL}`;
-  constructor(private client: Anthropic = new Anthropic()) {}
+  get version(): string { return `${PROMPT_VERSION}:${modelFor("judgment", MODEL)}`; }
+  constructor(private client: Anthropic = aiClient("judgment")) {}
   async review(lines: ReviewLine[], kind: "resume" | "letter"): Promise<ReviewFix[]> {
     if (!lines.length) return [];
     const r = await this.client.beta.messages.parse({

@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { recordUsage } from "../ai/meter";
+import { aiClient, modelFor } from "../ai/provider";
 import { findSkills } from "../jobs/skills";
 import { relevance } from "./build";
 import { aboutFactText, checkContext, checkLine, maskMetric } from "./checker";
@@ -124,8 +125,8 @@ Rules you must never break:
 ${ABOUT_GUIDE}${FEEDBACK_RULE}`);
 
 export class ClaudeResumeProposer implements ResumeProposer {
-  readonly version = `${PROMPT_VERSION}:${MODEL}`;
-  constructor(private client: Anthropic = new Anthropic(), private fallback: ResumeProposer = new RulesResumeProposer()) {}
+  get version(): string { return `${PROMPT_VERSION}:${modelFor("judgment", MODEL)}`; }
+  constructor(private client: Anthropic = aiClient("judgment"), private fallback: ResumeProposer = new RulesResumeProposer()) {}
 
   async propose(profile: TailorProfile, posting: TailorPosting, opts: ProposeOptions = {}) {
     const roles = profile.experience.filter((e) => e.verified).map((e) => ({ id: e.id, title: e.title, employer: e.employer }));
@@ -152,7 +153,7 @@ export class ClaudeResumeProposer implements ResumeProposer {
       });
       recordUsage("resume_tailor", r, MODEL);
       if (r.stop_reason === "refusal" || !r.parsed_output) return this.fallback.propose(profile, posting, opts);
-      return { proposal: r.parsed_output as ResumeProposal, meta: { proposer: this.version, model: MODEL, prompt_version: PROMPT_VERSION } };
+      return { proposal: r.parsed_output as ResumeProposal, meta: { proposer: this.version, model: modelFor("judgment", MODEL), prompt_version: PROMPT_VERSION } };
     } catch {
       return this.fallback.propose(profile, posting, opts);
     }
@@ -241,8 +242,8 @@ const blockedHint = (reason: string, terms: string[]) => {
 };
 
 export class ClaudeLetterProposer implements LetterProposer {
-  readonly version = `${LETTER_PROMPT_VERSION}:${MODEL}`;
-  constructor(private client: Anthropic = new Anthropic(), private fallback: LetterProposer = new RulesLetterProposer()) {}
+  get version(): string { return `${LETTER_PROMPT_VERSION}:${modelFor("judgment", MODEL)}`; }
+  constructor(private client: Anthropic = aiClient("judgment"), private fallback: LetterProposer = new RulesLetterProposer()) {}
 
   async propose(profile: TailorProfile, posting: TailorPosting, opts: ProposeOptions = {}) {
     const motivation = [
@@ -284,7 +285,7 @@ export class ClaudeLetterProposer implements LetterProposer {
           if (second.stop_reason !== "refusal" && fixed && blockedCount(fixed) < bad.length) out = fixed;
         } catch { /* keep the first draft; the builder lists what it removes */ }
       }
-      return { proposal: out as LetterProposal, meta: { proposer: this.version, model: MODEL, prompt_version: LETTER_PROMPT_VERSION } };
+      return { proposal: out as LetterProposal, meta: { proposer: this.version, model: modelFor("judgment", MODEL), prompt_version: LETTER_PROMPT_VERSION } };
     } catch {
       return this.fallback.propose(profile, posting, opts);
     }
