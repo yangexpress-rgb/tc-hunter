@@ -1,7 +1,7 @@
 import type pg from "pg";
 import { runEmailCheck, type EmailDeps } from "./email";
 import {
-  companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
+  cleanEmployerName, companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
@@ -48,6 +48,8 @@ export interface IngestOutcome { postingId: string; isNew: boolean; changed: boo
  * already known and changed are always read with `reader`, in real time.
  */
 export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: RawPosting, reader: RequirementsReader, newReader: RequirementsReader = reader): Promise<IngestOutcome> {
+  // No company codes in front of names, whichever way the job came in (Workday's "100 Salesforce").
+  raw = { ...raw, employer: cleanEmployerName(raw.employer) || raw.employer };
   const key = dedupeKey(raw.employer, raw.title, raw.locationRaw);
   const fp = descriptionFingerprint(raw.descriptionText);
   const events: string[] = [];

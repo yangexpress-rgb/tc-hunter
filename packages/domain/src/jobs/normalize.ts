@@ -5,8 +5,34 @@ import type { Workplace } from "./types";
 /** Employer, title and place normalisation, and deduplication (design 5.2, fixture F3). */
 const LEGAL = /\b(inc|incorporated|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|gmbh|plc|ag|sa|bv|pty|lp|llp)\b\.?/g;
 
+/**
+ * Workday sites put the employer's internal company code in front of its name: "100 Salesforce",
+ * "300 Premier Healthcare Solutions, Inc." (Yong, 2026-11-18). Three to five digits then a word is a
+ * code; shorter numbers are kept, since they can be the name ("84 Lumber", "3M").
+ */
+const COMPANY_CODE = /^\s*\d{3,5}\s*[-–:]?\s+(?=[A-Za-z])/;
+
+/** The employer's name without a leading company code. */
+export function cleanEmployerName(name: string): string {
+  return name.replace(COMPANY_CODE, "").replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The employer to show for a job read from a source the app follows: the source's own name when the
+ * posting's name is that company or one of its named parts ("Premier Healthcare Solutions, Inc." on
+ * the "Premier" site), else the posting's name without a company code. One company, one name, so
+ * Cards by company groups its jobs together.
+ */
+export function employerForSource(posted: string, sourceName: string): string {
+  const clean = cleanEmployerName(posted);
+  const given = cleanEmployerName(sourceName);
+  if (!clean) return given;
+  const a = normalizeEmployer(clean), b = normalizeEmployer(given);
+  return b && (a === b || a.startsWith(`${b} `)) ? given : clean;
+}
+
 export function normalizeEmployer(name: string): string {
-  return name.toLowerCase().replace(/&/g, " and ").replace(LEGAL, " ").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+  return cleanEmployerName(name).toLowerCase().replace(/&/g, " and ").replace(LEGAL, " ").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
 }
 
 const TITLE_ABBR: Array<[RegExp, string]> = [

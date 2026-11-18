@@ -1,7 +1,7 @@
 import { employmentKind, goalLevelIndex, goalTypeLabel, jobLevelKey, jobLevelLabel, t } from "@tc-hunter/domain";
 import { feedbackAction } from "@/app/jobs/actions";
 import { pay, place, posted } from "@/components/jobs/JobBits";
-import { companyDomain, payShort } from "@/lib/jobsView";
+import { companyDomain, groupByCompany, payShort } from "@/lib/jobsView";
 
 // Sorting shared by every layout.
 export const GOAL_SORTS = ["score", "company", "role", "level", "location", "type", "pay", "posted", "status"] as const;
@@ -118,12 +118,7 @@ export const COMPANY_SORTS: Array<[CompanySort, string]> = [["score", "Best matc
 const WORKPLACE: Record<string, string> = { remote: "Remote", hybrid: "Hybrid", onsite: "In the office" };
 
 export function companiesOf(rows: Row[]) {
-  const by = new Map<string, Row[]>();
-  for (const r of rows) {
-    const k = String(r.employer_canonical ?? "").trim() || "Employer not given";
-    by.set(k, [...(by.get(k) ?? []), r]);
-  }
-  return [...by.entries()].map(([name, list]) => {
+  return groupByCompany(rows).map(({ name, rows: list }) => {
     const sorted = [...list].sort((a, b) => b.score - a.score);
     const count = (vals: string[]) => [...vals.reduce((m, v) => m.set(v, (m.get(v) ?? 0) + 1), new Map<string, number>()).entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v);
     const levels = count(list.map((r) => jobLevelKey(r.title ?? "")).filter((k) => k !== "none")).map((k) => jobLevelLabel(k));

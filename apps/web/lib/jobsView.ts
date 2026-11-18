@@ -1,3 +1,5 @@
+import { cleanEmployerName, normalizeEmployer } from "@tc-hunter/domain";
+
 /** The ways to show Jobs (Yong, 2026-11-18): one list, cards by job, cards by company. "By goal" was dropped the same day. */
 export const JOBS_VIEWS = ["list", "jobs", "companies"] as const;
 export type JobsView = (typeof JOBS_VIEWS)[number];
@@ -57,3 +59,21 @@ export function companyDomain(name: string, urls: Array<string | null | undefine
   return [...tally.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
+
+/**
+ * Jobs grouped one company to a group (Cards by company): names that differ only by a company code
+ * ("100 Salesforce"), "Inc." or punctuation group together, shown under the name most of its jobs use.
+ */
+export function groupByCompany<R extends { employer_canonical?: unknown }>(rows: R[]): Array<{ name: string; rows: R[] }> {
+  const by = new Map<string, R[]>();
+  for (const r of rows) {
+    const name = cleanEmployerName(String(r.employer_canonical ?? ""));
+    const k = normalizeEmployer(name) || name.toLowerCase();
+    by.set(k, [...(by.get(k) ?? []), r]);
+  }
+  return [...by.values()].map((list) => {
+    const counts = new Map<string, number>();
+    for (const r of list) { const n = cleanEmployerName(String(r.employer_canonical ?? "")); if (n) counts.set(n, (counts.get(n) ?? 0) + 1); }
+    return { name: [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Employer not given", rows: list };
+  });
+}

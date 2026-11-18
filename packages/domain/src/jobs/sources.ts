@@ -1,5 +1,5 @@
 import { jobLinksFromHtml, jobPostingsFromHtml } from "./jsonld";
-import { detectWorkplace } from "./normalize";
+import { detectWorkplace, employerForSource } from "./normalize";
 import { SourceRefusedError, type Fetcher } from "./fetcher";
 import { decodeEntities, htmlToText } from "./text";
 import type { AtsKind, RawPosting, SalaryPeriod, SourceSpec } from "./types";
@@ -85,7 +85,7 @@ export function readWorkdayJob(d: Obj, w: WorkdaySite, employer: string, path: s
   const rt = String(i.remoteType ?? "").toLowerCase();
   const url = String(i.externalUrl ?? `https://${w.host}/${w.site}${path}`);
   return {
-    externalId: `workday:${w.tenant}:${String(i.jobReqId ?? i.id ?? path)}`, url, employer: String((d.hiringOrganization as Obj)?.name ?? "").trim() || employer,
+    externalId: `workday:${w.tenant}:${String(i.jobReqId ?? i.id ?? path)}`, url, employer: employerForSource(String((d.hiringOrganization as Obj)?.name ?? ""), employer),
     title: String(i.title ?? ""), locationRaw: loc,
     workplaceType: /remote/.test(rt) ? "remote" : /hybrid|flex/.test(rt) ? "hybrid" : /on.?site/.test(rt) ? "onsite" : detectWorkplace(loc, desc.slice(0, 600)),
     descriptionText: desc, salary: null, postedAt: typeof i.startDate === "string" && i.startDate ? i.startDate : null, applyUrl: url, atsType: "workday",
