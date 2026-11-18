@@ -464,3 +464,56 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 .live-scroll { display: flex; gap: 8px; }
 .live-type { display: flex; flex-direction: column; gap: 4px; max-width: 900px; }
 .your-turn { border-left: 4px solid #a47a2c; padding-left: 12px; }
+
+/* Jobs as cards, by job or by company (Yong, 2026-11-18). Same colours as the rest of the app. */
+.view-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.view-bar .inline-form { margin: 0; }
+.card-sortbar { margin: 14px 0 4px; font-size: 14px; }
+.card-sortbar a { white-space: nowrap; }
+.card-group { margin-top: 18px; }
+.card-group .section-head h2 { margin: 0 0 2px; }
+ul.card-grid { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+ul.card-grid > li { margin: 0; }
+.company-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+.job-card, .company-card { display: flex; flex-direction: column; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 16px; min-width: 0; }
+.job-card:hover, .company-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.job-card.is-unseen, .company-card.is-unseen { border-top: 4px solid var(--accent); }
+.job-card.is-filtered { opacity: 0.75; }
+.job-card-head, .company-card-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.company-card-head > div { flex: 1; min-width: 0; }
+.company-name { flex: 1; min-width: 0; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.initials { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 9px; font-weight: 700; font-size: 14px; border: 1px solid var(--border); }
+.initials.big { width: 48px; height: 48px; border-radius: 12px; font-size: 17px; }
+.initials.tone-0 { background: color-mix(in srgb, var(--accent) 14%, var(--surface)); color: var(--accent); }
+.initials.tone-1 { background: color-mix(in srgb, #4b7a9c 14%, var(--surface)); color: #4b7a9c; }
+.initials.tone-2 { background: color-mix(in srgb, #a47a2c 14%, var(--surface)); color: #a47a2c; }
+.initials.tone-3 { background: color-mix(in srgb, #6b5b95 14%, var(--surface)); color: #6b5b95; }
+.initials.tone-4 { background: color-mix(in srgb, #3f7f7f 14%, var(--surface)); color: #3f7f7f; }
+.initials.tone-5 { background: color-mix(in srgb, var(--muted) 14%, var(--surface)); color: var(--muted); }
+.fit { flex: none; margin-left: auto; font-size: 13px; font-weight: 700; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); white-space: nowrap; color: var(--muted); }
+.fit.strong { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.fit.good { color: #4b7a9c; border-color: #4b7a9c; }
+.fit.partial { color: #a47a2c; border-color: #a47a2c; }
+.fit.filtered { border-style: dashed; }
+.job-card-title, .company-card-name { font-weight: 650; font-size: 17px; line-height: 1.3; color: var(--text); text-decoration: none; }
+.job-card-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 2.6em; }
+.job-card-title:hover, .company-card-name:hover { text-decoration: underline; }
+.job-card-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.job-card-tags .chip { margin: 0; }
+.job-card-pay { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; margin-top: auto; }
+.job-card-pay.none { font-size: 15px; font-weight: 500; color: var(--muted); }
+.job-card-place { color: var(--muted); font-size: 14px; }
+.job-card-reason { margin: 0; color: var(--muted); font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.job-card .error.small, .company-card .small { font-size: 13px; }
+.job-card .error.small { margin: 0; }
+.card-actions { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.card-actions form { margin: 0; }
+.card-actions .apply { flex: 1; text-align: center; border-radius: 999px; padding: 9px 16px; text-decoration: none; font-weight: 600; }
+button.pass { width: 38px; height: 38px; padding: 0; border-radius: 50%; background: transparent; color: var(--muted); border: 1px solid var(--border); font-size: 20px; line-height: 1; }
+button.pass:hover { color: var(--error); border-color: var(--error); }
+.company-card-roles ul { margin: 4px 0 0; padding-left: 0; list-style: none; }
+.company-card-roles li { font-size: 14px; padding: 2px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.company-card-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-top: auto; padding-top: 6px; }
+.big-count { font-size: 26px; }
+.see-roles { font-weight: 600; color: var(--accent); text-decoration: none; white-space: nowrap; }
+.see-roles:hover { text-decoration: underline; }

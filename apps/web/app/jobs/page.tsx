@@ -1,4 +1,4 @@
-import { jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork, scanStatus } from "@tc-hunter/db";
+import { getPreferences, jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork, scanStatus } from "@tc-hunter/db";
 import { LookAgainButton, ScanStatusBox } from "@/components/jobs/ScanStatus";
 import { JOB_LEVEL_FILTERS, jobLevelKey, jobLevelLabel, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
@@ -6,10 +6,12 @@ import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
 import { FeedbackButtons, ScoreBadge, ago, pay, place, posted } from "@/components/jobs/JobBits";
 import { GOAL_SORTS, GoalTables, type GoalSort } from "@/components/jobs/GoalTables";
+import { CompanyCards, COMPANY_SORTS, JobCards, type CompanySort } from "@/components/jobs/JobCards";
 import { TopBar } from "@/components/TopBar";
+import { JOBS_VIEWS, JOBS_VIEW_LABEL, asJobsView } from "@/lib/jobsView";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { adjustmentAction, alertSeenAction, pasteLinkAction, refreshAction } from "./actions";
+import { adjustmentAction, alertSeenAction, jobsViewAction, pasteLinkAction, refreshAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -26,25 +28,32 @@ export default async function JobsPage(props: PageProps) {
   const sort = (["score", "date", "salary"].includes(params.sort ?? "") ? params.sort : "score") as "score" | "date" | "salary";
   const ladder = LADDER.some(([k]) => k && k === params.ladder) ? params.ladder : undefined;
   const showFiltered = params.filtered === "1";
-  const view = params.view === "list" ? "list" : "goals";
   const gsort: GoalSort = (GOAL_SORTS as readonly string[]).includes(params.gsort ?? "") ? params.gsort as GoalSort : "score";
   const gdir = params.gdir === "asc" ? "asc" : params.gdir === "desc" ? "desc" : (["company", "role", "location", "type", "status"].includes(gsort) ? "asc" : "desc");
-  const [sources, scan, work, alerts, adjustments, summary, goals, live] = await Promise.all([
+  const [sources, scan, work, alerts, adjustments, summary, goals, live, prefs] = await Promise.all([
     listSources(pool, session), latestScan(pool, session), pendingWork(pool, session),
-    listAlerts(pool, session), listAdjustments(pool, session), jobsSummary(pool, session), listGoals(pool, session), scanStatus(pool, session),
+    listAlerts(pool, session), listAdjustments(pool, session), jobsSummary(pool, session), listGoals(pool, session), scanStatus(pool, session), getPreferences(pool, session),
   ]);
+  // The layout: the applicant's own default (Yong, 2026-11-18) unless they switched for this visit.
+  const defaultView = asJobsView(prefs?.jobs_view) ?? "goals";
+  const view = asJobsView(params.view) ?? defaultView;
+  const csort: CompanySort = COMPANY_SORTS.some(([k]) => k === params.csort) ? params.csort as CompanySort : "score";
+  const company = params.company?.trim() || undefined;
   const source = sources.some((s) => s.id === params.source) ? params.source : undefined;
   // Level filter (Yong, 2026-11-15): any number of levels, read from the job title.
   const rawLevels = (await props.searchParams).level;
   const levels = [...new Set((Array.isArray(rawLevels) ? rawLevels : rawLevels ? rawLevels.split(",") : []).filter((l) => JOB_LEVEL_FILTERS.some(([k]) => k === l)))];
   const matched = await listMatches(pool, session, { status, sort, ladder, source, showFiltered });
   const { counts } = matched;
-  const rows = levels.length ? matched.rows.filter((r) => levels.includes(jobLevelKey(r.title ?? ""))) : matched.rows;
+  const levelRows = levels.length ? matched.rows.filter((r) => levels.includes(jobLevelKey(r.title ?? ""))) : matched.rows;
+  // "See roles" on a company card: just that company's jobs, in any layout.
+  const rows = company ? levelRows.filter((r) => String(r.employer_canonical ?? "").toLowerCase() === company.toLowerCase()) : levelRows;
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
-    const all = { tab: status, sort, ladder, source, filtered: showFiltered ? "1" : undefined, view: view === "list" ? "list" : undefined,
-      gsort: gsort === "score" ? undefined : gsort, gdir: params.gdir, level: levels.length ? levels.join(",") : undefined, ...over };
-    for (const [k, v] of Object.entries(all)) if (v && !(k === "tab" && v === "new") && !(k === "sort" && v === "score") && !(k === "view" && v === "goals")) p.set(k, v);
+    const all = { tab: status, sort, ladder, source, filtered: showFiltered ? "1" : undefined, view,
+      gsort: gsort === "score" ? undefined : gsort, gdir: params.gdir, csort: csort === "score" ? undefined : csort, company,
+      level: levels.length ? levels.join(",") : undefined, ...over };
+    for (const [k, v] of Object.entries(all)) if (v && !(k === "tab" && v === "new") && !(k === "sort" && v === "score") && !(k === "view" && v === defaultView)) p.set(k, v);
     const s = p.toString();
     return s ? `/jobs?${s}` : "/jobs";
   };
@@ -124,10 +133,18 @@ export default async function JobsPage(props: PageProps) {
 
       {params.refreshed ? <p className="status" role="status">Every job is scored again against your latest goals, and a new search has started.</p> : null}
 
-      <nav className="tabs view-switch" aria-label="How to show jobs">
-        <a href={q({ view: "goals" })} aria-current={view === "goals" ? "page" : undefined}>By goal</a>
-        <a href={q({ view: "list" })} aria-current={view === "list" ? "page" : undefined}>List</a>
-      </nav>
+      <div className="view-bar">
+        <nav className="tabs view-switch" aria-label="How to show jobs">
+          {JOBS_VIEWS.map((v) => <a key={v} href={q({ view: v })} aria-current={view === v ? "page" : undefined}>{JOBS_VIEW_LABEL[v]}</a>)}
+        </nav>
+        {/* The default layout is saved for this applicant only (Yong, 2026-11-18). */}
+        {view === defaultView ? <span className="muted small">{params.view_saved ? "Saved. Jobs opens this way from now on." : "Jobs opens this way for you."}</span> : (
+          <form action={jobsViewAction} className="inline-form">
+            <input type="hidden" name="jobs_view" value={view} /><input type="hidden" name="back" value={q({ view: undefined })} />
+            <button className="small secondary" title={`Now Jobs opens as ${JOBS_VIEW_LABEL[defaultView]}`}>Always open Jobs like this</button>
+          </form>
+        )}
+      </div>
 
       <nav className="tabs" aria-label="Which jobs">
         {TABS.map(([k, l]) => (
@@ -140,9 +157,11 @@ export default async function JobsPage(props: PageProps) {
       <Details summary="Sort and filter">
         <form method="get" action="/jobs" className="fields">
           {status !== "new" ? <input type="hidden" name="tab" value={status} /> : null}
-          {view === "list" ? null : <input type="hidden" name="view" value="goals" />}
-          {view === "goals" && gsort !== "score" ? <input type="hidden" name="gsort" value={gsort} /> : null}
-          {view === "goals" ? null : <input type="hidden" name="view" value="list" />}
+          {view !== defaultView ? <input type="hidden" name="view" value={view} /> : null}
+          {(view === "goals" || view === "jobs") && gsort !== "score" ? <input type="hidden" name="gsort" value={gsort} /> : null}
+          {(view === "goals" || view === "jobs") && params.gdir ? <input type="hidden" name="gdir" value={params.gdir} /> : null}
+          {view === "companies" && csort !== "score" ? <input type="hidden" name="csort" value={csort} /> : null}
+          {company ? <input type="hidden" name="company" value={company} /> : null}
           {view === "list" ? <label>Sort by<select name="sort" defaultValue={sort}>{SORTS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label> : null}
           <label>Career step<select name="ladder" defaultValue={ladder ?? ""}>{LADDER.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
           <fieldset className="level-filter"><legend>Level</legend>
@@ -156,9 +175,18 @@ export default async function JobsPage(props: PageProps) {
         </form>
       </Details>
 
+      {company ? <p className="muted">Showing jobs at {company} only ({rows.length}). <a href={q({ company: undefined })}>Show every company</a></p> : null}
       {levels.length ? <p className="muted">Showing {levels.map(jobLevelLabel).join(", ")} jobs only ({rows.length} of {matched.rows.length}). <a href={q({ level: undefined })}>Show every level</a></p> : null}
 
-      {view === "goals" && (rows.length || goals.some((g) => g.active)) ? (
+      {view === "jobs" && (rows.length || goals.some((g) => g.active)) ? (
+        <>
+          {goals.length === 0 ? <p className="muted"><a href="/profile/goals">Add goals</a> to see your jobs grouped by what you want.</p> : null}
+          <JobCards goals={goals} rows={rows} by={gsort} dir={gdir} back={here} sortHref={(by, dir) => q({ gsort: by === "score" ? undefined : by, gdir: dir })} />
+        </>
+      ) : view === "companies" && rows.length ? (
+        <CompanyCards rows={rows} sort={csort} tab={status} sortHref={(c) => q({ csort: c === "score" ? undefined : c })}
+          rolesHref={(c) => q({ company: c, view: "jobs" })} />
+      ) : view === "goals" && (rows.length || goals.some((g) => g.active)) ? (
         <>
           {goals.length === 0 ? <p className="muted"><a href="/profile/goals">Add goals</a> to see your jobs grouped by what you want.</p> : null}
           <GoalTables goals={goals} rows={rows} by={gsort} dir={gdir} sortHref={(by, dir) => q({ gsort: by === "score" ? undefined : by, gdir: dir })} />

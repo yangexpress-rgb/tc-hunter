@@ -1,15 +1,7 @@
 import { FEEDBACK_REASONS } from "@tc-hunter/domain";
 import { feedbackAction } from "@/app/jobs/actions";
 
-export const pay = (r: Record<string, any>): string | null => {
-  if (r.salary_min === null && r.salary_max === null) return null;
-  const f = (n: unknown) => (n === null || n === undefined ? null : Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 }));
-  const cur = (r.salary_currency ?? "").trim();
-  const sym = cur === "USD" || cur === "CAD" || cur === "AUD" ? "$" : cur === "GBP" ? "£" : cur === "EUR" ? "€" : "";
-  const range = [f(r.salary_min), f(r.salary_max)].filter(Boolean).map((x) => `${sym}${x}`).join("–");
-  const per = r.salary_period === "hour" ? " an hour" : r.salary_period === "month" ? " a month" : r.salary_period === "year" ? " a year" : "";
-  return `${range}${sym ? "" : cur ? ` ${cur}` : ""}${per}`;
-};
+export { pay } from "@/lib/jobsView";
 
 export const posted = (d: Date | string | null): string => {
   if (!d) return "Date not given";
