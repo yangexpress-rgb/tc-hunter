@@ -59,6 +59,7 @@ describe("Workday slow-downs (Yong, 2026-11-17)", () => {
     expect(answerKind(429, "application/json", "")).toBe("rate_limit");
     expect(answerKind(403, "text/html", "<html>Access Denied</html>")).toBe("block_page");
     expect(answerKind(403, "application/json", '{"error":"forbidden"}')).toBe("refusal");
+    expect(answerKind(429, "text/html", "<html>Security Check Enable JavaScript and cookies to continue</html>")).toBe("block_page");
   });
 
   it("every Workday site shares one pace across the search", async () => {
