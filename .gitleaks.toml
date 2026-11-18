@@ -5,3 +5,5 @@ useDefault = true
 [allowlist]
 description = "Test-only placeholders"
 regexes = ['''tc_app_test''', '''correct horse battery staple 42''', '''AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=''']
+# Public job ads for the requirements golden set: posting keys like "r3-director-ops-climate" read as API keys.
+paths = ['''fixtures/req-golden/postings\.json''']
