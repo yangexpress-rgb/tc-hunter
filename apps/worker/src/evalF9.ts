@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  aboutRubric, ClaudeEssayDrafter, ClaudeLetterProposer, ClaudeResumeProposer, essayRubric, genPosting, letterRubric, summariseRubric,
+  type GenCase, type RubricResult, type TailorProfile,
   ClaudeAnswerInferrer, ClaudeRequirementsReader, F9_BAR, passesF9, readRequirementsText, scoreAnswers, scoreRequirements, summariseRequirements,
   type EvalQuestion, type GoldenPosting, type InferFacts,
 } from "@tc-hunter/domain";
@@ -76,4 +78,38 @@ export async function dumpPostings(pool: { query: (sql: string) => Promise<{ row
     log.info("eval.posting_head", { ref: r.public_ref, employer: r.employer_canonical, title: r.title, url: r.apply_url, chars: text.length, parts, requirements: JSON.stringify(r.requirements).slice(0, 1500) });
     for (let i = 0; i < parts; i++) log.info("eval.posting_part", { ref: r.public_ref, part: i + 1, of: parts, text: text.slice(i * PART, (i + 1) * PART) });
   }
+}
+
+/**
+ * Golden sets for the letter, About and essay writers (fixtures/gen-golden), run once on the server
+ * when TC_EVAL_GEN=1. Measurement only: each output is scored by the deterministic rubric in
+ * packages/domain/src/tailor/genEval.ts, and logged with its text so a person can read it too.
+ */
+export async function runGenEval(log: { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void }) {
+  const dir = join(process.cwd(), "fixtures", "gen-golden");
+  const { _about: _p, ...profile } = JSON.parse(await readFile(join(dir, "profile.json"), "utf8")) as TailorProfile & { _about?: string };
+  const { cases } = JSON.parse(await readFile(join(dir, "cases.json"), "utf8")) as { cases: GenCase[] };
+  const letter = new ClaudeLetterProposer(), resume = new ClaudeResumeProposer(), essays = new ClaudeEssayDrafter();
+  const started = Date.now();
+  log.info("eval.gen_started", { cases: cases.length, letter: letter.version, about: resume.version, essays: essays.version });
+  const rows: RubricResult[] = [];
+  const show = (r: RubricResult, by: string, text: string) => {
+    rows.push(r);
+    log.info("eval.gen_row", { case: r.key, writer: r.writer, by, passed: r.passed, total: r.total,
+      failed: r.checks.filter((c) => !c.pass).map((c) => `${c.check}${c.detail ? ` [${c.detail}]` : ""}`).join(" | "), text: text.slice(0, 3000) });
+  };
+  await Promise.all(cases.map(async (c) => {
+    const posting = genPosting(c, profile);
+    const [l, r, e] = await Promise.allSettled([letter.propose(profile, posting), resume.propose(profile, posting), essays.draft(c.essays, profile, posting)]);
+    if (l.status === "fulfilled") show(letterRubric(c.key, profile, posting, l.value.proposal), l.value.meta.proposer, l.value.proposal.paragraphs.map((p) => `[${p.role}] ${p.text}`).join("\n\n"));
+    else log.warn("eval.gen_failed", { case: c.key, writer: "letter", message: String(l.reason).slice(0, 200) });
+    if (r.status === "fulfilled") show(aboutRubric(c.key, profile, posting, r.value.proposal), r.value.meta.proposer, r.value.proposal.summary?.text ?? "(none)");
+    else log.warn("eval.gen_failed", { case: c.key, writer: "about", message: String(r.reason).slice(0, 200) });
+    if (e.status === "fulfilled") for (const q of c.essays) {
+      const d = e.value.find((x) => x.key === q.key);
+      show(essayRubric(c.key, profile, posting, q, d?.paragraphs ?? []), essays.version, (d?.paragraphs ?? []).map((p) => p.text).join("\n\n"));
+    }
+    else log.warn("eval.gen_failed", { case: c.key, writer: "essay", message: String(e.reason).slice(0, 200) });
+  }));
+  log.info("eval.gen_score", { ...Object.fromEntries(Object.entries(summariseRubric(rows)).map(([k, v]) => [k, JSON.stringify(v)])), seconds: Math.round((Date.now() - started) / 1000) });
 }

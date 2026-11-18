@@ -11,7 +11,7 @@ import {
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
 import { liveServer } from "./apply/live";
-import { dumpPostings, runF9, runRequirementsEval } from "./evalF9";
+import { dumpPostings, runF9, runGenEval, runRequirementsEval } from "./evalF9";
 
 const log = createLogger();
 const cfg = loadConfig();
@@ -97,6 +97,10 @@ async function main() {
   // The requirements golden set, once, when TC_EVAL_REQ=1 is set (same key as the posting reader).
   if (process.env.TC_EVAL_REQ === "1" && smart.on) {
     runRequirementsEval(log).catch((e) => log.warn("eval.req_failed", { message: String((e as Error)?.message ?? e).slice(0, 300) }));
+  }
+  // The letter, About and essay golden sets, once, when TC_EVAL_GEN=1.
+  if (process.env.TC_EVAL_GEN === "1" && smart.on) {
+    runGenEval(log).catch((e) => log.warn("eval.gen_failed", { message: String((e as Error)?.message ?? e).slice(0, 300) }));
   }
   // Scanned job ads, word for word, for the golden sets (TC_EVAL_DUMP_POSTINGS=1).
   if (process.env.TC_EVAL_DUMP_POSTINGS === "1") {

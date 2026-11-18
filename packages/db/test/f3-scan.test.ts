@@ -21,9 +21,11 @@ class FixtureFetcher implements Fetcher {
   routes = new Map<string, () => string>();
   calls: string[] = [];
   refuse = new Set<string>();
+  slow = new Set<string>();
   async get(url: string): Promise<FetchResult> {
     this.calls.push(url);
     if (this.refuse.has(url)) throw new SourceRefusedError("refused", "403");
+    if (this.slow.has(url)) throw new SourceRefusedError("rate_limited", "api.lever.co answered 429 (try again in 7200)", { status: 429, retryAfter: "7200", contentType: "application/json", excerpt: "", kind: "rate_limit" });
     const r = this.routes.get(url);
     if (!r) throw new SourceRefusedError("not_found", url);
     return { status: 200, text: r(), url, contentType: "" };
@@ -61,6 +63,8 @@ beforeAll(async () => {
   board = JSON.parse(read("f3/greenhouse-board.json"));
   fetcher = new FixtureFetcher();
   fetcher.routes.set(GH_URL, () => JSON.stringify(board));
+  // The light list (titles only) is asked first.
+  fetcher.routes.set(GH_URL.replace("?content=true", ""), () => JSON.stringify(board));
   fetcher.routes.set(PAGE_URL, () => read("f3/careers-page.html"));
   deps = { fetcher, reader: new RulesRequirementsReader(), now: () => clock, freshMinutes: 0 };
   await verifiedProfile(yong);
@@ -191,9 +195,26 @@ describe("posting watch (P7)", () => {
 });
 
 describe("sources that refuse", () => {
+  it("a site that asks us to slow down is left alone until the time it gave, and isn't counted as a failure (Yong, 2026-11-17)", async () => {
+    await followSource(pool, yong, "https://jobs.lever.co/initech", "Initech");
+    const url = "https://api.lever.co/v0/postings/initech?mode=json&skip=0&limit=100";
+    fetcher.slow.add(url);
+    await scan(yong);
+    const src = (await listSources(pool, yong)).find((s) => s.name === "Initech")!;
+    expect(src).toMatchObject({ health: "degraded", failures: 0 });
+    const hours = (new Date(src.retry_after_at).getTime() - Date.now()) / 3_600_000;
+    expect(hours).toBeGreaterThan(1.9);
+    expect(hours).toBeLessThan(2.1);
+    const asked = fetcher.calls.filter((u) => u === url).length;
+    await scan(yong);
+    expect(fetcher.calls.filter((u) => u === url).length).toBe(asked);
+    fetcher.slow.delete(url);
+    await unfollowSource(pool, yong, src.id);
+  });
+
   it("a refusal marks the source blocked with a plain note, and it is not tried again for a week", async () => {
     await followSource(pool, yong, "https://jobs.lever.co/globex", "Globex");
-    fetcher.refuse.add("https://api.lever.co/v0/postings/globex?mode=json");
+    fetcher.refuse.add("https://api.lever.co/v0/postings/globex?mode=json&skip=0&limit=100");
     await scan(yong);
     const src = (await listSources(pool, yong)).find((s) => s.kind === "lever")!;
     expect(src).toMatchObject({ health: "blocked" });

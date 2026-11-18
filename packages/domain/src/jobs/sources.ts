@@ -116,11 +116,26 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
   // itself, on the first request, though the same request from a browser works. At Yong's request, a site
   // that does so is then asked the way a common browser asks, once per read.
   let asBrowser = false;
+  // What Workday answered, for the logs (Yong, 2026-11-17: tell a slow-down from a refusal or a firewall page).
+  const answers: Record<string, number> = {};
+  let lastNo: SourceRefusedError | null = null;
   const ask = async (url: string, body?: unknown): Promise<Obj | null> => {
     for (;;) {
       const headers: Record<string, string> = { ...WORKDAY_HEADERS, Origin: `https://${w.host}`, Referer: `https://${w.host}/${w.site}`, ...(asBrowser ? { "User-Agent": BROWSER_UA } : {}) };
-      try { return JSON_OR((await f.get(url, { headers, ...(body ? { body } : {}) })).text, "Workday"); } catch (e) {
+      try {
+        const r = JSON_OR((await f.get(url, { headers, ...(body ? { body } : {}) })).text, "Workday");
+        answers["200"] = (answers["200"] ?? 0) + 1;
+        return r;
+      } catch (e) {
+        if (e instanceof SourceRefusedError && e.answer) {
+          const k = `${e.answer.status} ${e.answer.kind}`;
+          answers[k] = (answers[k] ?? 0) + 1;
+          lastNo = e;
+          console.log(JSON.stringify({ level: "info", at: new Date().toISOString(), event: "workday.answer", source: spec.name, host: w.host, as: asBrowser ? "browser" : "app",
+            status: e.answer.status, kind: e.answer.kind, retry_after: e.answer.retryAfter ?? null, content_type: e.answer.contentType, said: e.answer.excerpt.slice(0, 140) }));
+        }
         if (!(e instanceof SourceRefusedError) || (e.reason !== "rate_limited" && e.reason !== "refused")) throw e;
+        f.slowDown?.(w.host);
         if (!asBrowser) { asBrowser = true; continue; }
         if (e.reason !== "rate_limited") throw e;
         if (waited) { stopped = true; return null; }
@@ -129,9 +144,14 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
       }
     }
   };
+  const summary = () => console.log(JSON.stringify({ level: "info", at: new Date().toISOString(), event: "workday.read", source: spec.name, host: w.host, as: asBrowser ? "browser" : "app", answers, stopped }));
   // How many jobs the whole site lists, not only those the searches find.
   const all = await ask(`${api}/jobs`, { appliedFacets: {}, limit: 20, offset: 0, searchText: "" });
-  if (!all) throw new SourceRefusedError("rate_limited", `${w.host} asked us to slow down`);
+  if (!all) {
+    summary();
+    const no = lastNo as SourceRefusedError | null;
+    throw new SourceRefusedError("rate_limited", no?.detail ?? `${w.host} asked us to slow down`, no?.answer);
+  }
   const listed = Number(all.total ?? 0) || 0;
   if (!terms.length) for (const j of (all.jobPostings ?? []) as Obj[]) if (j.externalPath) list.set(String(j.externalPath), j);
   const searches = terms.length ? terms.slice(0, 6) : [""];
@@ -159,6 +179,7 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
       if (!(e instanceof SourceRefusedError) || e.reason !== "not_found") throw e;
     }
   }
+  summary();
   if (asBrowser) notes.push("Its Workday site turned away our reader, so it was asked the way a browser asks.");
   if (stopped) notes.push(`Workday asked us to slow down, so we read ${postings.length} of its related jobs this time and will read the rest next time.`);
   else if (related.length > maxDetails) notes.push(`Read the first ${maxDetails} related jobs only.`);
@@ -288,7 +309,12 @@ export interface SourceFetchResult {
   /** How many jobs the source lists in all, whether or not they fit. 0 means it lists none. */
   listed: number;
   notes: string[];
+  /** With `complete`: every job the source lists, when `postings` holds only some of them in full. */
+  seenIds?: string[];
 }
+
+/** A Greenhouse board listing more jobs than this is read only for the jobs related to the goals. */
+export const BIG_BOARD = 150;
 
 const JSON_OR = (text: string, what: string): Obj => {
   try { return JSON.parse(text) as Obj; } catch { throw new SourceRefusedError("unreachable", `${what} did not return job data`); }
@@ -303,13 +329,35 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
   const key = encodeURIComponent(spec.key);
   switch (spec.kind) {
     case "greenhouse": {
-      const r = JSON_OR((await f.get(`https://boards-api.greenhouse.io/v1/boards/${key}/jobs?content=true`)).text, "Greenhouse");
-      const jobs = (r.jobs ?? []) as Obj[];
-      return { postings: jobs.map((j) => readGreenhouseJob(j, spec.name)), complete: true, checked: jobs.length, listed: jobs.length, notes: [] };
+      // The list comes first in its light form (titles only: Databricks' 901 jobs are 0.8 MB this way,
+      // far more with every description). A board of up to BIG_BOARD jobs is then read whole, as before;
+      // a bigger one only for the jobs whose titles relate to the goals (Yong, 2026-11-17).
+      const api = `https://boards-api.greenhouse.io/v1/boards/${key}/jobs`;
+      const light = ((JSON_OR((await f.get(api)).text, "Greenhouse").jobs ?? []) as Obj[]);
+      const seenIds = light.map((j) => String(j.id));
+      if (light.length <= BIG_BOARD) {
+        const jobs = ((JSON_OR((await f.get(`${api}?content=true`)).text, "Greenhouse").jobs ?? []) as Obj[]);
+        return { postings: jobs.map((j) => readGreenhouseJob(j, spec.name)), complete: true, checked: jobs.length, listed: jobs.length, notes: [] };
+      }
+      const want = light.filter((j) => wanted(String(j.title ?? "")));
+      const postings: RawPosting[] = [];
+      for (const j of want.slice(0, maxDetails)) {
+        try { postings.push(readGreenhouseJob(JSON_OR((await f.get(`${api}/${encodeURIComponent(String(j.id))}?pay_transparency=true`)).text, "Greenhouse"), spec.name)); } catch (e) {
+          if (!(e instanceof SourceRefusedError) || e.reason !== "not_found") throw e;
+        }
+      }
+      return { postings, complete: true, seenIds, checked: light.length, listed: light.length,
+        notes: want.length > maxDetails ? [`Read the first ${maxDetails} related jobs only.`] : [] };
     }
     case "lever": {
-      const r = JSON_OR((await f.get(`https://api.lever.co/v0/postings/${key}?mode=json`)).text, "Lever");
-      const jobs = (Array.isArray(r) ? r : []) as Obj[];
+      // Read a page of 100 at a time (Veeva's 865 jobs come to 12 MB in one answer).
+      const jobs: Obj[] = [];
+      for (let skip = 0; skip < 5000; skip += 100) {
+        const r = JSON_OR((await f.get(`https://api.lever.co/v0/postings/${key}?mode=json&skip=${skip}&limit=100`)).text, "Lever");
+        const page = (Array.isArray(r) ? r : []) as Obj[];
+        jobs.push(...page);
+        if (page.length < 100) break;
+      }
       return { postings: jobs.map((j) => readLeverJob(j, spec.name)), complete: true, checked: jobs.length, listed: jobs.length, notes: [] };
     }
     case "ashby": {

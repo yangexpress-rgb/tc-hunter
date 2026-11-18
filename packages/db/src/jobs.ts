@@ -3,7 +3,7 @@ import { runEmailCheck, type EmailDeps } from "./email";
 import {
   companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
-  SourceRefusedError, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
+  SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -447,6 +447,9 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
       return;
     }
+    // A site that asked us to slow down is left alone, quietly, until the time it gave (Yong, 2026-11-17),
+    // unless its own "Search again" was pressed.
+    if (s.retry_after_at && new Date(s.retry_after_at).getTime() > wall && !readAgain.has(s.id)) return;
     // A board another scan read in the last half hour is not fetched again.
     if (s.last_success_at && wall - new Date(s.last_success_at).getTime() < freshFor(s.id)) return;
     const spec: SourceSpec = { type: s.type, kind: s.kind, key: s.source_key, name: s.name, url: s.url };
@@ -467,10 +470,10 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
           events.push(...o.eventIds);
         }
         if (got.complete) {
-          const gone = await closeMissing(c, s.id, got.postings.map((p) => p.externalId));
+          const gone = await closeMissing(c, s.id, got.seenIds ?? got.postings.map((p) => p.externalId));
           closed += gone.closed; events.push(...gone.eventIds);
         }
-        await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, last_success_at = now(), last_checked_at = now(), last_listed = $2 WHERE id = $1", [s.id, got.listed]);
+        await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, retry_after_at = NULL, slowdowns = 0, last_success_at = now(), last_checked_at = now(), last_listed = $2 WHERE id = $1", [s.id, got.listed]);
       });
       for (const n of got.notes) notes.push({ source: s.name, note: n });
       if (got.listed === 0 && again) {
@@ -484,7 +487,13 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
       const reason = e instanceof SourceRefusedError ? e.reason : "unreachable";
       const detail = e instanceof SourceRefusedError ? e.detail : (e as Error).message;
       const health = reason === "robots" || reason === "refused" ? "blocked" : "degraded";
-      await withApplicant(pool, ctx, (c) => c.query(
+      if (reason === "rate_limited") {
+        // Asked to slow down: not a failure. Wait as long as it asked (or back off), then try again.
+        const until = new Date(wall + retryWaitMs((e as SourceRefusedError).answer?.retryAfter, Number(s.slowdowns ?? 0), wall));
+        await withApplicant(pool, ctx, (c) => c.query(
+          "UPDATE job_source SET health = 'degraded', health_reason = $2, retry_after_at = $3, slowdowns = slowdowns + 1, last_checked_at = now() WHERE id = $1",
+          [s.id, `${reason}: ${detail}`.slice(0, 300), until]));
+      } else await withApplicant(pool, ctx, (c) => c.query(
         "UPDATE job_source SET health = $2, health_reason = $3, failures = failures + 1, last_checked_at = now() WHERE id = $1",
         [s.id, health, `${reason}: ${detail}`.slice(0, 300)]));
       notes.push({ source: s.name, note: PLAIN_REFUSAL[reason] ?? PLAIN_REFUSAL.unreachable! });
@@ -703,7 +712,7 @@ export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: 
 
 export async function listSources(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.failures, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
+    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.failures, s.retry_after_at, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }

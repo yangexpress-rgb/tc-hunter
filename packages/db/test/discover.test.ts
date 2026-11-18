@@ -209,7 +209,7 @@ describe("Search again pressed while a whole search runs (Yong, 2026-11-17: noth
     const first = (part: string) => order.findIndex((u) => u.includes(part));
     expect(first("fabrikam")).toBeGreaterThan(first("alpha"));
     expect(first("fabrikam")).toBeLessThan(first("bravo"));
-    expect(order.filter((u) => u.includes("boards-api.greenhouse.io/v1/boards/fabrikam/jobs")).length).toBe(1);
+    expect(order.filter((u) => u.endsWith("boards-api.greenhouse.io/v1/boards/fabrikam/jobs")).length).toBe(1);
     expect((await scanStatus(pool, pat)).asked).toEqual([]);
   });
 });

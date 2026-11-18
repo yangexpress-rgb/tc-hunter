@@ -15,7 +15,7 @@ const GH_URL = "https://boards-api.greenhouse.io/v1/boards/fabrikam/jobs?content
 
 class FixtureFetcher implements Fetcher {
   async get(url: string): Promise<FetchResult> {
-    if (url !== GH_URL) throw new SourceRefusedError("not_found", url);
+    if (url !== GH_URL && url !== GH_URL.replace("?content=true", "")) throw new SourceRefusedError("not_found", url);
     return { status: 200, text: read("f3/greenhouse-board.json"), url, contentType: "" };
   }
 }
