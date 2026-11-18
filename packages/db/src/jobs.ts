@@ -305,6 +305,8 @@ export interface WorkDeps {
   apply?: ApplyDeps;
   /** Told when a piece of work starts (the worker logs it and watches how long it takes). */
   onStart?: (w: { kind: string; attempt: number }) => void;
+  /** Told each time a long piece of work moves on (a search's next step or posting), so the watchdog only stops work that has stalled. */
+  onProgress?: () => void;
   /** Reading new postings at batch price, for scheduled searches (Yong, 2026-11-17). */
   batch?: RequirementsBatcher;
 }
@@ -385,6 +387,7 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
   const runId = await withApplicant(pool, ctx, async (c) =>
     (await c.query(`INSERT INTO scan_run (applicant_id, progress) VALUES (app_applicant_id(), '{"step":"Starting"}') RETURNING id`)).rows[0].id as string);
   const progress = async (step: string, done?: number, total?: number, source?: string) => {
+    deps.onProgress?.();
     await withApplicant(pool, ctx, (c) => c.query("UPDATE scan_run SET progress = $2, updated_at = now() WHERE id = $1",
       [runId, JSON.stringify({ step, ...(total ? { done: done ?? 0, total } : {}), ...(source ? { source } : {}) })]));
   };
@@ -697,6 +700,7 @@ async function readNow(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, items
   for (const p of items) {
     const req = await deps.reader.read(p.text, p.title);
     await withApplicant(pool, ctx, (c) => writeReading(c, p.id, req, deps.reader.version, waitingAs));
+    deps.onProgress?.();
     n++;
   }
   return n;

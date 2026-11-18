@@ -12,6 +12,7 @@ import {
 import { ServerBrowser } from "./apply/browser";
 import { liveServer } from "./apply/live";
 import { dumpPostings, runF9, runGenEval, runRequirementsEval } from "./evalF9";
+import { stuckVerdict } from "./watchdog";
 
 const log = createLogger();
 const cfg = loadConfig();
@@ -86,7 +87,6 @@ const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
 /** How long one piece of work may take before the worker counts it as stuck (minutes). */
-const STUCK_MINUTES: Record<string, number> = { scan: 45, scan_finish: 45, apply: 30, tailor: 20, resume_digest: 20, email_check: 15 };
 
 let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
@@ -130,15 +130,18 @@ async function main() {
     }, 5000).unref();
   } else log.info("worker.live_off", { reason: process.env.TC_APPLY_BROWSER === "off" ? "apply browser off" : "TC_LIVE_KEY not set" });
   let lastSchedule = 0;
-  // Watchdog: one piece of work that runs far too long (a site or service that never answers) would
-  // hold up everything after it. Stop the worker then; the app restarts and the work is queued again.
-  let current: { kind: string; at: number } | null = null;
-  const onStart = (w: { kind: string; attempt: number }) => { current = { kind: w.kind, at: Date.now() }; log.info("work.started", w); };
+  // Watchdog: one piece of work that stops moving (a site or service that never answers) would hold up
+  // everything after it. Stop the worker then; the app restarts and the work is queued again. A long
+  // search that keeps moving is not stuck: its limit counts from its last step, up to a hard cap
+  // (2026-11-18: a 47-source search was stopped at 45 minutes while still reading, three times over).
+  let current: { kind: string; at: number; beat: number } | null = null;
+  const onStart = (w: { kind: string; attempt: number }) => { current = { kind: w.kind, at: Date.now(), beat: Date.now() }; log.info("work.started", w); };
+  const onProgress = () => { if (current) current.beat = Date.now(); };
   setInterval(() => {
     if (!current) return;
-    const mins = (Date.now() - current.at) / 60_000;
-    if (mins > (STUCK_MINUTES[current.kind] ?? 20)) {
-      log.warn("work.stuck", { kind: current.kind, minutes: Math.round(mins) });
+    const verdict = stuckVerdict(current, Date.now());
+    if (verdict) {
+      log.warn("work.stuck", { kind: current.kind, ...verdict });
       process.exit(1);
     }
   }, 60_000).unref();
@@ -154,7 +157,7 @@ async function main() {
         if (queued || mail || applies) log.info("worker.scheduled", { scans: queued, email_checks: mail, applies });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search, apply, onStart, batch });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search, apply, onStart, onProgress, batch });
       current = null;
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
       // Counts and timings only, never names or content, so a stuck or failed search can be traced.
