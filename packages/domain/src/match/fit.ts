@@ -1,5 +1,6 @@
 import { findSkills, canonicalSkill } from "../jobs/skills";
 import { containsPhrase } from "../jobs/text";
+import { countryFit } from "../jobs/country";
 import { functionWords, levelOf } from "../jobs/normalize";
 import type { SalaryPeriod } from "../jobs/types";
 import { applicantLevel, effectiveYears, employmentKind, languageMentioned, levelFit, sameEmployer, seniorityFit, type MatchPosting, type MatchPrefs, type MatchProfile } from "./score";
@@ -18,7 +19,7 @@ import { applicantLevel, effectiveYears, employmentKind, languageMentioned, leve
  * The older overall match score (score.ts) is unchanged and still drives "Best match",
  * the ruled-out filters, calibration and the resume threshold.
  */
-export const FIT_VERSION = "fit-1";
+export const FIT_VERSION = "fit-2";  // fit-2: the goal's countries count in Place
 
 export interface FitPart { key: string; label: string; weight: number; raw: number; points: number; detail: string[] }
 export interface Fit { score: number; parts: FitPart[]; summary: string }
@@ -95,7 +96,14 @@ export function goalFit(prefs: MatchPrefs, posting: MatchPosting): GoalFit {
       : !prefs.locations.filter((l) => !/remote/i.test(l)).length && typeOk
         ? (posting.workplaceType ? [1, `${WORK[posting.workplaceType]}, a way of working you chose.`] : [0.5, "The posting doesn't say if it's remote, hybrid or in the office."])
       : [0, `Not in a place you chose (${posting.locationRaw ?? posting.workplaceType}).`];
-    parts.push({ key: "place", label: "Place", weight: 20, raw: raw as number, detail: [line as string] });
+    const cf = countryFit(posting, prefs.countries ?? []);
+    // Outside the goal's countries: no place points, whatever else fits. Unknown country: at most half.
+    const r = cf.verdict === "out" ? 0 : cf.verdict === "unknown" ? Math.min(raw as number, 0.5) : raw as number;
+    parts.push({ key: "place", label: "Place", weight: 20, raw: r, detail: cf.verdict === "any" ? [line as string] : [line as string, cf.line] });
+  } else if ((prefs.countries ?? []).length) {
+    // Only countries set: the country is the place.
+    const cf = countryFit(posting, prefs.countries ?? []);
+    parts.push({ key: "place", label: "Place", weight: 20, raw: cf.raw, detail: [cf.line] });
   }
 
   // Pay (10), when the goal sets an expectation.

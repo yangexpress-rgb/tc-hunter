@@ -9,7 +9,7 @@ const base: MatchPosting = { ...fx.posting, descriptionText: readFileSync(join(F
 const now = new Date(fx.now);
 const settings = { industriesExclude: [], employersExclude: [], mustHaveKeywords: [], dealBreakers: [] };
 const goal = (g: Partial<Goal>): Goal => ({
-  id: "g", active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: [], occupation: null, industries: [], companies: [], comp: null,
+  id: "g", active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: [], occupation: null, industries: [], companies: [], comp: null,
   locations: [], workplaceTypes: [], ...g,
 });
 const prefs = (g: Partial<Goal>) => prefsForGoal(goal(g), settings, null);
@@ -66,5 +66,27 @@ describe("C-score: the applicant's own record against the job", () => {
     const c = candidateFit(fx.profile, { ...base, requirements: { ...base.requirements, must_have: [] } }, now);
     expect(c.parts.map((p) => p.key)).toEqual(["experience", "field"]);
     expect(c.summary).toMatch(/lists no skills/);
+  });
+});
+
+describe("G-score and the goal's countries (Yong, 2026-11-18)", () => {
+  it("gives no place points to a job outside the goal's countries and says why", () => {
+    const g = goalFit(prefs({ roles: ["Operations Analyst"], workplaceTypes: ["remote"], countries: ["US"] }), { ...base, locationRaw: "Remote - Canada", workplaceType: "remote" });
+    const place = g.parts.find((p) => p.key === "place")!;
+    expect(place.raw).toBe(0);
+    expect(place.detail.join(" ")).toMatch(/Canada, not a country you chose \(United States\)/);
+  });
+
+  it("counts the country as the place when the goal sets only countries", () => {
+    const g = goalFit(prefs({ roles: ["Operations Analyst"], countries: ["US"] }), { ...base, locationRaw: "Austin, TX", workplaceType: "onsite" });
+    expect(g.parts.find((p) => p.key === "place")).toMatchObject({ raw: 1, detail: ["In United States, a country you chose."] });
+  });
+
+  it("rules a job out of the overall match when it's in another country", async () => {
+    const { scoreMatch } = await import("../src");
+    const profile = { skills: [], unprovenSkills: [], experience: [] };
+    const r = scoreMatch(profile, prefs({ roles: ["Operations Analyst"], countries: ["US"] }), { ...base, locationRaw: "Bengaluru, India", workplaceType: "onsite" }, { now });
+    expect(r.filtered).toBe(true);
+    expect(r.filterReasons.join(" ")).toMatch(/India, not a country you chose/);
   });
 });

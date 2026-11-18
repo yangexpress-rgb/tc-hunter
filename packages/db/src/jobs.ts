@@ -3,7 +3,7 @@ import { runEmailCheck, type EmailDeps } from "./email";
 import {
   cleanEmployerName, companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, bestGoalFit, candidateFit, FIT_VERSION, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
-  SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
+  SourceRefusedError, retryWaitMs, titleIsRelated, outsideCountries, scanCountries, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
   readRequirementsText, withUsageScope, type BatchPosting, type Requirements, type RequirementsBatcher,
 } from "@tc-hunter/domain";
@@ -447,7 +447,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   const readAgain = new Set([...(opts.only ?? []), ...(opts.freshIds ?? [])]);
   const freshFor = (id: string) => (readAgain.has(id) ? 0 : freshMs);
   await withApplicant(pool, ctx, (c) => applySourceFixes(c, ctx.applicantId));
-  const { sources, firstCount, targets, queries } = await withApplicant(pool, ctx, async (c) => {
+  const { sources, firstCount, targets, queries, countries } = await withApplicant(pool, ctx, async (c) => {
     const src = (await c.query(
       `SELECT s.* FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted AND s.kind <> 'job_search' ORDER BY s.name`)).rows;
     const prefs = await prefsFor(c);
@@ -460,7 +460,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     const named = (x: Record<string, any>) => ids.has(x.id) || (x.kind !== "pasted_link" && keys.has(companyKey(x.name)));
     const mine = only ? src.filter((x) => only.has(x.id)) : src;
     return { sources: [...mine.filter(named), ...mine.filter((x) => !named(x))], firstCount: mine.filter(named).length,
-      targets: wanted.length ? wanted : exp, queries: searchQueries(goals) };
+      targets: wanted.length ? wanted : exp, queries: searchQueries(goals), countries: scanCountries(goals) };
   });
 
   let checked = 0, fresh0 = 0, updated = 0, closed = 0;
@@ -525,7 +525,8 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
       // Catalogue writes are shared rows; they run in the applicant's transaction scope but touch no personal data.
       // Only jobs whose titles relate to the goals are taken in (Databricks lists 901, each new one read
       // by Claude: the search sat on it for over half an hour, 2026-11-17). The others still count as listed.
-      const take = got.postings.filter((p) => p.title && titleIsRelated(p.title, targets));
+      // Jobs clearly in a country no goal wants are left out too (Yong, 2026-11-18); a job whose country can't be told is kept.
+      const take = got.postings.filter((p) => p.title && titleIsRelated(p.title, targets) && !outsideCountries(p, countries));
       let n = 0;
       await withApplicant(pool, ctx, async (c) => {
         for (const raw of take) {
@@ -619,7 +620,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     try {
       let taken = 0, listed = 0;
       for (const q of queries) {
-        const found = (await site.search(q, deps.fetcher)).filter((p) => p.title && p.employer && p.descriptionText && titleIsRelated(p.title, targets));
+        const found = (await site.search(q, deps.fetcher)).filter((p) => p.title && p.employer && p.descriptionText && titleIsRelated(p.title, targets) && !outsideCountries(p, countries));
         checked += found.length;
         listed += found.length;
         // At most 15 a search and 60 a site each scan, best first as the site ranks them: each new job is read once.

@@ -1,5 +1,5 @@
 import { getPreferences, jobsSummary, rescoreMatches, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
-import { JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, normalizeEmployer, t } from "@tc-hunter/domain";
+import { FIT_VERSION, JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, normalizeEmployer, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -49,7 +49,7 @@ export default async function JobsPage(props: PageProps) {
   const listArgs = { status, sort: sort === "company" ? "score" as const : sort, ladder, source, showFiltered };
   let matched = await listMatches(pool, session, listArgs);
   // Jobs scored before G and C existed get both the first time Jobs opens (no fetching, rules only).
-  if (matched.rows.some((r) => !r.fit_version)) { await rescoreMatches(pool, session); matched = await listMatches(pool, session, listArgs); }
+  if (matched.rows.some((r) => r.fit_version !== FIT_VERSION)) { await rescoreMatches(pool, session); matched = await listMatches(pool, session, listArgs); }
   const { counts } = matched;
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const workOf = (r: Record<string, any>) => r.workplace_type ?? (/remote/i.test(r.location_raw ?? "") ? "remote" : null);

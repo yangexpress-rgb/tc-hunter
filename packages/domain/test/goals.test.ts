@@ -11,7 +11,7 @@ const now = new Date(fx.now);
 const settings = { industriesExclude: [], employersExclude: [], mustHaveKeywords: [], dealBreakers: [] };
 
 const goal = (g: Partial<Goal>): Goal => ({
-  id: "g", active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: [], occupation: null, industries: [], companies: [], comp: null,
+  id: "g", active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: [], occupation: null, industries: [], companies: [], comp: null,
   locations: [], workplaceTypes: [], ...g,
 });
 

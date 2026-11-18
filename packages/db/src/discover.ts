@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { companyKey, findBoardOrAsk, goalLevelLabel, type CareersLookup, noBoardReason, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
+import { companyKey, countryName, findBoardOrAsk, goalLevelLabel, type CareersLookup, noBoardReason, type CompanyIdea, type CompanyProposer, type Fetcher, type GoalBrief } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
@@ -66,7 +66,7 @@ export async function runDiscovery(pool: pg.Pool, ctx: RequestContext, fetcher: 
   let asked = 0;
   for (const g of goals) {
     await progress(deps.proposer.version.startsWith("named") ? "Gathering the companies you named" : "Asking Claude for employers that fit your goals", asked++, goals.length);
-    const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes, levels: g.levels.map(goalLevelLabel), specialties: g.specialties, languages: g.languages };
+    const brief: GoalBrief = { roles: g.roles, occupation: g.occupation, industries: g.industries, companies: g.companies, locations: g.locations, workplaceTypes: g.workplaceTypes, employmentTypes: g.employmentTypes, levels: g.levels.map(goalLevelLabel), specialties: g.specialties, languages: g.languages, countries: g.countries.map(countryName) };
     if (!g.roles.length && !g.occupation && !g.industries.length && !g.companies.length) continue;
     const suggested = await deps.proposer.propose(brief, [...watching, ...[...ideas.values()].map((i) => i.name)], deps.perGoal ?? 12);
     for (const s of suggested) {

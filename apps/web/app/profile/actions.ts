@@ -320,6 +320,7 @@ export async function saveGoalAction(form: FormData) {
     levels: form.getAll("levels").map(String) as never,
     specialties: list(form.get("specialties")),
     languages: list(form.get("languages")),
+    countries: list(form.get("countries")),
     roles: list(form.get("roles")),
     occupation: String(form.get("occupation") ?? "").trim() || null,
     industries: list(form.get("industries")),

@@ -46,7 +46,7 @@ let deps: WorkDeps;
 const noBoards: Fetcher = { async get(u) { throw new SourceRefusedError("not_found", u); } };
 const drain = async () => { while (await runNextWork(pool, deps)) { /* drain */ } };
 const goal = (g: Partial<GoalInput>): GoalInput => ({
-  active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
+  active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: [], occupation: null, industries: [], companies: [], comp: null, locations: [], workplaceTypes: [], ...g,
 });
 
 beforeAll(async () => {
@@ -71,7 +71,7 @@ describe("job search sites, searched first for every goal", () => {
     await saveGoal(pool, yong, goal({ roles: ["Operations Analyst"], locations: ["Toronto"] }));
     await requestScan(pool, yong);
     await drain();
-    expect(site.queries).toEqual([{ what: "Operations Analyst", where: "Toronto", remote: false }]);
+    expect(site.queries).toEqual([{ what: "Operations Analyst", where: "Toronto", remote: false, country: "CA" }]);
     const rows = (await listMatches(pool, yong)).rows.map((r) => [r.title, r.employer_canonical]);
     expect(rows).toContainEqual(["Operations Analyst", "Contoso"]);
     expect(rows.map((r) => r[0])).not.toContain("Pastry Chef");  // not related to the goal, so never read in

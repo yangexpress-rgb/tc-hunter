@@ -38,6 +38,8 @@ export interface Goal {
   comp: { amount: number; currency: string; period: SalaryPeriod } | null;
   locations: string[];
   workplaceTypes: Workplace[];
+  /** Countries the job must be in, as ISO codes ("US"). Empty means any country (Yong, 2026-11-18). */
+  countries: string[];
 }
 
 /** Settings that cover the whole search, whatever the goal. */
@@ -89,6 +91,7 @@ export function prefsForGoal(goal: Goal, settings: SearchSettings, ladder: Goal 
     levels: goal.levels,
     specialties: goal.specialties,
     languages: goal.languages,
+    countries: goal.countries,
     goalName: goalName(goal),
     goalId: goal.id,
   };
