@@ -317,9 +317,9 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
   // The run is recorded first, so the screens can show what it's doing as it goes (Yong, 2026-11-14).
   const runId = await withApplicant(pool, ctx, async (c) =>
     (await c.query(`INSERT INTO scan_run (applicant_id, progress) VALUES (app_applicant_id(), '{"step":"Starting"}') RETURNING id`)).rows[0].id as string);
-  const progress = async (step: string, done?: number, total?: number) => {
+  const progress = async (step: string, done?: number, total?: number, source?: string) => {
     await withApplicant(pool, ctx, (c) => c.query("UPDATE scan_run SET progress = $2, updated_at = now() WHERE id = $1",
-      [runId, JSON.stringify({ step, ...(total ? { done: done ?? 0, total } : {}) })]));
+      [runId, JSON.stringify({ step, ...(total ? { done: done ?? 0, total } : {}), ...(source ? { source } : {}) })]));
   };
   try {
     return await scanSteps(pool, ctx, deps, opts, runId, progress);
@@ -332,7 +332,7 @@ export async function runScan(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps
 }
 
 async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opts: ScanOpts, runId: string,
-  progress: (step: string, done?: number, total?: number) => Promise<void>): Promise<Record<string, number>> {
+  progress: (step: string, done?: number, total?: number, source?: string) => Promise<void>): Promise<Record<string, number>> {
   // First, find places to look from the goals, when goals changed or a week has passed (or the person pressed Refresh).
   let found: Record<string, number> = {};
   const only = opts.only?.length ? new Set(opts.only) : null;
@@ -398,7 +398,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     });
   };
   const readBoard = async (s: Record<string, any>, again = true): Promise<void> => {
-    await progress(`Reading ${s.name}`, done++, total);
+    await progress(`Reading ${s.name}`, done++, total, s.id);
     if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
       return;
@@ -451,8 +451,32 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     }
   };
 
+  // "Search again" pressed on a row while this whole search runs (Yong, 2026-11-17: nothing seemed to
+  // happen): that source is read next, not after the other 40-odd places.
+  const read = new Set<string>();
+  const jumpQueue = async () => {
+    if (only) return;
+    const asked = await withApplicant(pool, ctx, async (c) => {
+      const w = (await c.query("SELECT id, payload->'again_only' AS a FROM work_item WHERE kind = 'scan' AND status = 'running' FOR UPDATE")).rows[0];
+      const ids: string[] = Array.isArray(w?.a) ? w.a.map(String) : [];
+      const take = sources.filter((x) => ids.includes(x.id));
+      if (!take.length) return [];
+      const rest = ids.filter((id) => !take.some((x) => x.id === id));
+      await c.query(rest.length ? "UPDATE work_item SET payload = jsonb_set(payload, '{again_only}', $2::jsonb) WHERE id = $1"
+        : "UPDATE work_item SET payload = payload - 'again_only' WHERE id = $1", rest.length ? [w.id, JSON.stringify(rest)] : [w.id]);
+      return take;
+    });
+    for (const s of asked) { readAgain.add(s.id); read.add(s.id); await readBoard(s); }
+  };
+  const readInTurn = async (s: Record<string, any>) => {
+    await jumpQueue();
+    if (read.has(s.id)) return;  // already read when it was asked for
+    read.add(s.id);
+    await readBoard(s);
+  };
+
   // 1. The careers sites of companies named in a goal come first.
-  for (const s of sources.slice(0, firstCount)) await readBoard(s);
+  for (const s of sources.slice(0, firstCount)) await readInTurn(s);
 
   // 2. Then the job-search sites: each goal's roles in each of its places (Yong, 2026-11-14).
   let searched = 0;
@@ -466,6 +490,7 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     });
     if (only && !only.has(follow.id)) continue;
     if (follow.muted) { done++; continue; }
+    await jumpQueue();
     await progress(`Searching ${site.name}`, done++, total);
     try {
       let taken = 0, listed = 0;
@@ -499,7 +524,8 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   }
 
   // 3. Then the other employers' own jobs pages.
-  for (const s of sources.slice(firstCount)) await readBoard(s);
+  for (const s of sources.slice(firstCount)) await readInTurn(s);
+  await jumpQueue();
 
   await progress("Scoring what we found against your goals", total, total);
   return withApplicant(pool, ctx, async (c) => {
@@ -708,6 +734,9 @@ export interface ScanStatus {
   scanTime: string;
   scanTz: string;
   nextRunAt: string | null;
+  /** Sources someone pressed "Search again" on that haven't been read yet, and the one being read now. */
+  asked: string[];
+  readingId: string | null;
 }
 
 /** What the search is doing now, or how the last one went, for the live status on Jobs and Where we look. */
@@ -728,7 +757,11 @@ export async function scanStatus(pool: pg.Pool, session: Session): Promise<ScanS
         [schedule, scanDay, scanTime, scanTz, period])).rows[0];
       nextRunAt = new Date(t.due ? Date.now() : t.next).toISOString();
     }
-    const base: ScanStatus = { state: "none", step: null, done: null, total: null, startedAt: null, finishedAt: null, places: 0, jobsRead: 0, newJobs: 0, closed: 0, problems: [], failed: null, schedule, scanDay, scanTime, scanTz, nextRunAt };
+    const asked = (await c.query(`SELECT DISTINCT x FROM work_item w, jsonb_array_elements_text(
+        CASE WHEN w.status = 'queued' THEN coalesce(w.payload->'only', '[]') || coalesce(w.payload->'fresh_ids', '[]')
+             ELSE coalesce(w.payload->'again_only', '[]') || coalesce(w.payload->'only', '[]') END) x
+       WHERE w.kind = 'scan' AND w.status IN ('queued','running')`)).rows.map((x) => String(x.x));
+    const base: ScanStatus = { state: "none", step: null, done: null, total: null, startedAt: null, finishedAt: null, places: 0, jobsRead: 0, newJobs: 0, closed: 0, problems: [], failed: null, schedule, scanDay, scanTime, scanTz, nextRunAt, asked, readingId: null };
     if (w?.status === "queued") return { ...base, state: "waiting", startedAt: w.created_at };
     if (w?.status === "running" && r && !r.finished_at) {
       const p = r.progress ?? {};
@@ -736,7 +769,7 @@ export async function scanStatus(pool: pg.Pool, session: Session): Promise<ScanS
       if (Date.now() - new Date(r.updated_at).getTime() > 15 * 60_000) {
         return { ...base, state: "failed", startedAt: r.started_at, failed: `The search stopped responding${p.step ? ` while ${String(p.step).charAt(0).toLowerCase()}${String(p.step).slice(1)}` : ""}. It starts again automatically within a few minutes.` };
       }
-      return { ...base, state: "running", step: p.step ?? "Starting", done: p.done ?? null, total: p.total ?? null, startedAt: r.started_at };
+      return { ...base, state: "running", step: p.step ?? "Starting", done: p.done ?? null, total: p.total ?? null, startedAt: r.started_at, readingId: p.source ?? null };
     }
     if (!r) return w?.status === "failed" ? { ...base, state: "failed", failed: "The search couldn't start. It will try again on the next scheduled search." } : base;
     const notes = (Array.isArray(r.source_notes) ? r.source_notes : []) as Array<{ source: string; note: string }>;

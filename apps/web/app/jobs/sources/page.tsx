@@ -1,5 +1,5 @@
 import { latestDiscovery, listAppSettings, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
-import { LookAgainButton, ScanStatusBox } from "@/components/jobs/ScanStatus";
+import { LookAgainButton, ScanStatusBox, SearchAgainButton } from "@/components/jobs/ScanStatus";
 import { companyKey, goalName, noBoardSentence, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -139,7 +139,7 @@ export default async function SourcesPage(props: PageProps) {
       <p><a href="/jobs">← Jobs</a></p>
       <h1>{t("jobs.sources.title")}</h1>
       <Flash saved={saved} error={error} />
-      {params.searching === "1" ? <p className="status" role="status">Searching that source again now. The box above shows how it's going, and its row updates when it's done.</p> : null}
+
 
       <section className="card stack">
         <p>For each of your <a href="/profile/goals">goals</a>, we read the careers sites of the companies you named first, then search job sites, then find other employers that fit and read their own jobs pages. Jobs that fit come back to Jobs, scored. You don't need to do anything here.</p>
@@ -187,7 +187,7 @@ export default async function SourcesPage(props: PageProps) {
                   <td>{r.again ? (
                     <form action={searchSourceAction}>
                       <input type="hidden" name="id" value={r.again} /><input type="hidden" name="back" value={BACK} />
-                      <button className="small" title={`Search ${r.name} again now, without searching every other source`}>Search again</button>
+                      <SearchAgainButton id={r.again} name={r.name} initial={scan} />
                     </form>) : null}</td>
                   {/* One line to save space; press it to read the rest (Yong, 2026-11-17). */}
                   <td className="muted small">{r.detail ? <details className="more one-line"><summary title="Show all">{r.detail}</summary></details> : null}</td>
