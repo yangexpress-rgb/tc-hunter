@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { aboutRubric, essayRubric, genPosting, letterRubric, type GenCase, type TailorProfile } from "../src";
+import { aboutRubric, checkContext, checkLine, essayRubric, fillMetric, genPosting, letterRubric, numbersIn, type GenCase, type TailorProfile } from "../src";
 
 /** The letter, About and essay golden sets (Yong, 2026-11-18): fixtures are well formed and the rubric is right. */
 const root = new URL("../../../fixtures/gen-golden/", import.meta.url);
@@ -49,5 +49,22 @@ describe("generation golden set", () => {
     const gap = cases.find((c) => c.key === "g3-bandwidth")!;
     const bp = genPosting(gap, profile);
     expect(essayRubric("g3", profile, bp, gap.essays[0]!, []).passed).toBe(1);
+  });
+});
+
+describe("checker gaps found by the golden set", () => {
+  const ctx = checkContext(profile, posting);
+  it("checks amounts written with a unit letter: an invented $40M is blocked, the real $12M passes", () => {
+    expect(numbersIn("a $40M budget, 4.5x faster, Q4 and S4HANA")).toEqual(["40", "4.5"]);
+    const real = checkLine("Managed a $12M annual operating budget.", ["b3"], ctx);
+    expect(real.ok).toBe(true);
+    const invented = checkLine("Managed a $40M annual operating budget.", ["b3"], ctx);
+    expect(invented).toMatchObject({ ok: false, reason: "number_mismatch", terms: ["40"] });
+  });
+  it("fills {metric} from a cited bullet with no saved metric when it has exactly one number", () => {
+    expect(fillMetric("Cut intake time by {metric}.", ["b2"], profile)).toBe("Cut intake time by 30%.");
+    expect(fillMetric("Implemented Epic scheduling across {metric} clinics.", ["w2", "b5"], profile)).toBe("Implemented Epic scheduling across 6 clinics.");
+    // Two numbers in the bullet: which one is meant is unclear, so {metric} stays and the line is blocked.
+    expect(checkLine("Led {metric} people.", ["b1"], ctx).ok).toBe(false);
   });
 });
