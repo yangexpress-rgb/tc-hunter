@@ -1,0 +1,140 @@
+{
+ "_about": "Requirements-reader golden set (Yong, 2026-11-17 prompt review). Each posting with the requirements a careful reader takes from it, so the reader's recall is measured before and after any prompt or model change. Postings r1-r4 follow real public postings (source); r5 is a composite for the prompt's edge cases. expect alternatives are split by |; a read entry matches when it contains the expected words. Run live on the server with TC_EVAL_REQ=1 (see apps/worker/src/evalF9.ts), or locally with TC_EVAL_LIVE=1 and ANTHROPIC_API_KEY.",
+ "postings": [
+  {
+   "key": "r1-people-systems",
+   "source": "Modelled on Greenhouse, Director, People Systems and Operations (job-boards.greenhouse.io/greenhouse/jobs/8141795), read 2026-11-18",
+   "title": "Director, People Systems and Operations",
+   "text": "About the role\nGreenhouse is hiring a Director, People Systems and Operations to lead People Operations and People Systems. You will report to the Chief People Officer and sit on the People Leadership Team.\n\nWhat you'll do\n- Set the strategy and roadmap for our HR technology stack, including vendor management.\n- Own the HRIS as the source of truth for employee data.\n- Improve key employee moments, from offer to offboarding.\n- Build people analytics and self-service tools.\n- Own People compliance, including immigration, leaves and audits.\n- Lead AI-forward change across People operations, piloting new tools in contained ways.\n\nWhat you'll bring\n- 8+ years of progressive People Operations experience, including 3+ years leading People Operations, HRIS and/or People Systems teams at the manager or director level\n- Deep hands-on experience administering global HRIS platforms such as Workday, Rippling or HiBob\n- A track record of scaling People processes with measurable results\n- Experience with payroll and benefits integrations, cross-border data and workforce privacy; global experience is a plus\n- Hands-on experience evaluating or implementing AI and automation in People operations\n- Strong project management and change leadership skills\n- Analytical skills, with experience in HR reporting and dashboards\n- Experience leading diverse, high-performing teams\n\nApplicants must be currently authorized to work in the United States on a full-time basis.\n\nWe know candidates often don't apply unless they meet 100% of the qualifications. We encourage you to apply anyway.",
+   "expect": {
+    "must_have": [
+     "People Operations",
+     "HRIS",
+     "Workday",
+     "Rippling",
+     "HiBob",
+     "payroll",
+     "benefits",
+     "privacy",
+     "AI",
+     "automation",
+     "project management",
+     "change leadership|change management",
+     "HR reporting|reporting",
+     "dashboards|dashboarding"
+    ],
+    "nice_to_have": [
+     "global experience|global"
+    ],
+    "years": 8,
+    "education": null,
+    "authorisation": "authorized to work in the United States"
+   }
+  },
+  {
+   "key": "r2-director-ops-labs",
+   "source": "Modelled on Outer Labs, Director of Operations (builtin.com/job/director-operations/2220531), read 2026-11-18",
+   "title": "Director of Operations",
+   "text": "Outer Labs builds software for architecture and construction. Our Director of Operations reports directly to the CEO and keeps the business running smoothly.\n\nResponsibilities\n- Run bi-annual strategic planning and periodic leadership check-ins.\n- Analyze company performance and report it to executives.\n- Oversee regulatory and vendor compliance.\n- Work with accounting on invoices, payroll approval and vendor reimbursement.\n- Set and adjust department budgets.\n- Review and approve business contracts before signature.\n- Run procurement and administration of business systems and tools.\n\nQualifications\n- MBA preferred\n- 5+ years of experience in a similar role\n- Excellent written and verbal communication skills\n- Strong attention to detail and analytical skills\n- Ability to build consensus with data-driven arguments\n- A bias for action and proactive problem solving\n\nCompensation: $160,000 - $210,000 base, plus bonus and equity.",
+   "expect": {
+    "must_have": [
+     "written communication|communication",
+     "verbal communication|communication",
+     "attention to detail",
+     "analytical",
+     "consensus",
+     "problem solving"
+    ],
+    "nice_to_have": [
+     "MBA"
+    ],
+    "years": 5,
+    "education": "MBA",
+    "authorisation": null
+   }
+  },
+  {
+   "key": "r3-director-ops-climate",
+   "source": "Modelled on Director of Operations, San Francisco (climatebase.org/job/45903898/director-of-operations), read 2026-11-18",
+   "title": "Director of Operations",
+   "text": "The role\nWe are looking for a Director of Operations to oversee day-to-day operations so the company runs efficiently, set performance goals and long-term operating plans, and work across departments.\n\nWhat you'll do\n- Build day-to-day operating systems and visibility into key initiatives.\n- Monitor key operating metrics.\n- Plan and forecast budgets and cost of sales.\n- Drive company-wide growth and cost-saving process changes.\n- Set and enforce operating policies and legal compliance.\n\nRequirements\n- 8+ years of related experience\n- Broad knowledge of operational functions, including finance, customer service and people management\n- Proven success planning efficient operations\n- Experience at an early-stage startup, or a realistic understanding of what that means\n\nPreferred\n- Bachelor's degree or equivalent in Business Administration or a related field\n- Strong verbal and written communication skills\n- Experience developing budgets and business plans\n- Organization and attention to detail\n- Negotiation skills\n- Analytical, decision-making and problem-solving skills\n- Working knowledge of data analysis and business management software\n\nA passion for fighting climate change is a plus.",
+   "expect": {
+    "must_have": [
+     "finance",
+     "customer service",
+     "people management",
+     "planning|operations",
+     "startup"
+    ],
+    "nice_to_have": [
+     "communication",
+     "budgets|budget",
+     "business plans|business plan",
+     "attention to detail|organization",
+     "negotiation",
+     "analytical",
+     "decision-making|decision making",
+     "problem-solving|problem solving",
+     "data analysis",
+     "business management software"
+    ],
+    "years": 8,
+    "education": "Bachelor",
+    "authorisation": null
+   }
+  },
+  {
+   "key": "r4-customer-ops",
+   "source": "Modelled on Lever, Senior Customer Operations Manager (builtinsf.com/job/operations/senior-customer-operations-manager/11559), read 2026-11-18",
+   "title": "Senior Customer Operations Manager",
+   "text": "About the role\nLever is looking for a Senior Customer Operations Manager in Revenue Operations to support our Customer Experience and Solutions team. You will own professional services tracking, gross margin, renewal forecasting and account portfolio balancing.\n\nWhat you'll do\n- Build Salesforce dashboards for renewal forecasting.\n- Build customer health and NPS models.\n- Design onboarding programs and a customer playbook.\n- Run a pricing migration for 3,000+ customers.\n\nYour skill set\n- 5+ years of operations experience across B2B go-to-market, customer operations and professional services delivery\n- A background in management consulting, strategy, or an operations or growth role at a technology company\n- Expert in Salesforce and Excel\n- An analytical problem solver who removes roadblocks and invents new ways of working\n\nBonus skills\n- SQL\n- Intercom\n- Zendesk\n- Marketo\n- Salesforce CPQ\n- Outreach",
+   "expect": {
+    "must_have": [
+     "go-to-market|go to market",
+     "customer operations",
+     "professional services",
+     "management consulting|consulting",
+     "Salesforce",
+     "Excel",
+     "problem solver|problem solving|analytical"
+    ],
+    "nice_to_have": [
+     "SQL",
+     "Intercom",
+     "Zendesk",
+     "Marketo",
+     "Salesforce CPQ",
+     "Outreach"
+    ],
+    "years": 5,
+    "education": null,
+    "authorisation": null
+   }
+  },
+  {
+   "key": "r5-revenue-cycle",
+   "source": "Composite health-system posting written for the edge cases in the reader prompt (a range of years, a combined line, a responsibility that names a tool, 'or equivalent experience', a sponsorship line)",
+   "title": "Vice President, Revenue Cycle Operations",
+   "text": "About the role\nOur health system is hiring a Vice President, Revenue Cycle Operations to lead patient access, billing and collections across 9 hospitals.\n\nWhat you'll do\n- Lead a team of 40 managers and analysts.\n- You will use Workday Financials to report results to the CFO each month.\n- Build the revenue cycle roadmap with clinical and finance leaders.\n\nRequired qualifications\n- Bachelor's degree in Healthcare Administration, Business or a related field, or equivalent experience\n- 7-10 years of revenue cycle leadership in a hospital or health system\n- Hands-on experience with Epic Resolute\n- Strong SQL and Python skills for operational analysis\n- 5 years of experience building Tableau dashboards\n- CRCR or CHFP certification\n\nPreferred qualifications\n- A master's degree (MHA or MBA) is a plus\n- Lean Six Sigma Green Belt\n- Experience with Power BI\n\nEligibility\nCandidates must be authorized to work in the United States. This role is not eligible for visa sponsorship.",
+   "expect": {
+    "must_have": [
+     "revenue cycle",
+     "Epic Resolute",
+     "SQL",
+     "Python",
+     "Tableau",
+     "CRCR",
+     "CHFP"
+    ],
+    "nice_to_have": [
+     "MHA|MBA|master's|masters",
+     "Lean Six Sigma",
+     "Power BI"
+    ],
+    "years": 7,
+    "education": "or equivalent experience",
+    "authorisation": "sponsorship"
+   }
+  }
+ ]
+}

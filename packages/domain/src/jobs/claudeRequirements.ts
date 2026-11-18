@@ -26,7 +26,13 @@ export class ClaudeRequirementsReader implements RequirementsReader {
   constructor(private client: Anthropic = new Anthropic()) {}
 
   async read(text: string, title: string): Promise<Requirements> {
+    return (await this.readDetailed(text, title)).requirements;
+  }
+
+  /** The reading and who made it: Claude, or the rule reader when Claude failed or found nothing (the eval reports which). */
+  async readDetailed(text: string, title: string): Promise<{ requirements: Requirements; by: "claude" | "rules"; problem?: string }> {
     const local = readRequirementsText(text, title);
+    const rules = (problem: string) => ({ requirements: local, by: "rules" as const, problem });
     try {
       const r = await this.client.beta.messages.parse({
         model: MODEL,
@@ -37,12 +43,12 @@ export class ClaudeRequirementsReader implements RequirementsReader {
         system: SYSTEM,
         messages: [{ role: "user", content: `<title>${title}</title>\n<posting>\n${text.slice(0, 40000)}\n</posting>` }],
       });
-      if (r.stop_reason === "refusal" || !r.parsed_output) return local;
+      if (r.stop_reason === "refusal" || !r.parsed_output) return rules(`no reading (${r.stop_reason})`);
       const o = r.parsed_output;
       const grounded = groundRequirements({ ...o, confidence: "high" }, text);
-      return grounded.must_have.length ? grounded : local;
-    } catch {
-      return local;
+      return grounded.must_have.length ? { requirements: grounded, by: "claude" } : rules("no must-haves found");
+    } catch (e) {
+      return rules(String((e as Error)?.message ?? e).slice(0, 160));
     }
   }
 }

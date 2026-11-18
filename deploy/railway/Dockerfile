@@ -36,6 +36,7 @@ COPY --from=build --chown=node:node /app/packages ./packages
 COPY --from=build --chown=node:node /app/apps/worker ./apps/worker
 # The F9 answer eval's synthetic fixture (run on the server with TC_EVAL_F9=1).
 COPY --from=build --chown=node:node /app/fixtures/f9 ./fixtures/f9
+COPY --from=build --chown=node:node /app/fixtures/req-golden ./fixtures/req-golden
 # TC Hunter's own browser for applying (apps/worker/src/apply): Chromium's headless shell and
 # the system libraries it needs, at the version playwright-core expects.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright

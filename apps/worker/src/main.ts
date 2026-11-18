@@ -9,7 +9,7 @@ import {
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
-import { runF9 } from "./evalF9";
+import { runF9, runRequirementsEval } from "./evalF9";
 
 const log = createLogger();
 const cfg = loadConfig();
@@ -85,6 +85,10 @@ async function main() {
   // The F9 answer eval, once, when TC_EVAL_F9=1 is set on the server (it uses the server's own key).
   if (process.env.TC_EVAL_F9 === "1" && smart.on) {
     runF9(log).catch((e) => log.warn("eval.f9_failed", { message: String((e as Error)?.message ?? e).slice(0, 300) }));
+  }
+  // The requirements golden set, once, when TC_EVAL_REQ=1 is set (same key as the posting reader).
+  if (process.env.TC_EVAL_REQ === "1" && smart.on) {
+    runRequirementsEval(log).catch((e) => log.warn("eval.req_failed", { message: String((e as Error)?.message ?? e).slice(0, 300) }));
   }
   // One worker: anything still marked running was cut off by the last restart or update.
   try {
