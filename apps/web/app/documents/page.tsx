@@ -1,4 +1,5 @@
 import { listDocuments } from "@tc-hunter/db";
+import { cleanEmployerName } from "@tc-hunter/domain";
 import { TopBar } from "@/components/TopBar";
 import { app, requireSession } from "@/lib/server";
 
@@ -13,7 +14,7 @@ export default async function DocumentsPage() {
   const rows = await listDocuments(app().pool, session);
   const jobs = new Map<string, { title: string; employer: string; ref: string; docs: Array<(typeof rows)[number]> }>();
   for (const r of rows) {
-    const j = jobs.get(r.job_ref) ?? { title: r.title, employer: r.employer_canonical, ref: r.job_ref, docs: [] };
+    const j = jobs.get(r.job_ref) ?? { title: r.title, employer: cleanEmployerName(r.employer_canonical) || r.employer_canonical, ref: r.job_ref, docs: [] };
     j.docs.push(r);
     jobs.set(r.job_ref, j);
   }

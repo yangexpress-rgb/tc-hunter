@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  buildLetter, buildResume, careerYears, checkContext, checkLine, decryptField, documentText, exportLeaks, extractText, isStale, renderDocument,
+  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, extractText, isStale, renderDocument,
   type Blocked, type DocHeader, type Gap, type LetterProposer, type LetterSource, type ResumeProposer, type ResumeSource,
   type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
@@ -24,7 +24,11 @@ export type DocKind = "resume" | "letter";
 const TYPE: Record<DocKind, string> = { resume: "tailored_resume", letter: "cover_letter" };
 export type DocSource = ResumeSource | LetterSource;
 
-export interface TailorDeps { resume: ResumeProposer; letter: LetterProposer; cfg: AppConfig }
+export interface TailorDeps {
+  resume: ResumeProposer; letter: LetterProposer; cfg: AppConfig;
+  /** The final review pass over each draft (Yong, 2026-11-18); none = the checker's own rules only. */
+  proofread?: Proofreader;
+}
 
 const STORY_PARTS = ["situation", "task", "action", "result"] as const;
 
@@ -90,7 +94,7 @@ export async function postingForMatch(c: pg.PoolClient, matchId: string): Promis
   if (!r) throw new DomainError("TC_NOT_FOUND");
   const req = r.requirements ?? {};
   return {
-    matchId: r.match_id, ref: r.public_ref, id: r.id, title: r.title, employer: r.employer_canonical, descriptionText: r.description_text ?? "",
+    matchId: r.match_id, ref: r.public_ref, id: r.id, title: r.title, employer: cleanEmployerName(r.employer_canonical) || r.employer_canonical, descriptionText: r.description_text ?? "",
     requirements: { must_have: req.must_have ?? [], nice_to_have: req.nice_to_have ?? [], years: req.years ?? null, education: req.education ?? null, authorisation: req.authorisation ?? null, confidence: req.confidence ?? "low" },
     gapSkills: r.gap_skills ?? [],
   };
@@ -176,15 +180,19 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
     if (!profile.experience.length) return { jobRef: posting.ref, documents: made, empty: true, ...counts };
     for (const kind of payload.kinds?.length ? payload.kinds : (["resume", "letter"] as DocKind[])) {
       if (kind === "resume") {
-        const { proposal, meta } = await deps.resume.propose(profile, posting, opts);
-        const d = buildResume(profile, posting, proposal, pages);
-        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, ...revised, generated_at: new Date().toISOString() }, d.blocked, d.gaps, from?.id ?? null);
+        const { proposal: first, meta } = await deps.resume.propose(profile, posting, opts);
+        const pr = deps.proofread ? await proofreadResume(first, profile, posting, deps.proofread) : null;
+        const d = buildResume(profile, posting, pr?.proposal ?? first, pages);
+        d.blocked.push(...(pr?.blocked ?? []));
+        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, ...revised, ...(pr ? { proofread: pr.report } : {}), generated_at: new Date().toISOString() }, d.blocked, d.gaps, from?.id ?? null);
         made.push({ kind, ref: doc.ref, version: doc.version, blocked: d.blocked.length });
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: d.blocked.length } });
       } else {
-        const { proposal, meta } = await deps.letter.propose(profile, posting, opts);
-        const d = buildLetter(profile, posting, proposal);
-        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, ...revised, notes: d.notes, generated_at: new Date().toISOString() }, d.blocked, [], from?.id ?? null);
+        const { proposal: first, meta } = await deps.letter.propose(profile, posting, opts);
+        const pr = deps.proofread ? await proofreadLetter(first, profile, posting, deps.proofread) : null;
+        const d = buildLetter(profile, posting, pr?.proposal ?? first);
+        d.blocked.push(...(pr?.blocked ?? []));
+        const doc = await insertDocument(c, kind, posting, d.source, { ...meta, ...revised, ...(pr ? { proofread: pr.report } : {}), notes: d.notes, generated_at: new Date().toISOString() }, d.blocked, [], from?.id ?? null);
         made.push({ kind, ref: doc.ref, version: doc.version, blocked: d.blocked.length });
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: d.blocked.length } });
       }
@@ -268,7 +276,7 @@ export async function getDocument(pool: pg.Pool, cfg: AppConfig, session: Sessio
     return {
       id: d.id, ref: d.public_ref, type: d.type, kind: kindOf(d.type), version: d.version, status: d.status, source: d.source_json, contentHash: d.content_hash,
       diffViewedAt: d.diff_viewed_at, approvedAt: d.approved_at, createdAt: d.created_at, meta: d.generation_meta ?? {},
-      job: { ref: d.job_ref, title: d.title, employer: d.employer_canonical, matchId: d.match_id, score: d.score },
+      job: { ref: d.job_ref, title: d.title, employer: cleanEmployerName(d.employer_canonical) || d.employer_canonical, matchId: d.match_id, score: d.score },
       blocked: blocked.rows.map((b) => ({ id: b.id, text: b.proposed_text, reason: b.reason, terms: b.terms, skillId: b.skill_id, resolvedAt: b.resolved_at })),
       gaps: gaps.rows.map((g) => ({ requirement: g.requirement_text, skill: g.skill_term })),
       versions: versions.rows.map((v) => ({ ref: v.public_ref, version: v.version, status: v.status, approvedAt: v.approved_at })),

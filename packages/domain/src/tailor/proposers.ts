@@ -4,7 +4,7 @@ import { z } from "zod";
 import { recordUsage } from "../ai/meter";
 import { findSkills } from "../jobs/skills";
 import { relevance } from "./build";
-import { aboutFactText, checkContext, checkLine } from "./checker";
+import { aboutFactText, checkContext, checkLine, maskMetric } from "./checker";
 import { VOICE_RULES, withPostingGuard } from "../promptShared";
 import type { LetterProposal, LetterProposer, ProposeOptions, ResumeProposal, ResumeProposer, TailorPosting, TailorProfile } from "./types";
 
@@ -59,7 +59,7 @@ export class RulesLetterProposer implements LetterProposer {
 }
 
 const MODEL = "claude-opus-5-5";
-const PROMPT_VERSION = "tailor-claude-3";
+const PROMPT_VERSION = "tailor-claude-4";
 
 /**
  * How Claude writes the About at the top of a tailored resume (Yong, 2026-11-17: "a high level
@@ -86,7 +86,7 @@ How it should read:
 Truth rules for the About (the app checks every word and drops a summary that breaks them, using the applicant's own About instead):
 - Cite in fact_ids every fact the summary rests on: the about id, and each role, bullet, skill, education or certification id whose words you use.
 - Titles, employers, industries, scale ("Fortune 10"), numbers and years must appear in a cited fact. Years of experience only as the about fact states them (for example "20 years of work since 2004" allows "over 20 years").
-- A bullet's own number is shown as {metric}. To use it, write {metric}, and cite that bullet before any other bullet with a number; use at most one bullet number. Numbers in the about fact are written as they are. Never round, add up or estimate.
+- A bullet's own number is shown as {metric}. To use it, write {metric}, and cite that bullet before any other bullet with a number; use at most one bullet number. {metric} only ever stands for that bullet's number: numbers in the about fact (such as "Fortune 500" or "20 years") are copied as they are, never written as {metric}. Never round, add up or estimate.
 - Never claim a skill listed under "gaps".
 
 ${VOICE_RULES}`;
@@ -115,7 +115,7 @@ export const RESUME_SYSTEM = withPostingGuard(`You help an applicant tailor thei
 Rules you must never break:
 - Each line rests on the facts you cite by id. Say nothing the cited fact does not say.
 - Never add a skill, tool, employer, product, place, credential, number, date or level that is not in the cited fact.
-- Where the fact has a number, write {metric} instead of the number.
+- Where the fact shows {metric}, write {metric} for that number. Copy any other number exactly as the fact writes it, in the same phrase ("Fortune 500" stays "Fortune 500").
 - Never claim a skill listed under "gaps", under any name.
 - Never make a level sound higher ("expert", "advanced") than the applicant stated.
 - Keep each line one sentence, plain and specific, starting with a verb. Only reword bullets that become clearly more relevant to the job; skip the rest.
@@ -130,7 +130,7 @@ export class ClaudeResumeProposer implements ResumeProposer {
   async propose(profile: TailorProfile, posting: TailorPosting, opts: ProposeOptions = {}) {
     const roles = profile.experience.filter((e) => e.verified).map((e) => ({ id: e.id, title: e.title, employer: e.employer }));
     const facts = profile.experience.filter((e) => e.verified).flatMap((e) => e.bullets.filter((b) => b.verified).map((b) => ({
-      id: b.id, role_id: e.id, role: e.title, text: b.metricValue !== null ? b.text.replace(String(b.metricValue), "{metric}") : b.text,
+      id: b.id, role_id: e.id, role: e.title, text: maskMetric(b),
     })));
     const skills = profile.skills.filter((s) => s.verified).map((s) => ({ id: s.id, name: s.name, level: s.proficiency ?? "not stated" }));
     const job = { title: posting.title, employer: posting.employer, required: posting.requirements.must_have, nice_to_have: posting.requirements.nice_to_have, gaps: posting.gapSkills,
@@ -234,6 +234,7 @@ const blockedHint = (reason: string, terms: string[]) => {
     case "gap_skill": return `it names a gap skill${t}; leave it out`;
     case "number_mismatch": case "date_mismatch": return `it has a number or date not in the facts it cites${t}; copy the number from a cited fact or drop it`;
     case "proficiency_raise": return `it raises a skill level${t}; describe the result instead`;
+    case "garbled": return `it reads wrong${t}; copy numbers with their own units and phrases from the facts`;
     case "unconfirmed_alias": return `it uses another name for a skill${t}; use the applicant's own name for it`;
     default: return `it cites no usable fact; cite the ids it rests on`;
   }
