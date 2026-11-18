@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import type { ScanStatus } from "@tc-hunter/db";
+import { describeSchedule } from "@/lib/schedule";
 
 const ago = (iso: string | null) => {
   if (!iso) return "";
@@ -16,12 +17,13 @@ function NextRun({ s }: { s: ScanStatus }) {
   // Times are shown in the viewer's own time zone, so only once in the browser.
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => setNow(Date.now()), [s]);
-  if (s.schedule === "manual" || !s.nextRunAt) return <p className="muted small">Searches run only when you ask. <a href="/profile/goals#settings">Search settings</a></p>;
-  if (now === null) return <p className="muted small">Searches and scores again by itself {s.schedule === "weekly" ? "every week" : "every day"}.</p>;
+  if (s.schedule === "manual" || !s.nextRunAt) return <p className="muted small">Searches run only when you ask. <a href="/jobs/sources#schedule">Schedule</a></p>;
+  const how = describeSchedule(s).replace(/^Every/, "every");
+  if (now === null) return <p className="muted small">Searches and scores again by itself {how}.</p>;
   const at = new Date(s.nextRunAt);
   const soon = at.getTime() - now <= 16 * 60_000;
   const when = soon ? "within 15 minutes" : `about ${at.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
-  return <p className="muted small">Searches and scores again by itself {s.schedule === "weekly" ? "every week" : "every day"}. Next: {when}. <a href="/profile/goals#settings">Change</a></p>;
+  return <p className="muted small">Searches and scores again by itself {how}. Next: {when}. <a href="/jobs/sources#schedule">Change</a></p>;
 }
 
 /** The button that starts a search. It says so the moment it's pressed. */

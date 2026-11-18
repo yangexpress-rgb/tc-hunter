@@ -376,3 +376,6 @@ table.compact-rows details.one-line[open] > summary { white-space: normal; }
 table.compact-rows td:has(details.one-line[open]) { white-space: normal; }
 table.compact-rows td form { margin: 0; display: inline; }
 table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
+/* The search schedule, in front of Look again now (Yong, 2026-11-17). */
+.schedule-form { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); align-items: end; margin: 0; }
+.schedule-form label { min-width: 0; }

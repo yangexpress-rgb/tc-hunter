@@ -8,7 +8,8 @@ import { ago } from "@/components/jobs/JobBits";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { followSourceAction, refreshAction, searchSourceAction, unfollowSourceAction } from "../actions";
+import { followSourceAction, refreshAction, saveScheduleAction, searchSourceAction, unfollowSourceAction } from "../actions";
+import { ScheduleForm } from "@/components/jobs/ScheduleForm";
 
 export const dynamic = "force-dynamic";
 
@@ -146,6 +147,8 @@ export default async function SourcesPage(props: PageProps) {
           ? `Last looked ${ago(last.finished_at)}: checked ${last.companies_checked} ${last.companies_checked === 1 ? "employer" : "employers"}, found ${last.boards_found} with jobs pages we can read.`
           : goals.some((g) => g.active) ? "We haven't looked yet. It starts with the next search." : "Add a goal and we'll start looking."}</p>
         <ScanStatusBox initial={scan} />
+        {/* The schedule sits in front of Look again now (Yong, 2026-11-17). */}
+        <ScheduleForm action={saveScheduleAction} schedule={scan.schedule} day={scan.scanDay} time={scan.scanTime} tz={scan.scanTz} back="/jobs/sources#schedule" />
         <form action={refreshAction}><input type="hidden" name="back" value="/jobs/sources" />
           <LookAgainButton title="Start a new search now with your latest goals: find employers, read every place again, and score every job again" /></form>
       </section>

@@ -107,12 +107,13 @@ describe("live status of a search (Yong: no response after Look again now)", () 
     while (await runNextWork(pool, { ...deps, search: [watching] })) { /* drain */ }
     expect(seen[0]).toMatchObject({ state: "running", step: "Searching Adzuna", done: 0, total: 1 });
     expect(await scanStatus(pool, sally)).toMatchObject({ state: "done", step: null, places: 1, failed: null });
-    // It runs by itself every day: the next one is due about 20 hours after this one started.
+    // It runs by itself every day at 6 PM Eastern unless changed: the next one is the next 6 PM.
     const st = await scanStatus(pool, sally);
-    expect(st.schedule).toBe("daily");
-    const hours = (new Date(st.nextRunAt!).getTime() - new Date(st.startedAt!).getTime()) / 3_600_000;
-    expect(hours).toBeGreaterThan(20);
-    expect(hours).toBeLessThan(20.5);
+    expect(st).toMatchObject({ schedule: "daily", scanTime: "18:00", scanTz: "America/New_York" });
+    const hours = (new Date(st.nextRunAt!).getTime() - Date.now()) / 3_600_000;
+    expect(hours).toBeGreaterThan(0);
+    expect(hours).toBeLessThanOrEqual(24);
+    expect(new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" }).format(new Date(st.nextRunAt!))).toBe("6:00 PM");
   });
 
   it("pressed while a search is running, a new one starts with the latest goals once it ends", async () => {
