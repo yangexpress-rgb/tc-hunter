@@ -38,10 +38,11 @@ export function LookAgainButton({ label = "Look again now", title }: { label?: s
  * found, with any place that couldn't be read in red. Checks every few seconds while running.
  */
 export function ScanStatusBox({ initial }: { initial: ScanStatus }) {
-  const [s, setS] = useState(initial);
+  const [s, setS0] = useState(initial);
+  const setS = (x: ScanStatus) => { setS0(x); shared.set(x); };
   const router = useRouter();
   const was = useRef(initial.state);
-  useEffect(() => { setS(initial); was.current = initial.state; }, [initial]);
+  useEffect(() => { setS(initial); was.current = initial.state; }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (s.state !== "waiting" && s.state !== "running") return;
     const id = setTimeout(async () => {
@@ -91,4 +92,44 @@ export function ScanStatusBox({ initial }: { initial: ScanStatus }) {
       {next}
     </div>
   );
+}
+
+/** The latest status, shared by the status box (which checks it) and each row's Search again button. */
+const shared = (() => {
+  let cur: ScanStatus | null = null;
+  const subs = new Set<(s: ScanStatus) => void>();
+  return {
+    set(s: ScanStatus) { cur = s; subs.forEach((f) => f(s)); },
+    sub(f: (s: ScanStatus) => void) { subs.add(f); return () => { subs.delete(f); }; },
+    get: () => cur,
+  };
+})();
+
+/**
+ * A row's "Search again" (Yong, 2026-11-17: pressing it seemed to do nothing). It says what is
+ * happening to that source: starting, waiting for the place being read now, searching it, then done.
+ */
+export function SearchAgainButton({ id, name, initial }: { id: string; name: string; initial: ScanStatus }) {
+  const [s, setS] = useState<ScanStatus>(initial);
+  const router = useRouter();
+  const busyBefore = useRef(false);
+  useEffect(() => { setS(shared.get() ?? initial); return shared.sub(setS); }, [initial]);
+  const reading = s.state === "running" && s.readingId === id;
+  const asked = s.asked.includes(id) && (s.state === "waiting" || s.state === "running");
+  const busy = reading || asked;
+  useEffect(() => {
+    // Just read: show its new count and status.
+    if (busyBefore.current && !busy) router.refresh();
+    busyBefore.current = busy;
+  }, [busy, router]);
+  if (reading) return <span className="search-again-state status" role="status"><span className="spinner" aria-hidden="true" /> Searching {name} now…</span>;
+  if (asked) return <span className="search-again-state muted" role="status" title={s.step ? `Now: ${s.step}` : undefined}>
+    <span className="spinner" aria-hidden="true" /> {s.state === "waiting" ? "Starting in a moment…" : "Next in line…"}</span>;
+  return <SearchAgainSubmit name={name} />;
+}
+
+function SearchAgainSubmit({ name }: { name: string }) {
+  const { pending } = useFormStatus();
+  return <button className="small" disabled={pending} aria-busy={pending} title={`Search ${name} again now, without searching every other source`}>
+    {pending ? "Asking…" : "Search again"}</button>;
 }

@@ -4,7 +4,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RulesRequirementsReader, SourceRefusedError, type CompanyIdea, type RawPosting, type SearchSite, type CompanyProposer, type Fetcher, type FetchResult, type GoalBrief } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, deleteGoal, followSource, latestDiscovery, listMatches, listSources, namedCompanies, requestScan, requestSourceScan, runNextWork, saveGoal, unfollowSource,
+  addEvidence, addFact, deleteGoal, followSource, latestDiscovery, listMatches, listSources, namedCompanies, requestScan, requestSourceScan, scanStatus, runNextWork, saveGoal, unfollowSource,
   type AppConfig, type GoalInput, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -186,6 +186,31 @@ describe("searching one source again (Yong, 2026-11-17)", () => {
     await requestSourceScan(pool, kim, other);
     const [w] = (await ownerQuery("SELECT payload FROM work_item WHERE applicant_id = $1 AND kind = 'scan' AND status = 'queued'", [kim.applicantId])).rows;
     expect(w.payload).toEqual({ fresh_ids: [other] });
+  });
+});
+
+describe("Search again pressed while a whole search runs (Yong, 2026-11-17: nothing seemed to happen)", () => {
+  it("reads that source next, says so while it waits, and doesn't read it twice", async () => {
+    while (await runNextWork(pool, { ...deps, discover: undefined })) { /* earlier tests' work */ }
+    const pat = (await newApplicant(pool, cfg, "Pat")).session;
+    await followSource(pool, pat, "https://jobs.lever.co/alpha", "Alpha");
+    await followSource(pool, pat, "https://jobs.lever.co/bravo", "Bravo");
+    const zulu = await followSource(pool, pat, "https://boards.greenhouse.io/fabrikam", "Zulu");
+    const order: string[] = [];
+    let seen: Awaited<ReturnType<typeof scanStatus>> | null = null;
+    const watch: Fetcher = { get: async (url, o) => {
+      order.push(url);
+      if (url.includes("alpha") && !seen) { await requestSourceScan(pool, pat, zulu); seen = await scanStatus(pool, pat); }
+      return web.get(url, o);
+    } };
+    await requestScan(pool, pat);
+    while (await runNextWork(pool, { ...deps, fetcher: watch, discover: undefined })) { /* drain */ }
+    expect(seen).toMatchObject({ state: "running", asked: [zulu] });
+    const first = (part: string) => order.findIndex((u) => u.includes(part));
+    expect(first("fabrikam")).toBeGreaterThan(first("alpha"));
+    expect(first("fabrikam")).toBeLessThan(first("bravo"));
+    expect(order.filter((u) => u.includes("boards-api.greenhouse.io/v1/boards/fabrikam/jobs")).length).toBe(1);
+    expect((await scanStatus(pool, pat)).asked).toEqual([]);
   });
 });
 

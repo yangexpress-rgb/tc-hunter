@@ -379,3 +379,8 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 /* The search schedule, in front of Look again now (Yong, 2026-11-17). */
 .schedule-form { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); align-items: end; margin: 0; }
 .schedule-form label { min-width: 0; }
+/* A row's Search again, while it runs (Yong, 2026-11-17). */
+.search-again-state { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.spinner { width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; display: inline-block; animation: tc-spin 0.8s linear infinite; }
+@keyframes tc-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; border-right-color: currentColor; opacity: 0.6; } }
