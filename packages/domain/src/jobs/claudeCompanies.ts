@@ -28,14 +28,14 @@ const Output = z.object({
   })),
 });
 
-const SYSTEM = `You help one person find employers to watch for job openings. Given a career goal, list real employers that hire for it, mixing well-known and mid-size employers, and favour employers that hire in the places named. Include every company the person named. For each employer, give the public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and its careers page if you know it (for employers that use Workday, give their myworkdayjobs.com careers address). Never invent employers. Never suggest job aggregators or recruiting agencies.`;
+const SYSTEM = `You help one person find employers to watch for job openings. Given a career goal, list real employers that hire for it, mixing well-known and mid-size employers, and favour employers that hire in the places named. When countries are given, suggest only employers that hire in those countries. Include every company the person named. For each employer, give the public job board it uses (Greenhouse, Lever, Ashby or SmartRecruiters) only when you are fairly sure, and its careers page if you know it (for employers that use Workday, give their myworkdayjobs.com careers address). Never invent employers. Never suggest job aggregators or recruiting agencies.`;
 
 export class ClaudeCompanyProposer implements CompanyProposer {
   readonly version: string;
   readonly model: string;
   constructor(private client: Anthropic = new Anthropic(), model: string = proposerModel()) {
     this.model = model;
-    this.version = `companies-claude-2:${model}`;
+    this.version = `companies-claude-3:${model}`;
   }
 
   async propose(goal: GoalBrief, avoid: string[], n: number): Promise<CompanyIdea[]> {
@@ -48,6 +48,7 @@ export class ClaudeCompanyProposer implements CompanyProposer {
       goal.languages?.length ? `Languages they'd use at work: ${goal.languages.join(", ")}` : null,
       goal.levels?.length ? `Levels: ${goal.levels.join(", ")}` : null,
       goal.locations.length ? `Places: ${goal.locations.join(", ")}` : null,
+      goal.countries?.length ? `Countries (only employers hiring there): ${goal.countries.join(", ")}` : null,
       goal.workplaceTypes.length ? `Ways of working: ${goal.workplaceTypes.join(", ")}` : null,
       goal.employmentTypes.length ? `Kind of work: ${goal.employmentTypes.join(", ").replace(/_/g, " ")}` : null,
     ].filter(Boolean).join("\n");

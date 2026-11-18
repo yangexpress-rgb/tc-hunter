@@ -1,6 +1,7 @@
 import { detectWorkplace } from "./normalize";
 import { SourceRefusedError, type Fetcher } from "./fetcher";
 import { htmlToText } from "./text";
+import { countryName, placeCountries } from "./country";
 import type { RawPosting, SalaryPeriod } from "./types";
 
 /**
@@ -22,6 +23,8 @@ export interface SearchQuery {
   where: string | null;
   /** The goal is happy with remote work. */
   remote: boolean;
+  /** The country to search in, as an ISO code ("US"), from the goal's countries. Null for any. */
+  country?: string | null;
 }
 
 export interface SearchSite {
@@ -66,6 +69,12 @@ const placeOnly = (where: string | null) => {
   return p || null;
 };
 
+/** The countries Adzuna has an index for (developer.adzuna.com/docs/search). */
+export const ADZUNA_COUNTRIES = new Set(["gb", "us", "at", "au", "be", "br", "ca", "ch", "de", "es", "fr", "in", "it", "mx", "nl", "nz", "pl", "sg", "za"]);
+
+const ADZUNA_CURRENCY: Record<string, string> = { us: "USD", ca: "CAD", gb: "GBP", au: "AUD", de: "EUR", at: "EUR", be: "EUR", es: "EUR", fr: "EUR", it: "EUR", nl: "EUR",
+  in: "INR", br: "BRL", ch: "CHF", mx: "MXN", nz: "NZD", pl: "PLN", sg: "SGD", za: "ZAR" };
+
 // Adzuna (free key: developer.adzuna.com). Gathers listings from many job boards.
 export class AdzunaSearch implements SearchSite {
   readonly id = "adzuna" as const;
@@ -73,7 +82,9 @@ export class AdzunaSearch implements SearchSite {
   constructor(private appId: string, private appKey: string, private country = "us") {}
   async search(q: SearchQuery, f: Fetcher): Promise<RawPosting[]> {
     const place = placeOnly(q.where);
-    const country = countryFor(q.where, this.country);
+    // The goal's country picks Adzuna's index; a country Adzuna doesn't cover isn't searched there.
+    const country = q.country ? q.country.toLowerCase() : countryFor(q.where, this.country);
+    if (!ADZUNA_COUNTRIES.has(country)) return [];
     const p = new URLSearchParams({ app_id: this.appId, app_key: this.appKey, what: q.what, results_per_page: "50", max_days_old: "30", "content-type": "application/json" });
     if (place && !/^(canada|usa|united states|uk|united kingdom|australia|germany|india)$/i.test(place)) p.set("where", place);
     const r = parse((await f.get(`https://api.adzuna.com/v1/api/jobs/${country}/search/1?${p}`)).text, "Adzuna");
@@ -85,7 +96,7 @@ export class AdzunaSearch implements SearchSite {
         externalId: `adzuna:${str(j.id)}`, url: str(j.redirect_url), employer: str(j.company?.display_name), title: str(j.title).replace(/<[^>]+>/g, ""),
         locationRaw: loc, workplaceType: detectWorkplace(`${j.title} ${loc ?? ""} ${j.description ?? ""}`),
         descriptionText: htmlToText(str(j.description)) + (kind ? `\n\nType: ${kind}` : ""),
-        salary: !predicted && (j.salary_min || j.salary_max) ? { min: j.salary_min ?? null, max: j.salary_max ?? null, currency: { us: "USD", ca: "CAD", gb: "GBP", au: "AUD", de: "EUR", in: "INR" }[country] ?? null, period: "year" as SalaryPeriod } : null,
+        salary: !predicted && (j.salary_min || j.salary_max) ? { min: j.salary_min ?? null, max: j.salary_max ?? null, currency: ADZUNA_CURRENCY[country] ?? null, period: "year" as SalaryPeriod } : null,
         postedAt: isoDate(j.created), applyUrl: str(j.redirect_url) || null, atsType: "adzuna",
       };
     });
@@ -100,7 +111,11 @@ export class JoobleSearch implements SearchSite {
   async search(q: SearchQuery, f: Fetcher): Promise<RawPosting[]> {
     const body: Obj = { keywords: q.what, page: "1" };
     const place = q.where && !/^remote$/i.test(q.where.trim()) ? q.where : null;
-    if (place) body.location = place;
+    // The goal's country goes with the place ("NC, United States"), or alone when there's no place.
+    const country = q.country ? countryName(q.country) : null;
+    const named = place ? placeCountries(place).countries : [];
+    const location = place && country && !named.length ? `${place}, ${country}` : place ?? country;
+    if (location) body.location = location;
     const r = parse((await f.get(`https://jooble.org/api/${encodeURIComponent(this.key)}`, { body })).text, "Jooble");
     return ((r.jobs ?? []) as Obj[]).map((j) => {
       const loc = str(j.location) || null;
@@ -121,7 +136,7 @@ export class UsaJobsSearch implements SearchSite {
   readonly name = "USAJOBS";
   constructor(private key: string, private email: string) {}
   async search(q: SearchQuery, f: Fetcher): Promise<RawPosting[]> {
-    if (countryFor(q.where, "us") !== "us") return [];
+    if (q.country ? q.country.toUpperCase() !== "US" : countryFor(q.where, "us") !== "us") return [];
     const p = new URLSearchParams({ Keyword: q.what, ResultsPerPage: "50" });
     const place = placeOnly(q.where);
     if (place && !/^(usa|united states)$/i.test(place)) p.set("LocationName", place);
@@ -180,33 +195,37 @@ export function searchSites(env: Record<string, string | undefined>): { sites: S
   return { sites, status };
 }
 
-/** The searches for a set of goals: each role (or line of work) in each place, at most `max` in all. */
-export function searchQueries(goals: Array<{ roles: string[]; occupation: string | null; locations: string[]; workplaceTypes: string[]; specialties?: string[]; languages?: string[] }>, max = 10): SearchQuery[] {
+/**
+ * The searches for a set of goals: each role (or line of work) in each place and each of
+ * the goal's countries, at most `max` in all. A place that names its own country
+ * ("Toronto, Canada") is searched there; otherwise in each country the goal names.
+ */
+export function searchQueries(goals: Array<{ roles: string[]; occupation: string | null; locations: string[]; workplaceTypes: string[]; specialties?: string[]; languages?: string[]; countries?: string[] }>, max = 10): SearchQuery[] {
   const out: SearchQuery[] = [];
   const seen = new Set<string>();
+  const add = (what: string, where: string | null, remote: boolean, countries: string[]) => {
+    const own = where ? placeCountries(where).countries : [];
+    const inside = own.length ? own.filter((c) => !countries.length || countries.includes(c)) : [];
+    const list: Array<string | null> = inside.length ? [inside[0]!] : countries.length ? countries.slice(0, 3) : [own[0] ?? null];
+    for (const country of list) {
+      const k = `${what.toLowerCase()}|${(where ?? "").toLowerCase()}|${country ?? ""}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ what, where, remote, country });
+    }
+  };
   for (const g of goals) {
     const whats = (g.roles.length ? g.roles : g.occupation ? [g.occupation] : []).slice(0, 3);
     const remote = g.workplaceTypes.includes("remote") || g.locations.some((l) => /remote/i.test(l));
     const wheres: Array<string | null> = g.locations.length ? g.locations.slice(0, 2) : [null];
-    for (const what of whats) for (const where of wheres) {
-      const k = `${what.toLowerCase()}|${(where ?? "").toLowerCase()}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push({ what, where, remote });
-    }
+    for (const what of whats) for (const where of wheres) add(what, where, remote, g.countries ?? []);
   }
   // Then each goal's first role with its specialties and languages, e.g. "Operations Analyst Mandarin" (Yong, 2026-11-14).
   for (const g of goals) {
     const what = g.roles[0] ?? g.occupation;
     if (!what) continue;
     const remote = g.workplaceTypes.includes("remote") || g.locations.some((l) => /remote/i.test(l));
-    for (const extra of [...(g.specialties ?? []).slice(0, 2), ...(g.languages ?? []).slice(0, 2)]) {
-      const q = `${what} ${extra}`;
-      const k = `${q.toLowerCase()}|${(g.locations[0] ?? "").toLowerCase()}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push({ what: q, where: g.locations[0] ?? null, remote });
-    }
+    for (const extra of [...(g.specialties ?? []).slice(0, 2), ...(g.languages ?? []).slice(0, 2)]) add(`${what} ${extra}`, g.locations[0] ?? null, remote, (g.countries ?? []).slice(0, 1));
   }
   return out.slice(0, max);
 }

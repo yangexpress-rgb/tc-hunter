@@ -26,6 +26,8 @@ export interface GoalBrief {
   /** Specialties and languages the person typed in. */
   specialties?: string[];
   languages?: string[];
+  /** Countries the jobs must be in, by name. */
+  countries?: string[];
 }
 
 export interface CompanyIdea {

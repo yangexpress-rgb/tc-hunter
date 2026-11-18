@@ -17,9 +17,9 @@ describe("job search sites", () => {
       { roles: [], occupation: "Logistics", locations: [], workplaceTypes: ["remote"] },
     ]);
     expect(q).toEqual([
-      { what: "Operations Analyst", where: "Toronto", remote: true }, { what: "Operations Analyst", where: "Remote in Canada", remote: true },
-      { what: "Business Analyst", where: "Toronto", remote: true }, { what: "Business Analyst", where: "Remote in Canada", remote: true },
-      { what: "Logistics", where: null, remote: true },
+      { what: "Operations Analyst", where: "Toronto", remote: true, country: "CA" }, { what: "Operations Analyst", where: "Remote in Canada", remote: true, country: "CA" },
+      { what: "Business Analyst", where: "Toronto", remote: true, country: "CA" }, { what: "Business Analyst", where: "Remote in Canada", remote: true, country: "CA" },
+      { what: "Logistics", where: null, remote: true, country: null },
     ]);
   });
 

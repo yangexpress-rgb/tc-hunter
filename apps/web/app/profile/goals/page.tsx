@@ -1,6 +1,6 @@
 import { describeSchedule } from "@/lib/schedule";
 import { emailStatus, getPreferences, listGoals } from "@tc-hunter/db";
-import { GOAL_LEVELS, GOAL_TYPES, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
+import { COUNTRIES, countryName, GOAL_LEVELS, GOAL_TYPES, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { EditDialog } from "@/components/profile/EditDialog";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -43,6 +43,9 @@ function GoalForm({ g }: { g?: Goal }) {
             <span className="hint">Languages you'd like to use at work. Jobs that ask for them score higher.</span></label>
           <label>Industry<input name="industries" defaultValue={g?.industries.join(", ") ?? ""} placeholder="e.g. Healthcare, Retail" /></label>
           <label>Company<input name="companies" defaultValue={g?.companies.join(", ") ?? ""} placeholder="Any companies you have in mind" /></label>
+          <label>Country<input name="countries" list="goal-countries" defaultValue={(g ? g.countries : ["US"]).map(countryName).join(", ")} placeholder="e.g. United States, Canada" />
+            <datalist id="goal-countries">{COUNTRIES.map((c) => <option key={c.code} value={c.name} />)}</datalist>
+            <span className="hint">One or more, separated by commas. We search only in these countries, and jobs in other countries are set aside. Leave empty for any country.</span></label>
           <label>Location<input name="locations" defaultValue={g?.locations.join(", ") ?? ""} placeholder="e.g. Toronto, Remote in Canada" /></label>
         </div>
         <fieldset>
@@ -101,6 +104,7 @@ function GoalItem({ g }: { g: Goal }) {
         {g.companies.length ? <p className="muted">At {g.companies.join(", ")}</p> : null}
         {p ? <p className="muted">Pay you expect: {p}</p> : null}
         {where ? <p className="muted">{where}</p> : null}
+        <p className="muted">Country: {g.countries.length ? g.countries.map(countryName).join(", ") : "Any"}</p>
       </div>
       <EditDialog icon="pencil" label="Edit this goal" title="Edit goal"><GoalForm g={g} /></EditDialog>
     </article>
@@ -116,7 +120,10 @@ export default async function GoalsPage(props: PageProps) {
   const linkedin = (g: Goal) => {
     const q = new URLSearchParams({ keywords: g.roles[0] ?? g.occupation ?? "" });
     const where = g.locations.find((l) => !/^remote$/i.test(l.trim()));
-    if (where) q.set("location", where);
+    // A place on its own ("NC") goes with the goal's country, so LinkedIn searches the right one.
+    const country = g.countries.length === 1 ? countryName(g.countries[0]!) : null;
+    if (where) q.set("location", country && !new RegExp(country, "i").test(where) ? `${where}, ${country}` : where);
+    else if (country) q.set("location", country);
     if (g.workplaceTypes.includes("remote") && !where) q.set("f_WT", "2");
     return `https://www.linkedin.com/jobs/search/?${q}`;
   };
