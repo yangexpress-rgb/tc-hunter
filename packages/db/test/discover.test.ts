@@ -235,6 +235,18 @@ describe("Yong's audit of failing sources (2026-11-17)", () => {
     expect(calls.some((u) => u.includes("deloitte"))).toBe(false);
     expect(calls.some((u) => u.toLowerCase().includes("sapitbusinesssysteme"))).toBe(true);
   });
+
+  it("takes KPMG off the list altogether, for someone already past the first fixes too (Yong, 2026-11-18)", async () => {
+    while (await runNextWork(pool, { ...deps, discover: undefined })) { /* earlier tests' work */ }
+    const kay = (await newApplicant(pool, cfg, "Kay")).session;
+    await followSource(pool, kay, "https://jobs.lever.co/kpmg", "KPMG");
+    await followSource(pool, kay, "https://apply.deloitte.com/careers", "Deloitte");
+    await ownerQuery("UPDATE applicant SET source_fixes = 1 WHERE id = $1", [kay.applicantId]);
+    await requestScan(pool, kay);
+    while (await runNextWork(pool, { ...deps, discover: undefined })) { /* drain */ }
+    expect((await listSources(pool, kay)).map((r) => r.name)).toEqual(["Deloitte"]);
+    expect(web.calls.some((u) => u.includes("lever.co/v0/postings/kpmg"))).toBe(false);
+  });
 });
 
 describe("a new link for a company already in the list (Yong, 2026-11-17: Salesforce showed twice)", () => {

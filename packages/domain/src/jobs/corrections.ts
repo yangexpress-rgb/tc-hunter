@@ -2,7 +2,7 @@
  * Corrections from Yong's audit of every failing source (2026-11-17): each company was checked live
  * against the public job service the app reads. Applied once to each applicant's followed sources.
  */
-export const SOURCE_FIX_VERSION = 1;
+export const SOURCE_FIX_VERSION = 2;
 
 /** The verified place each company lists its jobs, with the count seen in the audit. */
 export const VERIFIED_SOURCES: Array<{ company: string; url: string; audit: number; also?: string[] }> = [
@@ -28,7 +28,6 @@ export const VERIFIED_SOURCES: Array<{ company: string; url: string; audit: numb
 
 /** Companies whose hiring systems have no public feed we read (Avature, Taleo, BrassRing, SuccessFactors, own portals). */
 export const UNREADABLE_COMPANIES: Array<{ company: string; system: string; also?: string[] }> = [
-  { company: "KPMG", system: "Avature" },
   { company: "Cognizant", system: "its own careers portal" },
   { company: "Coastal Cloud", system: "its own careers portal" },
   { company: "Deloitte", system: "Avature" },
@@ -40,6 +39,13 @@ export const UNREADABLE_COMPANIES: Array<{ company: string; system: string; also
   { company: "Slalom", system: "its own careers portal" },
   { company: "TCS", system: "its own careers portal (iBegin)", also: ["Tata Consultancy Services"] },
 ];
+
+/**
+ * Companies taken off Where we look altogether (version 2, Yong 2026-11-18: "KPMG stays removed" —
+ * its Lever board is empty and its jobs are on Avature, so Adzuna covers it). Hidden like "Don't use",
+ * so a later employer lookup doesn't follow it again.
+ */
+export const REMOVED_COMPANIES: string[] = ["KPMG"];
 
 export const unreadableReason = (company: string, system: string) =>
   `${company} lists its jobs on ${system}, which has no public feed we can read. Its jobs still come in through Adzuna and the other job sites.`;

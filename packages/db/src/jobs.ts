@@ -3,7 +3,7 @@ import { runEmailCheck, type EmailDeps } from "./email";
 import {
   companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
-  SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
+  SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
   readRequirementsText, withUsageScope, type BatchPosting, type Requirements, type RequirementsBatcher,
 } from "@tc-hunter/domain";
@@ -346,6 +346,16 @@ export async function applySourceFixes(c: pg.PoolClient, applicantId: string): P
       WHERE NOT f.muted AND s.kind NOT IN ('job_search','pasted_link')`)).rows;
   const of = (names: string[]) => { const keys = new Set(names.map(companyKey)); return rows.filter((r) => keys.has(companyKey(String(r.name)))); };
   let changed = 0;
+  // Version 2 only takes companies off the list; the version 1 fixes aren't done twice.
+  for (const r of of(REMOVED_COMPANIES)) {
+    await c.query("UPDATE applicant_job_source SET muted = true, updated_at = now() WHERE job_source_id = $1", [r.id]);
+    await recordAudit(c, "source.unfollowed", { objectType: "job_source", objectId: r.id, payload: { kind: String(r.kind) } });
+    changed++;
+  }
+  if (done >= 1) {
+    await c.query("UPDATE applicant SET source_fixes = $2 WHERE id = $1", [applicantId, SOURCE_FIX_VERSION]);
+    return changed;
+  }
   for (const v of VERIFIED_SOURCES) {
     const mine = of([v.company, ...(v.also ?? [])]);
     if (!mine.length) continue;
