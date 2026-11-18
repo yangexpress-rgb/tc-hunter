@@ -32,7 +32,9 @@ export function retryWaitMs(retryAfter: string | undefined | null, slowdowns: nu
 
 /** A 403/401 that is an HTML page from a firewall (Akamai, Cloudflare…) rather than the site's own answer. */
 export function answerKind(status: number, contentType: string, text: string): SiteAnswer["kind"] {
-  if (status === 429) return "rate_limit";
+  // Workday's 429 to our server (2026-11-18) is a "Security Check — Enable JavaScript and cookies" page:
+  // a check only a person's browser passes, not a request to slow down.
+  if (status === 429) return /security check|enable javascript|captcha|verify you are human/i.test(text.slice(0, 4000)) ? "block_page" : "rate_limit";
   if (status !== 401 && status !== 403) return "other";
   return /html/i.test(contentType) || /^\s*</.test(text) || /access denied|captcha|cloudflare|akamai|incapsula|request blocked|bot/i.test(text.slice(0, 2000)) ? "block_page" : "refusal";
 }

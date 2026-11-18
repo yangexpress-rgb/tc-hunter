@@ -138,7 +138,8 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
         f.slowDown?.(w.host);
         if (!asBrowser) { asBrowser = true; continue; }
         if (e.reason !== "rate_limited") throw e;
-        if (waited) { stopped = true; return null; }
+        // A security-check page doesn't go away by waiting; don't wait for it.
+        if (waited || e.answer?.kind === "block_page") { stopped = true; return null; }
         waited = true;
         await wait(WORKDAY_WAIT_MS);
       }
