@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
-  checkContext, checkEssay, isEssayQuestion, companyKey, findOnEmployerSite, isNoFetchHost, securityCodeAsked, securityCodeLength,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, companyKey, findOnEmployerSite, isNoFetchHost, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
@@ -333,11 +333,11 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   if (essays.length && deps.drafter) {
     try {
       const ctx = checkContext(tailor, posting);
-      const drafts = await deps.drafter.draft(essays.map((f) => ({ key: f.key, label: f.label })), tailor, posting);
+      const drafts = await deps.drafter.draft(essays.map((f) => ({ key: f.key, label: f.label, maxChars: essayLimit(f) })), tailor, posting);
       let blocked = 0;
       for (const f of essays) {
         const d = drafts.find((x) => x.key === f.key);
-        const ok = d ? checkEssay(d.paragraphs, ctx, posting.id) : null;
+        const ok = d ? checkEssay(d.paragraphs, ctx, posting.id, essayLimit(f)) : null;
         blocked += ok?.blocked ?? 0;
         const w = ok ? { answer: ok.text, basis: `a draft from ${ok.factIds.length === 1 ? "1 fact" : `${ok.factIds.length} facts`} in your profile`, draft: true } : null;
         cache.set(cacheKey(f), w);

@@ -3,6 +3,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { matchChoice } from "./equivalents";
 import { NUMBER_QUESTION, type FieldType } from "./map";
+import { withPostingGuard } from "../promptShared";
 
 /**
  * Working out an application question's answer from what the applicant already told TC Hunter
@@ -66,12 +67,16 @@ export interface AnswerInferrer {
 /** Placeholder choices are never an answer. */
 const PLACEHOLDER = /^(select one|select|choose one|choose|please select|--+|none selected)$/i;
 
-/** Keeps only answers that fit the question: one of its own choices, a tick as Yes/No, a short text. */
-export function acceptInferred(questions: InferQuestion[], raw: Array<{ key: string; answer: string | null; confidence: number; basis: string }>): Inferred[] {
+/**
+ * Keeps only answers that fit the question: one of its own choices, a tick as Yes/No, a short text.
+ * The model's own confidence number is not a gate (Yong, 2026-11-17 prompt review): every answer
+ * with a basis goes to the verify pass, which is the only quality check.
+ */
+export function acceptInferred(questions: InferQuestion[], raw: Array<{ key: string; answer: string | null; confidence?: number; basis: string }>): Inferred[] {
   const out: Inferred[] = [];
   for (const r of raw) {
     const q = questions.find((x) => x.key === r.key);
-    if (!q || r.answer == null || !String(r.answer).trim() || r.confidence < 0.85 || !r.basis?.trim()) continue;
+    if (!q || r.answer == null || !String(r.answer).trim() || !r.basis?.trim()) continue;
     let answer = String(r.answer).trim();
     if (q.type === "checkbox") {
       if (/^(yes|true|checked|tick(ed)?)$/i.test(answer)) answer = "Yes";
@@ -242,13 +247,12 @@ const Output = z.object({
   answers: z.array(z.object({
     key: z.string(),
     answer: z.string().nullable().describe("exactly one of the question's choices as written, 'Yes'/'No' for a tick box, or text; null when the facts don't settle it"),
-    confidence: z.number().describe("0 to 1: how surely the facts give this answer"),
     fact_id: z.string().describe("id of the fact the answer rests on most directly"),
     basis: z.string().describe("the exact words from that fact the answer rests on, copied character for character"),
   })),
 });
 
-const SYSTEM = `You answer job application questions for an applicant, using only facts the applicant gave. You are filling in their application, so every answer must be true for them.
+export const INFER_SYSTEM = withPostingGuard(`You answer job application questions for an applicant, using only facts the applicant gave. You are filling in their application, so every answer must be true for them.
 
 The facts: their goals, where they live, their About (their own summary of who they are), every role they held with what they did in it (bullets), their skills with the level they stated, education, certifications, saved answers, approved stories, their resume tailored for this job and their full resume. Read all of it before answering. Each fact has an id.
 
@@ -269,7 +273,16 @@ Rules:
 - Legal or compliance questions (excluded, debarred, convicted, disciplined, under investigation) and questions about other organisations' relationships: null unless a saved answer says it. A "Not Sure" choice is fine when that is the honest answer and the facts can't settle it.
 - Relocation, travel, salary, notice: from their saved answers or goals only. A number question (a percentage, how many) gets just the number.
 - Text answers: plain, specific, in the applicant's own facts; no more than a short paragraph. Social profile links, phone numbers and email addresses are never answered (they are not in the facts).
-Confidence below 0.85 means it will be left for the applicant.`;
+
+When rules conflict: truth first, then answering the question actually asked, then format.
+
+Every answer you give is checked against the facts before it is used; one the check can't support is left for the applicant.
+
+# Examples
+Question q1: "Have you managed a P&L of $10 million or more?" (choices: Select One, Yes, No). Fact b12, a bullet: "Owned a $40M P&L for the Southeast region".
+  -> {"key": "q1", "answer": "Yes", "fact_id": "b12", "basis": "Owned a $40M P&L for the Southeast region"}
+Question q2: "Do you hold an active PMP certification?" (choices: Select One, Yes, No). No certification, bullet, skill, saved answer or resume line mentions PMP.
+  -> {"key": "q2", "answer": null, "fact_id": "", "basis": ""}. A certification missing from the facts is a gap for the applicant to answer, not a "No" to guess.`);
 
 const Verdicts = z.object({
   checks: z.array(z.object({
@@ -277,11 +290,11 @@ const Verdicts = z.object({
     supported: z.boolean().describe("true only if the quoted fact text, read plainly, gives this answer"),
     fact_id: z.string().describe("id of the fact that supports it"),
     quote: z.string().describe("the supporting words, copied character for character from that fact's text"),
-    reason: z.string().describe("a few words on why it is or isn't supported"),
+    reason: z.string().describe("a few words on why it is or isn't supported; when it contradicts another answer, name that answer's key"),
   })),
 });
 
-const VERIFY_SYSTEM = `You check answers someone proposed for a job application against the applicant's own facts. You are the last check before an answer is typed into a real application, so be strict.
+export const VERIFY_SYSTEM = withPostingGuard(`You check answers someone proposed for a job application against the applicant's own facts. You are the last check before an answer is typed into a real application, so be strict.
 
 For each proposed answer: find the fact that supports it and copy the supporting words exactly, character for character, from that fact's text. Mark it supported only when those words, read plainly, give that answer for that question (for a date worked out from "2 weeks from next Monday", quote the saved answer). Mark it unsupported when the answer goes beyond the facts, picks something common rather than something stated, raises a skill level, or rests on a fact about someone or something else. Naming a fact is not enough: the quote must be its words.
 
@@ -289,10 +302,14 @@ The facts list every role the applicant has held and every school they attended,
 - "Have you worked for <employer>?" is supported as No when none of their roles is at that employer (or a clear variant of its name). Quote their most recent role as it is written in the work history.
 - "Are you currently enrolled / still in school?" is supported as No when every education row has an end date before today. Quote the latest education row's end date.
 - "Are you currently employed?" is supported as Yes when a role has no end date ("present"). Quote that role.
-These follow from the full record, not from a guess. Anything else that rests only on something being absent (a skill, a language, a tool, a certification) is NOT supported: mark it unsupported.`;
+These follow from the full record, not from a guess. Anything else that rests only on something being absent (a skill, a language, a tool, a certification) is NOT supported: mark it unsupported.
+
+Check fit, not only support:
+- An answer can be supported yet wrong if it answers a different question than the one asked: a degree level is not a field of study, a school is not a degree, a job title is not an employer, a total career length is not years with one skill. Mark those unsupported and say which question the answer really answers.
+- Read the answers in <proposed> together with <other_answers_in_this_form>. If two answers in the same form contradict each other (for example "currently employed: No" and "currently work here: Yes", or two different start dates), mark the one with weaker support unsupported and say in its reason which answer it contradicts.`);
 
 export class ClaudeAnswerInferrer implements AnswerInferrer {
-  readonly version = `answers-claude-3:${ANSWER_MODEL}`;
+  readonly version = `answers-claude-4:${ANSWER_MODEL}`;
   constructor(private client: Anthropic = new Anthropic()) {}
 
   private async ask<T extends z.ZodTypeAny>(schema: T, system: string, content: string, maxTokens: number): Promise<z.infer<T>> {
@@ -318,8 +335,8 @@ export class ClaudeAnswerInferrer implements AnswerInferrer {
     // 1. Proposals, at most 5 questions a call, all batches at once.
     const proposed = (await Promise.all(chunks(questions, INFER_BATCH).map(async (qs) => {
       try {
-        const out = await this.ask(Output, SYSTEM, `${pack}\n<questions>\n${show(qs)}\n</questions>`, maxTokensFor(qs.length));
-        return acceptInferred(qs, out.answers.map((a) => ({ key: a.key, answer: a.answer, confidence: a.confidence, basis: a.basis || a.fact_id })));
+        const out = await this.ask(Output, INFER_SYSTEM, `${pack}\n<questions>\n${show(qs)}\n</questions>`, maxTokensFor(qs.length));
+        return acceptInferred(qs, out.answers.map((a) => ({ key: a.key, answer: a.answer, basis: a.basis || a.fact_id })));
       } catch (e) {
         problems.push(`Smart answers couldn't work out ${qs.length === 1 ? "1 question" : `${qs.length} questions`}: ${String((e as Error)?.message ?? e).slice(0, 160)}`);
         return [];
@@ -331,7 +348,8 @@ export class ClaudeAnswerInferrer implements AnswerInferrer {
       `${pack}\n<proposed>\n${JSON.stringify(batch.map((a) => {
         const q = questions.find((x) => x.key === a.key)!;
         return { key: a.key, question: q.label, choices: q.options, answer: a.answer, proposer_basis: a.basis };
-      }), null, 1)}\n</proposed>`, verifyTokensFor(batch.length)).then((v) => v.checks), problems);
+      }), null, 1)}\n</proposed>\n<other_answers_in_this_form>\n${JSON.stringify(proposed.filter((o) => !batch.includes(o)).map((o) => ({
+        key: o.key, question: questions.find((x) => x.key === o.key)?.label, answer: o.answer })), null, 1)}\n</other_answers_in_this_form>`, verifyTokensFor(batch.length)).then((v) => v.checks), problems);
   }
 }
 
