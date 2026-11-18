@@ -22,8 +22,10 @@ const WHY: Record<string, string> = {
   unreachable: "We couldn't reach it.",
   too_big: "Its job list was too large to read.",
 };
-const why = (reason: string | null, kind?: string) => {
+const why = (reason: string | null, kind?: string, failures = 0) => {
   const code = String(reason ?? "").split(":")[0]!.trim();
+  // Turned away search after search, even after waiting (Yong, 2026-11-17: Salesforce's Workday) — not a passing slow-down.
+  if (code === "rate_limited" && failures >= 2) return `The site has turned our reader away ${failures} searches in a row, even after waiting, though its jobs open fine in a browser. It seems to refuse automated readers like ours, so we can't read its jobs for now. LinkedIn's alert emails for this company, or pasting a job's link in Add a job, still bring its jobs in.`;
   // Only a job search site has a key to refuse; a company's site that says no blocks automated readers.
   if (code === "refused" && kind !== "job_search") return "The site blocks automated readers like ours. We'll look for another place it lists its jobs; if you know one (for example a myworkdayjobs.com address), add it below.";
   return WHY[code] ?? "It didn't answer as expected.";
@@ -95,7 +97,7 @@ export default async function SourcesPage(props: PageProps) {
       const advice = empty ? noJobsAdvice(s) : null;
       return { key: s.id, name: s.name, detail, kind, listed: s.last_listed,
         status: never ? "Not searched yet" : failed ? "Failed" : empty ? "No jobs found" : noneFit ? "None fit yet" : "Succeeded", last: s.last_checked_at, jobs: s.open_jobs,
-        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason, s.kind) : advice ? advice.reason
+        reason: never ? "Waiting for the next search." : failed ? why(s.health_reason, s.kind, Number(s.failures ?? 0)) : advice ? advice.reason
           : noneFit ? `It lists ${s.last_listed} ${s.last_listed === 1 ? "job" : "jobs"}, but none fit your goals' roles right now.` : "",
         link: advice?.link ?? (failed && s.kind !== "job_search" && /^(refused|robots)/.test(String(s.health_reason ?? "")) ? { href: "#add", label: "Add its jobs page" } : undefined),
         // LinkedIn's alerts come in with the email check, not a search.

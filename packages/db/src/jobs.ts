@@ -654,7 +654,7 @@ export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: 
 
 export async function listSources(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
+    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.failures, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }
