@@ -73,6 +73,8 @@ const workdayKey = (w: WorkdaySite) => `${w.host}/${w.tenant}/${w.site}`;
 const workdayFromKey = (key: string): WorkdaySite => { const [host, tenant, site] = key.split("/"); return { host: host!, tenant: tenant!, site: site!, jobPath: null }; };
 const workdayApi = (w: WorkdaySite) => `https://${w.host}/wday/cxs/${w.tenant}/${w.site}`;
 const WORKDAY_HEADERS = { "Accept-Language": "en-US" };
+/** A common desktop browser's name, for Workday sites that turn the app's own reader away (Yong's choice, 2026-11-17). */
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /** One job from Workday's job service (jobPostingInfo + hiringOrganization). */
 export function readWorkdayJob(d: Obj, w: WorkdaySite, employer: string, path: string): RawPosting {
@@ -110,12 +112,17 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
   // Workday asks busy readers to slow down (Yong, 2026-11-17: six Workday sites "Failed").
   // We wait as it asks, once, and then stop for this time, keeping every job already read.
   let waited = false, stopped = false;
+  // Yong (2026-11-17): several Workday sites (Salesforce, Huron, Genpact…) turn away a reader that names
+  // itself, on the first request, though the same request from a browser works. At Yong's request, a site
+  // that does so is then asked the way a common browser asks, once per read.
+  let asBrowser = false;
   const ask = async (url: string, body?: unknown): Promise<Obj | null> => {
     for (;;) {
-      // Said as the careers site's own page would (where the request comes from), not as a different reader.
-      const headers = { ...WORKDAY_HEADERS, Origin: `https://${w.host}`, Referer: `https://${w.host}/${w.site}` };
+      const headers: Record<string, string> = { ...WORKDAY_HEADERS, Origin: `https://${w.host}`, Referer: `https://${w.host}/${w.site}`, ...(asBrowser ? { "User-Agent": BROWSER_UA } : {}) };
       try { return JSON_OR((await f.get(url, { headers, ...(body ? { body } : {}) })).text, "Workday"); } catch (e) {
-        if (!(e instanceof SourceRefusedError) || e.reason !== "rate_limited") throw e;
+        if (!(e instanceof SourceRefusedError) || (e.reason !== "rate_limited" && e.reason !== "refused")) throw e;
+        if (!asBrowser) { asBrowser = true; continue; }
+        if (e.reason !== "rate_limited") throw e;
         if (waited) { stopped = true; return null; }
         waited = true;
         await wait(WORKDAY_WAIT_MS);
@@ -152,6 +159,7 @@ async function fetchWorkday(spec: SourceSpec, f: Fetcher, wanted: (t: string) =>
       if (!(e instanceof SourceRefusedError) || e.reason !== "not_found") throw e;
     }
   }
+  if (asBrowser) notes.push("Its Workday site turned away our reader, so it was asked the way a browser asks.");
   if (stopped) notes.push(`Workday asked us to slow down, so we read ${postings.length} of its related jobs this time and will read the rest next time.`);
   else if (related.length > maxDetails) notes.push(`Read the first ${maxDetails} related jobs only.`);
   return { postings, complete: false, checked: list.size, listed, notes };
