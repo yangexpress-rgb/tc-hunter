@@ -466,12 +466,6 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 .your-turn { border-left: 4px solid #a47a2c; padding-left: 12px; }
 
 /* Jobs as cards, by job or by company (Yong, 2026-11-18). Same colours as the rest of the app. */
-.view-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
-.view-bar .inline-form { margin: 0; }
-.card-sortbar { margin: 14px 0 4px; font-size: 14px; }
-.card-sortbar a { white-space: nowrap; }
-.card-group { margin-top: 18px; }
-.card-group .section-head h2 { margin: 0 0 2px; }
 ul.card-grid { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
 ul.card-grid > li { margin: 0; }
 .company-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
@@ -517,3 +511,34 @@ button.pass:hover { color: var(--error); border-color: var(--error); }
 .big-count { font-size: 26px; }
 .see-roles { font-weight: 600; color: var(--accent); text-decoration: none; white-space: nowrap; }
 .see-roles:hover { text-decoration: underline; }
+
+/* Jobs filter bar and layout bar (Yong, 2026-11-18): one bar like the reference, no search box card above. */
+
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 8px; margin: 8px 0 12px; }
+.search-box { flex: 1 1 260px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 999px; padding: 0 14px; background: var(--bg); font-weight: 400; }
+.search-box input { border: 0; background: transparent; padding: 9px 0; outline: none; }
+.search-box:focus-within { border-color: var(--accent); }
+.search-icon { color: var(--muted); font-size: 18px; }
+.pill-menu { position: relative; margin: 0; border: 0; background: transparent; }
+.pill-menu > summary { list-style: none; display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); font-weight: 600; font-size: 14px; background: var(--surface); white-space: nowrap; }
+.pill-menu > summary::-webkit-details-marker { display: none; }
+.pill-menu > summary.is-on { border-color: var(--accent); color: var(--accent); }
+.pill-menu[open] > summary { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.pill-count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--accent-text); font-size: 12px; }
+.caret { color: var(--muted); font-size: 11px; }
+.pill-pop { position: absolute; z-index: 20; top: calc(100% + 6px); left: 0; min-width: 240px; max-height: 360px; overflow: auto; display: grid; gap: 8px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.12); }
+.pill-pop label { font-size: 14px; }
+.pill-pop label.check { font-weight: 400; }
+.clear-filters { font-size: 14px; color: var(--muted); padding: 0 6px; }
+.jobs-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 4px 0 2px; }
+.seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+.seg a { margin: 0; padding: 6px 14px; border-radius: 999px; color: var(--muted); text-decoration: none; font-size: 14px; white-space: nowrap; }
+.seg a[aria-current="page"] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.seg a[aria-current="page"] .count { color: inherit; opacity: 0.85; }
+.seg .count { font-size: 12px; margin-left: 2px; }
+.seg-end { margin-left: auto; }
+.view-default { margin: 6px 0 0; min-height: 1em; }
+.view-default .inline-form { display: inline; margin: 0; }
+button.link-button { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; cursor: pointer; }
+#add-job { margin-top: 18px; }
+@media (max-width: 640px) { .seg-end { margin-left: 0; } .pill-pop { position: fixed; left: 16px; right: 16px; top: auto; min-width: 0; } }

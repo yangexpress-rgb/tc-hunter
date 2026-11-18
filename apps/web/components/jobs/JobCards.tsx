@@ -1,8 +1,38 @@
-import { jobLevelKey, jobLevelLabel, t, type Goal } from "@tc-hunter/domain";
+import { employmentKind, goalLevelIndex, goalTypeLabel, jobLevelKey, jobLevelLabel, t } from "@tc-hunter/domain";
 import { feedbackAction } from "@/app/jobs/actions";
 import { pay, place, posted } from "@/components/jobs/JobBits";
 import { companyDomain, payShort } from "@/lib/jobsView";
-import { goalGroups, sortRows, type GoalSort } from "@/components/jobs/GoalTables";
+
+// Sorting shared by every layout.
+export const GOAL_SORTS = ["score", "company", "role", "level", "location", "type", "pay", "posted", "status"] as const;
+export type GoalSort = (typeof GOAL_SORTS)[number];
+
+const PER_YEAR: Record<string, number> = { year: 1, month: 12, hour: 2080 };
+
+export const kindOf = (r: Record<string, any>) => { const k = employmentKind(r.title ?? ""); return k ? goalTypeLabel(k) : "Not stated"; };
+export const statusOf = (r: Record<string, any>) =>
+  r.posting_status !== "active" ? "Closed" : r.filtered ? "Ruled out" : r.status === "saved" ? "Saved" : r.status === "new" ? (r.seen_at ? "New" : "New, unseen") : "Passed";
+export const yearlyPay = (r: Record<string, any>) => {
+  const top = r.salary_max ?? r.salary_min;
+  return top === null || top === undefined ? null : Number(top) * (PER_YEAR[r.salary_period ?? "year"] ?? 1);
+};
+const shortDate = (d: Date | string | null) => (d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "Not given");
+
+export function sortRows(rows: Array<Record<string, any>>, by: GoalSort, dir: "asc" | "desc") {
+  const key = (r: Record<string, any>): string | number | null => ({
+    score: r.score, level: ((k) => (k === "none" ? null : goalLevelIndex(k as never)))(jobLevelKey(r.title ?? "")), company: String(r.employer_canonical ?? "").toLowerCase(), role: String(r.title ?? "").toLowerCase(),
+    location: place(r).toLowerCase(), type: kindOf(r), pay: yearlyPay(r), posted: r.posted_at ? new Date(r.posted_at).getTime() : null, status: statusOf(r),
+  })[by];
+  const sign = dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const x = key(a), y = key(b);
+    if (x === null && y === null) return b.score - a.score;
+    if (x === null) return 1;   // blanks always last
+    if (y === null) return -1;
+    return (x < y ? -1 : x > y ? 1 : 0) * sign || b.score - a.score;
+  });
+}
+
 
 /**
  * Card layouts for Jobs (Yong, 2026-11-18): one card per job, or one card per company.
@@ -73,38 +103,9 @@ export function JobCard({ r, back }: { r: Row; back: string }) {
   );
 }
 
-const CARD_SORTS: Array<[GoalSort, "asc" | "desc", string]> = [["score", "desc", "Best fit"], ["posted", "desc", "Newest"], ["pay", "desc", "Highest pay"], ["company", "asc", "Company"], ["role", "asc", "Role"]];
-
-export function CardSortBar({ by, sortHref }: { by: GoalSort; sortHref: (by: GoalSort, dir: "asc" | "desc") => string }) {
-  return (
-    <p className="sortbar card-sortbar muted">Sort:
-      {CARD_SORTS.map(([k, d, l]) => <a key={k} href={sortHref(k, d)} aria-current={by === k ? "true" : undefined}>{l}</a>)}
-    </p>
-  );
-}
-
-/** Job cards, under the goal each job fits best (same grouping as the tables). */
-export function JobCards({ goals, rows, by, dir, sortHref, back }: {
-  goals: Goal[]; rows: Row[]; by: GoalSort; dir: "asc" | "desc"; sortHref: (by: GoalSort, dir: "asc" | "desc") => string; back: string;
-}) {
-  const groups = goalGroups(goals, rows);
-  if (!groups.length) return null;
-  return (
-    <>
-      <CardSortBar by={by} sortHref={sortHref} />
-      {groups.map((g) => (
-        <section key={g.key} className="card-group">
-          <header className="section-head">
-            <h2>{g.title} <span className="count muted">{g.rows.length} {g.rows.length === 1 ? "job" : "jobs"}</span></h2>
-          </header>
-          {g.sub ? <p className="muted small">{g.sub}</p> : null}
-          {g.rows.length === 0 ? <p className="muted">No matched jobs for this goal yet.</p> : (
-            <ul className="card-grid plain">{sortRows(g.rows, by, dir).map((r) => <JobCard key={r.id} r={r} back={back} />)}</ul>
-          )}
-        </section>
-      ))}
-    </>
-  );
+/** Job cards in one grid (Yong, 2026-11-18: no grouping by goal; pick a goal in the filters instead). */
+export function JobCards({ rows, back }: { rows: Row[]; back: string }) {
+  return <ul className="card-grid plain">{rows.map((r) => <JobCard key={r.id} r={r} back={back} />)}</ul>;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ export function JobCards({ goals, rows, by, dir, sortHref, back }: {
 // ---------------------------------------------------------------------------
 
 export type CompanySort = "score" | "roles" | "name";
-export const COMPANY_SORTS: Array<[CompanySort, string]> = [["score", "Best fit"], ["roles", "Most roles"], ["name", "Name"]];
+export const COMPANY_SORTS: Array<[CompanySort, string]> = [["score", "Best match"], ["roles", "Most roles"], ["name", "Name"]];
 
 const WORKPLACE: Record<string, string> = { remote: "Remote", hybrid: "Hybrid", onsite: "In the office" };
 
@@ -136,8 +137,8 @@ export function companiesOf(rows: Row[]) {
   });
 }
 
-export function CompanyCards({ rows, sort, sortHref, rolesHref, tab }: {
-  rows: Row[]; sort: CompanySort; sortHref: (s: CompanySort) => string; rolesHref: (company: string) => string; tab: "new" | "saved" | "passed";
+export function CompanyCards({ rows, sort, rolesHref, tab }: {
+  rows: Row[]; sort: CompanySort; rolesHref: (company: string) => string; tab: "new" | "saved" | "passed";
 }) {
   const list = companiesOf(rows).sort((a, b) =>
     sort === "roles" ? b.rows.length - a.rows.length || b.best - a.best
@@ -146,9 +147,6 @@ export function CompanyCards({ rows, sort, sortHref, rolesHref, tab }: {
   const noun = (n: number) => (tab === "new" ? (n === 1 ? "matched role" : "matched roles") : tab === "saved" ? (n === 1 ? "saved role" : "saved roles") : (n === 1 ? "passed role" : "passed roles"));
   return (
     <>
-      <p className="sortbar card-sortbar muted">{list.length} {list.length === 1 ? "company" : "companies"} · Sort:
-        {COMPANY_SORTS.map(([k, l]) => <a key={k} href={sortHref(k)} aria-current={sort === k ? "true" : undefined}>{l}</a>)}
-      </p>
       <ul className="card-grid company-grid plain">
         {list.map((c) => (
           <li key={c.name} className={`company-card${c.unseen ? " is-unseen" : ""}`}>
