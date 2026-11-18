@@ -43,6 +43,21 @@ describe("big boards are read a part at a time (Yong, 2026-11-17: Databricks 901
     expect(calls).toHaveLength(3);
     expect(r).toMatchObject({ listed: 265, complete: true });
   });
+
+  it("a Lever page that times out is asked once more; a second time out fails the read", async () => {
+    const lever = (failSkip: number, failTimes: number) => {
+      let failed = 0;
+      return { async get(url: string) {
+        const skip = Number(/skip=(\d+)/.exec(url)![1]);
+        if (skip === failSkip && failed++ < failTimes) throw new SourceRefusedError("unreachable", "This operation was aborted");
+        const n = skip < 200 ? 100 : 65;
+        return ok(url, JSON.stringify(Array.from({ length: n }, (_, i) => ({ id: `id-${skip + i}`, text: "Analyst", hostedUrl: "https://jobs.lever.co/veeva/x" }))));
+      } } as Fetcher;
+    };
+    const spec = { type: "ats", kind: "lever", key: "veeva", name: "Veeva", url: "https://jobs.lever.co/veeva" } as const;
+    expect(await fetchSource(spec, lever(100, 1))).toMatchObject({ listed: 265 });
+    await expect(fetchSource(spec, lever(100, 2))).rejects.toMatchObject({ reason: "unreachable" });
+  });
 });
 
 describe("Workday slow-downs (Yong, 2026-11-17)", () => {
