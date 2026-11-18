@@ -32,6 +32,16 @@ describe("LinkedIn job alert emails", () => {
     ]);
   });
 
+  it("skips LinkedIn's labels between a job's lines, like \"1 school alum\" (Yong, 2026-11-18)", () => {
+    const body = `Director, Supply Chain Strategy
+Premier Inc.
+Remote
+1 school alum
+Apply with resume & profile
+View job: https://www.linkedin.com/comm/jobs/view/4099999999/?t=1`;
+    expect(jobsFromLinkedInAlert(body)).toEqual([{ linkedinId: "4099999999", title: "Director, Supply Chain Strategy", company: "Premier Inc.", location: "Remote" }]);
+  });
+
   it("reads the HTML version when there's no plain text", () => {
     const html = `<table><tr><td><a href="https://www.linkedin.com/comm/jobs/view/4011111111/?t=1">Data Analyst</a></td></tr>
       <tr><td>Litware · Remote</td></tr><tr><td><a href="https://www.linkedin.com/comm/jobs/view/4011111111/?t=2">View job</a></td></tr></table>`;

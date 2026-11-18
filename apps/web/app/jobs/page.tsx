@@ -1,10 +1,10 @@
-import { getPreferences, jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
+import { getPreferences, jobsSummary, rescoreMatches, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
 import { JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, normalizeEmployer, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
-import { FeedbackButtons, ScoreBadge, ago, pay, place, posted } from "@/components/jobs/JobBits";
-import { CompanyCards, COMPANY_SORTS, JobCards, sortRows, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
+import { FeedbackButtons, FitScores, ago, pay, place, posted } from "@/components/jobs/JobBits";
+import { CompanyCards, COMPANY_SORTS, FitLines, JobCards, sortRows, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
 import { FilterBar } from "@/components/jobs/FilterBar";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
@@ -15,9 +15,9 @@ import { adjustmentAction, alertSeenAction, jobsViewAction, pasteLinkAction } fr
 export const dynamic = "force-dynamic";
 
 const TABS = [["new", "New"], ["saved", "Saved"], ["passed", "Passed"]] as const;
-const SORTS = [["score", "Best match"], ["date", "Newest"], ["salary", "Highest pay"], ["company", "Company"]] as const;
+const SORTS = [["score", "Best match"], ["g", "G-score"], ["c", "C-score"], ["date", "Newest"], ["salary", "Highest pay"], ["company", "Company"]] as const;
 type Sort = (typeof SORTS)[number][0];
-const SORT_KEY: Record<Sort, [GoalSort, "asc" | "desc"]> = { score: ["score", "desc"], date: ["posted", "desc"], salary: ["pay", "desc"], company: ["company", "asc"] };
+const SORT_KEY: Record<Sort, [GoalSort, "asc" | "desc"]> = { score: ["score", "desc"], g: ["g", "desc"], c: ["c", "desc"], date: ["posted", "desc"], salary: ["pay", "desc"], company: ["company", "asc"] };
 const LADDER = [["", "Any"], ["step_toward", "Steps toward your goal"], ["same_level", "Same level"], ["side_step", "Side steps"]] as const;
 const WORK = [["remote", "Remote"], ["hybrid", "Hybrid"], ["onsite", "In the office"]] as const;
 
@@ -46,7 +46,10 @@ export default async function JobsPage(props: PageProps) {
   const source = sources.some((s) => s.id === params.source) ? params.source : undefined;
   const levels = [...new Set(many("level").filter((l) => JOB_LEVEL_FILTERS.some(([k]) => k === l)))];
   const works = [...new Set(many("work").filter((w) => WORK.some(([k]) => k === w)))];
-  const matched = await listMatches(pool, session, { status, sort: sort === "company" ? "score" : sort, ladder, source, showFiltered });
+  const listArgs = { status, sort: sort === "company" ? "score" as const : sort, ladder, source, showFiltered };
+  let matched = await listMatches(pool, session, listArgs);
+  // Jobs scored before G and C existed get both the first time Jobs opens (no fetching, rules only).
+  if (matched.rows.some((r) => !r.fit_version)) { await rescoreMatches(pool, session); matched = await listMatches(pool, session, listArgs); }
   const { counts } = matched;
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const workOf = (r: Record<string, any>) => r.workplace_type ?? (/remote/i.test(r.location_raw ?? "") ? "remote" : null);
@@ -113,6 +116,7 @@ export default async function JobsPage(props: PageProps) {
             : SORTS.map(([k, l]) => <a key={k} href={q({ sort: k })} aria-current={sort === k ? "page" : undefined}>{l}</a>)}
         </nav>
       </div>
+      <p className="muted small fit-legend"><strong>G</strong> how well a job matches your goals (role, level, type, place, pay). <strong>C</strong> how well your own experience and skills cover what the job asks for. Best match weighs both.</p>
       <p className="muted small view-default">
         {narrowed ? <>Showing {rows.length} of {matched.rows.length}{company ? <> at {company} (<a href={q({ company: undefined })}>every company</a>)</> : null}. </> : null}
         {view === defaultView ? (params.view_saved ? "Saved. Jobs opens this way from now on." : null) : (
@@ -134,11 +138,11 @@ export default async function JobsPage(props: PageProps) {
         <ul className="job-list plain">
           {rows.map((r) => (
             <li key={r.id} className={`job-row${r.filtered ? " is-filtered" : ""}${r.seen_at ? "" : " is-unseen"}`}>
-              <ScoreBadge score={r.score} filtered={r.filtered} />
+              <FitScores r={r} />
               <div className="job-main">
                 <a className="job-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>
                 <div className="job-meta">{jobLevelKey(r.title ?? "") !== "none" ? `${jobLevelLabel(jobLevelKey(r.title ?? ""))} · ` : ""}{r.employer_canonical} · {place(r)}{pay(r) ? ` · ${pay(r)}` : ""} · {posted(r.posted_at)}</div>
-                <div className="reason">{r.reason_line}</div>
+                <FitLines r={r} />
                 {r.filtered ? <div className="error">Ruled out: {(r.filter_reasons as string[]).join("; ")}</div> : null}
                 {r.ladder_label ? <span className={`chip ladder-${r.ladder_tag}`}>{r.ladder_label}</span> : null}
                 {r.posting_status !== "active" ? <span className="chip closed">{t("jobs.closed")}</span> : null}

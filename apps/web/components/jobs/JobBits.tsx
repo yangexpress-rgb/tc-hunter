@@ -17,6 +17,28 @@ export function ScoreBadge({ score, filtered }: { score: number; filtered?: bool
   return <span className={`score ${band}`} aria-label={`Match score ${score} out of 100`}>{score}</span>;
 }
 
+const bandOf = (n: number | null | undefined, filtered?: boolean) =>
+  filtered ? "filtered" : n === null || n === undefined ? "weak" : n >= 80 ? "strong" : n >= 60 ? "good" : n >= 40 ? "partial" : "weak";
+
+/**
+ * The two scores side by side (Yong, 2026-11-18): G against the applicant's goals, C against
+ * their own record. A job not scored this way yet shows a dash, never a made-up number.
+ */
+export function FitScores({ r, compact }: { r: Record<string, any>; compact?: boolean }) {
+  const one = (k: "G" | "C", n: number | null | undefined, what: string) => (
+    <span className={`${compact ? "fit" : "score"} ${bandOf(n, r.filtered)}`} title={`${k}-score: ${what}`}
+      aria-label={n === null || n === undefined ? `${k}-score not worked out yet` : `${k}-score ${n} out of 100, ${what}`}>
+      <small className="score-key">{k}</small>{n ?? "–"}
+    </span>
+  );
+  return (
+    <span className={compact ? "fit-pair compact" : "fit-pair"}>
+      {one("G", r.g_score, "how well the job matches your goals")}
+      {one("C", r.c_score, "how well your experience and skills cover the job")}
+    </span>
+  );
+}
+
 /** Save / Pass / Not a fit (with a reason) for one match. */
 export function FeedbackButtons({ matchId, status, back }: { matchId: string; status: string; back: string }) {
   const hidden = (<><input type="hidden" name="match_id" value={matchId} /><input type="hidden" name="back" value={back} /></>);

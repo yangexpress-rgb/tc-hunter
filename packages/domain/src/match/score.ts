@@ -109,7 +109,7 @@ export function applicantLevel(exp: ProfileExperience[]): Level {
   return exp.length ? "entry" : "intern";
 }
 
-function seniorityFit(lp: Level | null, la: Level): { raw: number; line: string } {
+export function seniorityFit(lp: Level | null, la: Level): { raw: number; line: string } {
   if (!lp) return { raw: 0.8, line: "The posting doesn't say its level." };
   const d = levelIndex(lp) - levelIndex(la);
   if (levelIndex(lp) <= 1 && levelIndex(la) <= 1) return { raw: 1, line: `${LEVEL_LABEL[lp]} posting, and you're early in your career.` };
@@ -118,7 +118,7 @@ function seniorityFit(lp: Level | null, la: Level): { raw: number; line: string 
   return { raw, line };
 }
 
-function titleRelevance(postingTitle: string, candidates: string[]): { raw: number; best: string | null } {
+export function titleRelevance(postingTitle: string, candidates: string[]): { raw: number; best: string | null } {
   const pw = functionWords(postingTitle);
   if (!pw.length) return { raw: 0, best: null };
   let best = 0, bestT: string | null = null;
@@ -358,7 +358,7 @@ export function languageMentioned(text: string, language: string): boolean {
 }
 
 const employerKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(inc|llc|ltd|corp|corporation|co|plc|gmbh|the)\b/g, " ").replace(/\s+/g, " ").trim();
-function sameEmployer(employer: string, named: string): boolean {
+export function sameEmployer(employer: string, named: string): boolean {
   const a = employerKey(employer), b = employerKey(named);
   return !!a && !!b && (a === b || ` ${a} `.includes(` ${b} `));
 }
