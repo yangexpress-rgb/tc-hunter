@@ -84,6 +84,8 @@ export default async function ApplicationPage(props: Props) {
       {params.not_sent === "1" ? <p className="status" role="status">Noted, it wasn&apos;t sent. If TC Hunter applies for you by itself, it&apos;s filling in their form again now; otherwise check your answers below and approve again.</p> : null}
       {params.confirmed === "1" ? <p className="status" role="status">Thanks, that&apos;s confirmed.</p> : null}
       {params.applying === "1" ? <p className="status" role="status">On it. TC Hunter is opening the employer&apos;s form now.</p> : null}
+      {params.handed_back === "1" ? <p className="status" role="status">Thanks. TC Hunter is taking over their page again.</p> : null}
+      {params.gave_up === "1" ? <p className="status" role="status">Their page is closed. Choose Finish it yourself to apply on their site with your packet one tap away.</p> : null}
       {open || applying.status !== "none" ? <ApplyPanel appRef={a.public_ref} employer={a.employer_canonical} initial={applying} canApply={canApply} /> : null}
       {packet ? (
         <PacketCard server={serverPacket} p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} />

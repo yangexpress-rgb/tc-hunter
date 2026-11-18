@@ -44,6 +44,13 @@ export const AUDIT_ALLOWED_KEYS = {
   "apply.mode_set": ["mode"],
   "apply.standing_set": ["kind", "on"],
   "apply.requested": ["application_ref"],
+  // "Your turn" (Yong, 2026-11-17): every handover is logged like a submission. Never what was typed.
+  "handover.paused": ["application_ref", "step", "phase", "expires_at"],
+  "handover.opened": ["application_ref", "step"],
+  "handover.handed_back": ["application_ref", "step", "by"],
+  "handover.reminded": ["application_ref", "step"],
+  "handover.closed": ["application_ref", "step", "phase", "outcome", "minutes"],
+  "handover.finish_yourself": ["application_ref"],
   "profile.imported": ["kind", "parser", "rows"],
   "profile.filled_from_resume": ["fields"],
   "profile.about_saved": ["chars"],

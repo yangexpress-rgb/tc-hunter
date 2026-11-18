@@ -3,12 +3,14 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { createPool, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
+import { createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeCareersLookup, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
+  HeldSessions, handoverHours,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
+import { liveServer } from "./apply/live";
 import { dumpPostings, runF9, runRequirementsEval } from "./evalF9";
 
 const log = createLogger();
@@ -57,6 +59,11 @@ async function currentSearch() {
   }
   return search;
 }
+// "Your turn" (Yong, 2026-11-17): pages kept open at a step only the applicant may do, shown to them live
+// through the web app (127.0.0.1 only, with a key made at every start). Without the key, no live view:
+// such steps end with "Finish it yourself". Each open page costs memory, so at most 3 (2 per applicant).
+const liveKey = process.env.TC_LIVE_KEY && process.env.TC_LIVE_KEY.length >= 32 ? process.env.TC_LIVE_KEY : null;
+const held = liveKey && process.env.TC_APPLY_BROWSER !== "off" ? new HeldSessions(Number(process.env.TC_HANDOVER_MAX ?? 3) || 3, 2) : undefined;
 // Hands-free applying (Yong, 2026-11-15): TC Hunter's own browser, through the same outbound gate.
 // Employer-site passwords live in each applicant's vault; Gmail confirms new Workday accounts.
 const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
@@ -68,6 +75,7 @@ const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
   drafter: smartAnswersStatus().on ? new ClaudeEssayDrafter() : undefined,
   // Jobs from LinkedIn or Indeed are applied for on the employer's own site (Yong, 2026-11-17); Claude says where to look when board names don't answer.
   careers: discover.careers,
+  held,
 };
 const smart = smartAnswersStatus();
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
@@ -98,7 +106,21 @@ async function main() {
   try {
     const n = await recoverInterruptedWork(pool);
     if (n) log.info("worker.recovered", { items: n });
+    // Pages that were waiting for an applicant are gone with the restart: each run ends it in plain words.
+    const lost = await queueLostHandovers(pool);
+    if (lost) log.info("worker.handovers_lost", { count: lost });
   } catch (e) { log.warn("worker.recover_failed", { message: String((e as Error).message ?? e).slice(0, 200) }); }
+  if (held && liveKey) {
+    const port = Number(process.env.TC_LIVE_PORT ?? 3130);
+    liveServer(held, liveKey).listen(port, "127.0.0.1", () => log.info("worker.live_ready", { port, hours: handoverHours() }));
+    // Expiry, the one reminder, and noticing the page moved past the step: every 5 seconds, alongside the work.
+    let ticking = false;
+    setInterval(() => {
+      if (ticking || !held.all().length) return;
+      ticking = true;
+      tickHeld(pool, held).finally(() => { ticking = false; });
+    }, 5000).unref();
+  } else log.info("worker.live_off", { reason: process.env.TC_APPLY_BROWSER === "off" ? "apply browser off" : "TC_LIVE_KEY not set" });
   let lastSchedule = 0;
   // Watchdog: one piece of work that runs far too long (a site or service that never answers) would
   // hold up everything after it. Stop the worker then; the app restarts and the work is queued again.

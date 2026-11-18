@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
 import { AGREE_CHOICE, createLogger, matchChoice, sameAnswer, searchTermsFor,
-  formUrlFor, humanCheckIn, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type PageForm, type PageNow, type WorkdayPage,
+  formUrlFor, humanCheckIn, type LiveInput, type LiveView, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type PageForm, type PageNow, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { PAGE_SCRIPT } from "./pageScript";
 
@@ -383,6 +383,61 @@ class PwPage implements ApplyPage {
   }
 
   async close() { await this.browser.close().catch(() => {}); }
+
+  /**
+   * The live view for "Your turn" (Yong, 2026-11-17): Chromium's own screencast of the page (pictures sent
+   * only when the screen changes), and the applicant's clicks, scrolls and keys sent to it as a person's
+   * input. It follows the newest open tab, so a sign-in window the site opens shows too. Nothing the
+   * applicant types is kept or logged.
+   */
+  live(): LiveView {
+    const current = () => this.pg.context().pages().filter((p) => !p.isClosed()).at(-1) ?? this.pg;
+    return {
+      watch: async (onFrame) => {
+        let target = current();
+        let cdp = await target.context().newCDPSession(target);
+        let stopped = false;
+        const start = async () => {
+          cdp.on("Page.screencastFrame", (f: { data: string; sessionId: number }) => {
+            if (stopped) return;
+            onFrame(Buffer.from(f.data, "base64"));
+            cdp.send("Page.screencastFrameAck", { sessionId: f.sessionId }).catch(() => {});
+          });
+          await cdp.send("Page.startScreencast", { format: "jpeg", quality: 60, maxWidth: 1280, maxHeight: 1600, everyNthFrame: 1 });
+          // The first picture straight away: the screencast only sends when something changes.
+          const first = await target.screenshot({ type: "jpeg", quality: 60 }).catch(() => null);
+          if (first && !stopped) onFrame(first);
+        };
+        await start();
+        // A new tab (a sign-in window): the view moves to it, and back when it closes.
+        const follow = async () => {
+          const next = current();
+          if (stopped || next === target) return;
+          await cdp.send("Page.stopScreencast").catch(() => {});
+          await cdp.detach().catch(() => {});
+          target = next;
+          cdp = await target.context().newCDPSession(target);
+          await start().catch(() => {});
+        };
+        const onPage = (p: Page) => { p.once("close", () => { void follow(); }); void follow(); };
+        this.pg.context().on("page", onPage);
+        return async () => {
+          stopped = true;
+          this.pg.context().off("page", onPage);
+          await cdp.send("Page.stopScreencast").catch(() => {});
+          await cdp.detach().catch(() => {});
+        };
+      },
+      input: async (e: LiveInput) => {
+        const pg = current();
+        const vp = pg.viewportSize() ?? { width: 1280, height: 1600 };
+        if (e.type === "click") await pg.mouse.click(e.x * vp.width, e.y * vp.height);
+        else if (e.type === "scroll") { await pg.mouse.move(e.x * vp.width, e.y * vp.height); await pg.mouse.wheel(0, e.dy); }
+        else if (e.type === "key") await pg.keyboard.press(e.key === " " ? "Space" : e.key);
+        else await pg.keyboard.type(e.text, { delay: 20 });
+      },
+    };
+  }
 }
 
 /**

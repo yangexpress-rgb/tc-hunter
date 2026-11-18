@@ -10,6 +10,7 @@
 //
 // If the web app or the worker stops, everything stops and Railway restarts the container.
 import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { createGate, gateOptions } from "../egress-proxy/proxy.mjs";
 
@@ -39,6 +40,10 @@ if (!env.DATABASE_URL && env.DATABASE_OWNER_URL && env.DB_APP_PASSWORD) {
 }
 if (!env.TC_PUBLIC_ORIGIN && env.RAILWAY_PUBLIC_DOMAIN) env.TC_PUBLIC_ORIGIN = `https://${env.RAILWAY_PUBLIC_DOMAIN}`;
 env.TC_VAULT_DIR = VAULT;
+// "Your turn" live view: the web app reaches the worker's paused pages on 127.0.0.1 with a key made fresh at
+// every start, so it never has to be set or kept anywhere (an app restart closes paused pages anyway).
+env.TC_LIVE_KEY = randomBytes(32).toString("hex");
+env.TC_LIVE_PORT = env.TC_LIVE_PORT || "3130";
 
 const missing = ["DATABASE_URL", "TC_MASTER_KEY", "TC_VAULT_KEY"].filter((k) => !env[k]);
 if (missing.length) {
