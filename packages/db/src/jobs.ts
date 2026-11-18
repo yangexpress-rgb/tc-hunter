@@ -3,7 +3,7 @@ import { runEmailCheck, type EmailDeps } from "./email";
 import {
   cleanEmployerName, companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
-  SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
+  SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, portalFor, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
   readRequirementsText, withUsageScope, type BatchPosting, type Requirements, type RequirementsBatcher,
 } from "@tc-hunter/domain";
@@ -487,14 +487,16 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
   };
   const readBoard = async (s: Record<string, any>, again = true): Promise<void> => {
     await progress(`Reading ${s.name}`, done++, total, s.id);
-    // A hiring system with no public feed we read (Yong's audit): not read, not a failure.
-    if (s.health === "unreadable") return;
     // Read on the applicant's own Mac by TC Hunter for Mac (Yong, 2026-11-18: Workday shows our server
-    // a security check): a read from the last day stands in for fetching it from here, even when the
-    // server itself is turned away.
-    const relayed = s.kind === "workday" ? await withApplicant(pool, ctx, async (c) => (await c.query(
+    // a security check; careers portals with no public feed): a read from the last day stands in for
+    // fetching it from here, even when the server itself is turned away.
+    const portal = s.health === "unreadable" ? portalFor(s.name) : null;
+    const relayed = s.kind === "workday" || portal ? await withApplicant(pool, ctx, async (c) => (await c.query(
       "SELECT read_at, listed, checked, postings FROM relayed_read WHERE job_source_id = $1 AND error IS NULL AND read_at > now() - make_interval(secs => $2)",
       [s.id, RELAY_FRESH_MS / 1000])).rows[0]) : null;
+    // A hiring system with no public feed we read (Yong's audit): not read here, not a failure.
+    // The server never fetches it, even when the desktop app has a recipe for it.
+    if (s.health === "unreadable" && !relayed) return;
     if (!relayed && s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
       notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
       return;
@@ -527,10 +529,12 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
           const gone = await closeMissing(c, s.id, got.seenIds ?? got.postings.map((p) => p.externalId));
           closed += gone.closed; events.push(...gone.eventIds);
         }
-        await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, retry_after_at = NULL, slowdowns = 0, last_success_at = now(), last_checked_at = now(), last_listed = $2 WHERE id = $1", [s.id, got.listed]);
+        // A portal read by the desktop app stays "unreadable" for the server, so it never fetches it itself.
+        if (s.health === "unreadable") await c.query("UPDATE job_source SET last_success_at = now(), last_checked_at = now(), last_listed = $2 WHERE id = $1", [s.id, got.listed]);
+        else await c.query("UPDATE job_source SET health = 'ok', health_reason = NULL, failures = 0, retry_after_at = NULL, slowdowns = 0, last_success_at = now(), last_checked_at = now(), last_listed = $2 WHERE id = $1", [s.id, got.listed]);
       });
       for (const n of got.notes) notes.push({ source: s.name, note: n });
-      if (got.listed === 0 && again) {
+      if (got.listed === 0 && again && !portal) {
         const better = await repair(s);
         if (better) {
           notes.push({ source: s.name, note: `Its old jobs page listed no jobs, so we now read ${better.url} instead.` });

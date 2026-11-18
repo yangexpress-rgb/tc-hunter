@@ -8,6 +8,7 @@
  * search. "Read now" in Where we look starts one straight away.
  */
 const { readSite } = require("./workday");
+const { readPortal } = require("./portal");
 
 const EVERY_MS = 6 * 3_600_000, FIRST_AFTER_MS = 60_000, BEFORE_SEARCH_MS = 45 * 60_000;
 
@@ -43,7 +44,8 @@ async function readAll(why) {
     try {
       const todo = await call("/api/ext/workday");
       scheduleBeforeSearch(todo.nextSearchAt);
-      last = { state: "running", why, startedAt: Date.now(), total: todo.sources.length, done: 0, results };
+      const portals = todo.portals || [];
+      last = { state: "running", why, startedAt: Date.now(), total: todo.sources.length + portals.length, done: 0, results };
       for (const s of todo.sources) {
         last.now = s.name;
         try {
@@ -54,6 +56,20 @@ async function readAll(why) {
           if (e.signedOut) throw e;
           results.push({ name: s.name, error: e.message });
           await call("/api/ext/workday/result", { sourceId: s.id, error: e.message }).catch(() => {});
+        }
+        last.done += 1;
+      }
+      // Careers portals the server can't read, by the recipe TC Hunter sends (Yong, 2026-11-18).
+      for (const p of portals) {
+        last.now = p.name;
+        try {
+          const r = await readPortal(p, (jobs) => call("/api/ext/workday/plan", { sourceId: p.id, jobs }).then((x) => x.paths));
+          const saved = await call("/api/ext/workday/result", { sourceId: p.id, listed: r.listed, checked: r.checked, details: r.details });
+          results.push({ name: p.name, listed: r.listed, read: saved.postings });
+        } catch (e) {
+          if (e.signedOut) throw e;
+          results.push({ name: p.name, error: e.message });
+          await call("/api/ext/workday/result", { sourceId: p.id, error: e.message }).catch(() => {});
         }
         last.done += 1;
       }

@@ -10,3 +10,4 @@ export * from "./sources";
 export * from "./discover";
 export * from "./search";
 export * from "./corrections";
+export * from "./portals";
