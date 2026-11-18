@@ -1,3 +1,4 @@
+importScripts("workday.js");
 /*
  * The send (Phase 5). Runs in the background so it keeps going while the employer's page
  * changes after the click. Order: TC Hunter spends the single-use key, the page is checked

@@ -109,4 +109,33 @@ $("done").addEventListener("click", async () => {
   } catch (e) { say(e.message, true); }
 });
 
+// Workday sites, read in this browser (Yong, 2026-11-18).
+const WORKDAY_ORIGINS = ["https://*.myworkdayjobs.com/*"];
+function workdayLine(w) {
+  if (!w) return null;
+  if (w.state === "needs_permission") return "Choose Read Workday sites now once to let this browser read Workday sites.";
+  if (w.state === "not_paired") return "Connect this browser first: open Settings below.";
+  if (w.state === "running") return `Reading ${w.now} (${w.done + 1} of ${w.total})…`;
+  if (w.state === "failed") return `Couldn't read Workday sites: ${w.message}`;
+  if (w.state === "done") {
+    const ok = w.results.filter((r) => !r.error), bad = w.results.filter((r) => r.error);
+    return `Last read ${new Date(w.at).toLocaleString()}: ${ok.map((r) => `${r.name} ${r.listed} listed, ${r.read} read`).join("; ") || "no sites"}.`
+      + (bad.length ? ` Couldn't read: ${bad.map((r) => `${r.name} (${r.error})`).join("; ")}.` : "");
+  }
+  return null;
+}
+async function showWorkday() {
+  const { workday } = await chrome.storage.local.get("workday");
+  const line = workdayLine(workday);
+  if (line) { $("wd-status").textContent = line; $("wd-status").className = workday?.state === "failed" ? "hint error" : "hint"; }
+}
+$("wd-now").addEventListener("click", async () => {
+  // Asked while the click still counts as yours (the browser requires that).
+  if (!(await chrome.permissions.request({ origins: WORKDAY_ORIGINS }))) { $("wd-status").textContent = "The browser needs your permission to read Workday sites."; $("wd-status").className = "hint error"; return; }
+  await chrome.runtime.sendMessage({ type: "workday-now" });
+  $("wd-status").textContent = "Starting… you can close this; it keeps going in the background.";
+});
+chrome.storage.onChanged.addListener((c) => { if (c.workday) showWorkday(); });
+showWorkday();
+
 start();

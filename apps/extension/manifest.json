@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "TC Hunter",
-  "version": "0.5.0",
-  "description": "Types the answers you approved in TC Hunter into an application form, and on Greenhouse, Lever, Ashby or SmartRecruiters sends it once you approve.",
+  "version": "0.6.0",
+  "description": "Types the answers you approved in TC Hunter into an application form, sends it on Greenhouse, Lever, Ashby or SmartRecruiters once you approve, and reads the Workday job sites you follow for TC Hunter.",
   "action": {
     "default_popup": "popup.html",
     "default_title": "TC Hunter"
@@ -10,6 +10,7 @@
   "options_page": "options.html",
   "permissions": [
     "activeTab",
+    "alarms",
     "scripting",
     "storage"
   ],

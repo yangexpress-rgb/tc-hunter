@@ -70,8 +70,8 @@ export function parseWorkday(input: string): WorkdaySite | null {
   return { host, tenant: tenant.toLowerCase(), site, jobPath };
 }
 const workdayKey = (w: WorkdaySite) => `${w.host}/${w.tenant}/${w.site}`;
-const workdayFromKey = (key: string): WorkdaySite => { const [host, tenant, site] = key.split("/"); return { host: host!, tenant: tenant!, site: site!, jobPath: null }; };
-const workdayApi = (w: WorkdaySite) => `https://${w.host}/wday/cxs/${w.tenant}/${w.site}`;
+export const workdayFromKey = (key: string): WorkdaySite => { const [host, tenant, site] = key.split("/"); return { host: host!, tenant: tenant!, site: site!, jobPath: null }; };
+export const workdayApi = (w: WorkdaySite) => `https://${w.host}/wday/cxs/${w.tenant}/${w.site}`;
 const WORKDAY_HEADERS = { "Accept-Language": "en-US" };
 /** A common desktop browser's name, for Workday sites that turn the app's own reader away (Yong's choice, 2026-11-17). */
 const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
