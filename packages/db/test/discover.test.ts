@@ -62,7 +62,9 @@ afterAll(async () => { await pool.end(); });
 describe("the app finds where to look, from the goals", () => {
   it("with a goal and no places chosen, a scan finds employers, checks their boards, follows the ones that answer and brings back jobs", async () => {
     const g = await saveGoal(pool, yong, goal({ roles: ["Operations Analyst"], industries: ["Logistics"] }));
-    expect(await ownerQuery("SELECT enqueue_due_scans()")).toBeTruthy();  // due: a goal in use, though nothing is followed yet
+    // Due: a goal in use, though nothing is followed yet. Asked at a fixed time inside the daily 6 PM ET
+    // window, so the test doesn't depend on the hour CI runs (it failed after midnight ET).
+    expect((await ownerQuery("SELECT enqueue_due_scans('2026-11-13T23:30:00Z') AS n")).rows[0].n).toBe(1);
     await drain();
     expect(proposer.seen[0]).toMatchObject({ roles: ["Operations Analyst"], industries: ["Logistics"] });
     expect(JSON.stringify(proposer.seen)).not.toMatch(/Yong|Northwind/);  // only the goal goes to the proposer
