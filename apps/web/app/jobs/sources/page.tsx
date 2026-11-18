@@ -161,7 +161,7 @@ export default async function SourcesPage(props: PageProps) {
         </form>
         <p className="muted small">{shown.length} of {table.length} sources{failedCount ? <> · <span className="error">{failedCount} failed or can't be read</span></> : null}{emptyCount ? <> · <span className="error">{emptyCount} found no jobs</span></> : null}</p>
         <div className="table-wrap">
-          <table className="report jobs-matrix">
+          <table className="report jobs-matrix compact-rows">
             <thead><tr>
               {COLS.map(([k, label]) => {
                 const on = sortBy === k;
@@ -169,20 +169,12 @@ export default async function SourcesPage(props: PageProps) {
                 return <th key={k} scope="col" className={k === "jobs" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
                   <a href={href({ sort: k, dir: next })}>{label}{on ? (dir === "asc" ? " ▲" : " ▼") : ""}</a></th>;
               })}
-              <th scope="col"><span className="sr-only">Actions</span></th>
             </tr></thead>
             <tbody>
               {shown.map((r) => (
                 <tr key={r.key}>
-                  <td className="wrap"><strong>{r.name}</strong></td>
-                  {/* One line to save space; press it to read the rest (Yong, 2026-11-17). */}
-                  <td className="muted small">{r.detail ? <details className="more one-line"><summary title="Show all">{r.detail}</summary></details> : null}</td>
-                  <td>{r.kind}</td>
-                  <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
-                  <td>{r.last ? ago(r.last) : "Never"}</td>
-                  <td className="num">{r.jobs}</td>
-                  <td className={bad(r.status) ? "error wrap" : "muted wrap"}>{r.reason}{r.link ? <> <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a></> : null}</td>
-                  <td><div className="row-actions" style={{ marginTop: 0, flexWrap: "nowrap" }}>
+                  {/* One line a row (Yong, 2026-11-17): the buttons sit beside the name, seen without scrolling. */}
+                  <td><div className="one-line-row"><strong>{r.name}</strong>
                     {r.again ? (
                       <form action={searchSourceAction}>
                         <input type="hidden" name="id" value={r.again} /><input type="hidden" name="back" value={BACK} />
@@ -194,9 +186,18 @@ export default async function SourcesPage(props: PageProps) {
                         <button className="small secondary">{r.action.label}</button>
                       </form>) : null}
                   </div></td>
+                  {/* One line to save space; press it to read the rest (Yong, 2026-11-17). */}
+                  <td className="muted small">{r.detail ? <details className="more one-line"><summary title="Show all">{r.detail}</summary></details> : null}</td>
+                  <td>{r.kind}</td>
+                  <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
+                  <td>{r.last ? ago(r.last) : "Never"}</td>
+                  <td className="num">{r.jobs}</td>
+                  <td className={bad(r.status) ? "error small" : "muted small"}>{r.reason ? <details className="more one-line"><summary title="Show all">{r.reason}</summary>
+                    {r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</details>
+                    : r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</td>
                 </tr>
               ))}
-              {shown.length === 0 ? <tr><td colSpan={8} className="muted">No sources match these filters.</td></tr> : null}
+              {shown.length === 0 ? <tr><td colSpan={7} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>

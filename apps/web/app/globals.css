@@ -319,7 +319,7 @@ details.more > summary { list-style: none; cursor: pointer; color: var(--muted);
 details.more > summary:hover { color: var(--accent); text-decoration: underline; }
 details.more > summary::-webkit-details-marker { display: none; }
 /* A long table cell shown as one line until pressed (Where we look descriptions). */
-details.one-line > summary { display: block; max-width: 26em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: inherit; color: inherit; }
+details.one-line > summary { display: block; max-width: 15em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: inherit; color: inherit; }
 details.one-line[open] > summary { white-space: normal; overflow: visible; }
 details.one-line > summary:hover { color: var(--accent); text-decoration: none; }
 details.more .more-close, details.more[open] .more-open { display: none; }
@@ -369,3 +369,11 @@ table.jobs-matrix tr.is-unseen td:nth-child(2) a { font-weight: 600; }
 /* Settings › Email: the two connect steps */
 ol.steps { padding-left: 20px; display: grid; gap: 16px; }
 ol.steps > li > form.stack { margin-top: 10px; }
+
+/* Where we look: one line a row (Yong, 2026-11-17). Long text is cut with "…" and opens when pressed. */
+table.compact-rows td, table.compact-rows th { white-space: nowrap; padding-top: 6px; padding-bottom: 6px; vertical-align: middle; }
+table.compact-rows details.one-line[open] > summary { white-space: normal; }
+table.compact-rows td:has(details.one-line[open]) { white-space: normal; }
+.one-line-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.one-line-row form { margin: 0; display: inline; }
+.one-line-row button.small { padding: 2px 8px; font-size: 13px; }
