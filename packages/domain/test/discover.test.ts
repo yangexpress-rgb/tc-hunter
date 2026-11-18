@@ -96,7 +96,23 @@ describe("Workday asking us to slow down (Yong, 2026-11-17)", () => {
     expect(waits).toHaveLength(1);
     expect(r.postings.map((p) => p.title)).toEqual(["Operations Analyst 1"]);
     expect(r.listed).toBe(3);
-    expect(r.notes[0]).toMatch(/asked us to slow down/);
+    expect(r.notes.join(" ")).toMatch(/asked us to slow down/);
+  });
+  it("asks the way a browser does when the site turns the app's own reader away (Yong's choice)", async () => {
+    const agents: string[] = [];
+    const f: Fetcher = { async get(url: string, o?: { headers?: Record<string, string> }) {
+      const ua = o?.headers?.["User-Agent"] ?? "app";
+      agents.push(ua);
+      if (ua === "app") throw new SourceRefusedError("rate_limited", "429");
+      if (url === `${api}/jobs`) return { status: 200, text: JSON.stringify({ total: 1, jobPostings: [job(1)] }), url, contentType: "application/json" };
+      return { status: 200, text: JSON.stringify({ jobPostingInfo: { title: "Operations Analyst 1", jobReqId: "R1", jobDescription: "x" } }), url, contentType: "application/json" };
+    } };
+    const r = await fetchSource(spec, f, () => true, 25, ["Operations Analyst"], async () => {});
+    expect(r.listed).toBe(1);
+    expect(r.postings.map((p) => p.title)).toEqual(["Operations Analyst 1"]);
+    expect(agents[0]).toBe("app");
+    expect(agents.slice(1).every((a) => a.startsWith("Mozilla/"))).toBe(true);
+    expect(r.notes.join(" ")).toMatch(/the way a browser asks/);
   });
   it("still fails when it can't read anything at all", async () => {
     const f: Fetcher = { async get() { throw new SourceRefusedError("rate_limited", "429"); } };
