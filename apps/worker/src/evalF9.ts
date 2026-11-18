@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ClaudeAnswerInferrer, F9_BAR, passesF9, scoreAnswers, type EvalQuestion, type InferFacts } from "@tc-hunter/domain";
+import {
+  ClaudeAnswerInferrer, ClaudeRequirementsReader, F9_BAR, passesF9, readRequirementsText, scoreAnswers, scoreRequirements, summariseRequirements,
+  type EvalQuestion, type GoldenPosting, type InferFacts,
+} from "@tc-hunter/domain";
 
 /**
  * The F9 answer eval, run once on the server with its own Anthropic key (Yong, 2026-11-17: "run it
@@ -26,5 +29,28 @@ export async function runF9(log: { info: (e: string, d: Record<string, unknown>)
     const rej = out.rejected?.find((x) => x.key === r.key);
     log.info("eval.f9_row", { key: r.key, result: r.result, question: r.label.slice(0, 120), answer: r.answer, expect: r.expect.map((e) => e ?? "(left for you)").join(" / "),
       basis: a?.basis ?? null, rejected: rej?.why ?? null });
+  }
+}
+
+/**
+ * The requirements golden set (fixtures/req-golden), run once on the server with its own key when
+ * TC_EVAL_REQ=1: the posting reader's must-have recall and the rest, with the rule reader alongside
+ * as a baseline. The postings are public job ads, so they may be logged.
+ */
+export async function runRequirementsEval(log: { info: (e: string, d: Record<string, unknown>) => void; warn: (e: string, d: Record<string, unknown>) => void }) {
+  const file = join(process.cwd(), "fixtures", "req-golden", "postings.json");
+  const { postings } = JSON.parse(await readFile(file, "utf8")) as { postings: GoldenPosting[] };
+  const reader = new ClaudeRequirementsReader();
+  const started = Date.now();
+  log.info("eval.req_started", { postings: postings.length, by: reader.version });
+  const rows = await Promise.all(postings.map(async (p) => ({ p, out: await reader.readDetailed(p.text, p.title) })));
+  const scores = rows.map(({ p, out }) => scoreRequirements(p, out.requirements));
+  const rules = postings.map((p) => scoreRequirements(p, readRequirementsText(p.text, p.title)));
+  log.info("eval.req_score", { by: reader.version, ...summariseRequirements(scores), fell_back_to_rules: rows.filter((r) => r.out.by === "rules").map((r) => `${r.p.key}: ${r.out.problem}`).join(" | "),
+    rules_baseline: summariseRequirements(rules), seconds: Math.round((Date.now() - started) / 1000) });
+  for (const [i, s] of scores.entries()) {
+    const r = rows[i]!.out.requirements;
+    log.info("eval.req_row", { key: s.key, must: `${s.mustFound}/${s.mustTotal}`, nice: `${s.niceFound}/${s.niceTotal}`, missed: s.missed, extra: s.extra, promoted: s.promoted, demoted: s.demoted,
+      years: `${r.years ?? "none"} (${s.yearsRight ? "right" : "wrong"})`, education: s.educationRight, authorisation: s.authorisationRight });
   }
 }
