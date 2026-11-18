@@ -92,6 +92,13 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     expect(pref.label).toBe("Your goals");
     expect(pref.detail[0]).toBe("Closest to your goal: Operations Analyst.");
     expect(d!.ladder_tag).not.toBeNull();  // from the someday goal (COO), though it isn't used to find jobs
+    // G-score against the goal it fits, C-score against the applicant's record (Yong, 2026-11-18).
+    expect(ops.fit_version).toBe("fit-1");
+    expect(ops.g_score).toBeGreaterThanOrEqual(60);
+    expect(ops.g_summary).toMatch(/for Operations Analyst/);
+    expect(typeof ops.c_score).toBe("number");
+    expect(d!.g_parts[0].key).toBe("role");
+    expect((await listMatches(pool, yong, { sort: "g" })).rows[0].g_score).toBeGreaterThanOrEqual((await listMatches(pool, yong, { sort: "g" })).rows.at(-1).g_score);
   });
 
   it("edits and removes goals; a goal switched off stops counting", async () => {

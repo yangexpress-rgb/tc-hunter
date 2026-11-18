@@ -14,7 +14,8 @@ import type { RawPosting } from "../jobs/types";
 export const LINKEDIN_ALERT_QUERY = "from:(jobalerts-noreply@linkedin.com OR jobs-noreply@linkedin.com) newer_than:14d";
 
 const VIEW = /https?:\/\/(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/(?:comm\/)?jobs\/view\/(\d{6,})/i;
-const NOISE = /^(view job|apply|easy apply|see all jobs|new|promoted|actively recruiting|be an early applicant|\d+ (?:applicants?|connections?|alumni|school alumni).*|.*\bago\b|you'?re receiving|unsubscribe|help|linkedin|-{3,}|={3,}|·)$/i;
+// Labels LinkedIn puts between a job's lines, never a title or company ("1 school alum" was read as a title, Yong 2026-11-18).
+const NOISE = /^(view job|apply|easy apply|apply with (?:your )?resume(?: (?:&|and) profile)?|see all jobs|new|promoted|actively (?:recruiting|hiring)|be an early applicant|top applicant|in your network|\d+ (?:applicants?|connections?|alum(?:ni|s)?|school alum(?:ni|s)?|company alum(?:ni|s)?)\b.*|.*\bago\b|you'?re receiving|unsubscribe|help|linkedin|-{3,}|={3,}|·)$/i;
 
 export interface AlertJob { linkedinId: string; title: string; company: string; location: string | null }
 

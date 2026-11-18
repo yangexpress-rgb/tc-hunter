@@ -2,7 +2,7 @@ import type pg from "pg";
 import { runEmailCheck, type EmailDeps } from "./email";
 import {
   cleanEmployerName, companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
-  normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
+  normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, bestGoalFit, candidateFit, FIT_VERSION, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, retryWaitMs, titleIsRelated, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
   readRequirementsText, withUsageScope, type BatchPosting, type Requirements, type RequirementsBatcher,
@@ -65,11 +65,13 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
     const p = known.rows[0];
     await c.query("UPDATE job_posting_source SET last_seen_at = now(), active = true, url = $3, content_fingerprint = $4 WHERE job_source_id = $1 AND external_id = $2",
       [sourceId, raw.externalId, raw.url || p.apply_url || "", fp]);
-    if (p.status !== "active") {
+    const reopened = p.status !== "active";
+    if (reopened) {
       await c.query("UPDATE job_posting SET status = 'active', closed_at = NULL, last_seen_at = now() WHERE id = $1", [p.id]);
       await addEvent(p.id, "reposted", { reopened: true });
-      return { postingId: p.id, isNew: false, changed: true, eventIds: events };
     }
+    // Reopened with the same text: nothing else to change. Reopened with new text (a fixed reading too): read again below.
+    if (reopened && (p.source_fp ?? p.description_fingerprint) === fp) return { postingId: p.id, isNew: false, changed: true, eventIds: events };
     if ((p.source_fp ?? p.description_fingerprint) === fp) {
       await c.query("UPDATE job_posting SET last_seen_at = now() WHERE id = $1", [p.id]);
       return { postingId: p.id, isNew: false, changed: false, eventIds: events };
@@ -79,9 +81,11 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
     await c.query(
       `UPDATE job_posting SET description_text = $2, description_fingerprint = $3, requirements = $4, requirements_hash = $5, parser_version = $6,
          title = $7, title_normalized = $8, location_raw = $9, workplace_type = $10, last_seen_at = now(),
-         salary_min = $11, salary_max = $12, salary_currency = $13, salary_period = $14 WHERE id = $1`,
+         salary_min = $11, salary_max = $12, salary_currency = $13, salary_period = $14,
+         -- A LinkedIn alert job is only its email lines, so a better reading of them fixes the company too.
+         employer_canonical = CASE WHEN ats_type = 'linkedin_alert' THEN $15 ELSE employer_canonical END WHERE id = $1`,
       [p.id, raw.descriptionText, fp, JSON.stringify(req), rh, reader.version, raw.title, normalizeTitle(raw.title), raw.locationRaw, raw.workplaceType,
-        raw.salary?.min ?? null, raw.salary?.max ?? null, raw.salary?.currency ?? null, raw.salary?.period ?? null]);
+        raw.salary?.min ?? null, raw.salary?.max ?? null, raw.salary?.currency ?? null, raw.salary?.period ?? null, raw.employer]);
     if (rh !== p.requirements_hash) {
       const before = p.requirements ?? {};
       await addEvent(p.id, "requirements_changed", {
@@ -238,18 +242,26 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
     const prior = existing.get(p.id);
     if (!prior && !postingIds && !titleIsRelated(p.title, targets)) continue;
     related++;
-    const res = scoreBestGoal(profile, prefs, postingFor(p), { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
+    const posting = postingFor(p);
+    // G-score and C-score (Yong, 2026-11-18): against the goals and against the applicant's own record.
+    const g = bestGoalFit(prefs, posting);
+    const cf = candidateFit(profile, posting, now);
+    const res = scoreBestGoal(profile, prefs, posting, { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
     const r = await c.query(
       `INSERT INTO match (applicant_id, job_posting_id, score, components, matched_skills, gap_skills, filtered, filter_reasons, reason_line, ladder_tag, ladder_label,
-         adjustments, rules_version, parser_version, computed_at, found_by, goal_id)
-       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14, $15)
+         adjustments, rules_version, parser_version, computed_at, found_by, goal_id, g_score, g_parts, g_summary, c_score, c_parts, c_summary, fit_version)
+       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14, $15, $16, $17, $18, $19, $20, $21, $22)
        ON CONFLICT (applicant_id, job_posting_id) DO UPDATE SET score = EXCLUDED.score, components = EXCLUDED.components, matched_skills = EXCLUDED.matched_skills,
          gap_skills = EXCLUDED.gap_skills, filtered = EXCLUDED.filtered, filter_reasons = EXCLUDED.filter_reasons, reason_line = EXCLUDED.reason_line,
          ladder_tag = EXCLUDED.ladder_tag, ladder_label = EXCLUDED.ladder_label, adjustments = EXCLUDED.adjustments, rules_version = EXCLUDED.rules_version,
-         parser_version = EXCLUDED.parser_version, computed_at = now(), goal_id = EXCLUDED.goal_id
+         parser_version = EXCLUDED.parser_version, computed_at = now(), goal_id = EXCLUDED.goal_id,
+         g_score = EXCLUDED.g_score, g_parts = EXCLUDED.g_parts, g_summary = EXCLUDED.g_summary,
+         c_score = EXCLUDED.c_score, c_parts = EXCLUDED.c_parts, c_summary = EXCLUDED.c_summary, fit_version = EXCLUDED.fit_version
        RETURNING (xmax = 0) AS inserted`,
       [p.id, res.score, JSON.stringify(res.components), JSON.stringify(res.matchedSkills), res.gapSkills, res.filtered, res.filterReasons, res.reasonLine,
-        res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy, res.goalId ?? null]);
+        res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy,
+        // The goal a job fits best is the one its G-score comes from.
+        g.goalId ?? res.goalId ?? null, g.score, JSON.stringify(g.parts), g.summary, cf.score, JSON.stringify(cf.parts), cf.summary, FIT_VERSION]);
     if (r.rows[0].inserted) created++;
   }
   return { considered: postings.length, related, newMatches: created };

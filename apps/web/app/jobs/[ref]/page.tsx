@@ -4,12 +4,14 @@ import { STAGE_LABEL, t, type ApplicationStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
-import { FeedbackButtons, ScoreBadge, ago, pay, place, posted } from "@/components/jobs/JobBits";
+import { FeedbackButtons, FitScores, ago, pay, place, posted } from "@/components/jobs/JobBits";
 import { TopBar } from "@/components/TopBar";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { tailorAction } from "@/app/documents/actions";
 import { trackAction } from "@/app/applications/actions";
+
+type FitPart = { key: string; label: string; weight: number; points: number; detail: string[] };
 
 export const dynamic = "force-dynamic";
 
@@ -50,15 +52,20 @@ export default async function JobPage(props: Props) {
       <p><a href="/jobs">← All jobs</a></p>
       <Flash saved={saved} error={error} />
       <div className="job-head">
-        <ScoreBadge score={m.score} filtered={m.filtered} />
+        <FitScores r={m} />
         <div>
           <h1>{m.title}</h1>
           <p className="job-meta">{m.employer_canonical} · {place(m)}{pay(m) ? ` · ${pay(m)}` : ""} · {posted(m.posted_at)}</p>
         </div>
       </div>
       {m.posting_status !== "active" ? <p className="error" role="status">{t("jobs.closed")}</p> : null}
-      <p className="reason big">{m.reason_line}</p>
-      {m.filtered ? <p className="muted">Your preferences rule this one out: {(m.filter_reasons as string[]).join("; ")}.</p> : null}
+      {m.g_summary || m.c_summary ? (
+        <div className="fit-lines big">
+          {m.g_summary ? <div><strong>G</strong> {m.g_summary}</div> : null}
+          {m.c_summary ? <div><strong>C</strong> {m.c_summary}</div> : null}
+        </div>
+      ) : <p className="reason big">{m.reason_line}</p>}
+      {m.filtered ? <p className="error">Your preferences rule this one out: {(m.filter_reasons as string[]).join("; ")}.</p> : null}
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
       <FeedbackButtons matchId={m.id} status={status} back={back} />
       {preparing ? <meta httpEquiv="refresh" content="4" /> : null}
@@ -110,7 +117,21 @@ export default async function JobPage(props: Props) {
         </section>
       ) : null}
 
-      <Details summary="How we worked out the score">
+      {([["G-score: against your goals", m.g_parts, m.g_score], ["C-score: against your experience and skills", m.c_parts, m.c_score]] as const).map(([title, parts, n]) =>
+        (parts as FitPart[] | null)?.length ? (
+          <Details key={title} summary={`How we worked out the ${title.split(":")[0]} (${n})`}>
+            <p className="muted">{title}. Only what applies counts: a part the {title.startsWith("G") ? "goal leaves blank" : "posting doesn't ask for"} is left out, not marked down.</p>
+            <table className="breakdown">
+              <tbody>
+                {(parts as FitPart[]).map((c) => (
+                  <tr key={c.key}><th scope="row">{c.label}</th><td className="num">{c.points} of {c.weight}</td><td>{c.detail.join(" ")}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </Details>
+        ) : null)}
+
+      <Details summary={`How we worked out Best match (${m.score})`}>
         <table className="breakdown">
           <tbody>
             {comps.map((c) => (
