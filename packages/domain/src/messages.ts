@@ -171,7 +171,7 @@ export const L1 = {
 
   // Packet states, plain equivalents (brief 5.5)
   "packet.packet_draft": "Getting your application ready",
-  "packet.packet_ready_for_review": "Ready to apply — review & approve",
+  "packet.packet_ready_for_review": "Your packet is ready — review & approve",
   "packet.approved_to_apply": "Approved — ready to start",
   "packet.filling": "Filling in the form",
   "packet.waiting_for_applicant.sign_in": "This employer site needs you to sign in — your turn.",
@@ -192,7 +192,7 @@ export const L1 = {
   // Application stages, plain equivalents (brief 5.6)
   "stage.interested": "Interested",
   "stage.tailoring": "Preparing your resume",
-  "stage.ready_to_apply": "Ready to apply",
+  "stage.ready_to_apply": "Documents ready",
   "stage.applied": "Applied",
   "stage.screening": "Being screened",
   "stage.interview": "Interviewing",

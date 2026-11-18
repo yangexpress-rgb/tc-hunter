@@ -24,3 +24,4 @@ export * from "./apply";
 export * from "./apply/employerSite";
 export * from "./apply/securityCode";
 export * from "./promptShared";
+export * from "./journey";

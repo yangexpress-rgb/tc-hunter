@@ -253,3 +253,48 @@ export async function resetCalibration(pool: pg.Pool, session: Session): Promise
     await matchApplicant(c, new Date());
   });
 }
+
+/** What the journey (Tracker UI redesign) reads about each application, besides the application row itself. Read-only. */
+export interface JourneyFacts {
+  docs: { resume: string | null; letter: string | null };
+  packet: { state: string; failureReason: string | null; waitingReason: string | null; submittedAt: Date | null; confirmationRef: string | null;
+    submitStarted: boolean; submitApproved: boolean; draftsToCheck: number; missingRequired: number } | null;
+  run: { status: string; step: string | null; problem: string | null; waitingFor: string | null; forPacket: boolean; finishedAt: Date | null } | null;
+}
+
+/**
+ * Per application: the newest version of each document ("writing" while TC Hunter is preparing one), the newest
+ * packet that isn't abandoned, and the newest apply run. Keyed by application ref.
+ */
+export async function journeyFacts(pool: pg.Pool, session: Session, appRef?: string): Promise<Record<string, JourneyFacts>> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const rows = (await c.query(
+      `SELECT a.public_ref,
+              (SELECT d.status FROM document d WHERE d.match_id = a.match_id AND d.type = 'tailored_resume' ORDER BY d.version DESC LIMIT 1) AS resume,
+              (SELECT d.status FROM document d WHERE d.match_id = a.match_id AND d.type = 'cover_letter' ORDER BY d.version DESC LIMIT 1) AS letter,
+              EXISTS (SELECT 1 FROM work_item w WHERE w.kind = 'tailor' AND w.payload->>'match_id' = a.match_id::text AND w.status IN ('queued','running')) AS writing,
+              k.id AS k_id, k.state AS k_state, k.failure_reason, k.waiting_reason, k.submitted_at, k.confirmation_ref AS k_conf,
+              k.submission_key_used_at IS NOT NULL AS submit_started,
+              (k.submit_approved_hash IS NOT NULL AND k.submit_approved_hash NOT LIKE 'assisted:%') AS submit_approved,
+              (SELECT count(*)::int FROM packet_field f WHERE f.packet_id = k.id AND f.source = 'drafted') AS drafts,
+              (SELECT count(*)::int FROM packet_field f WHERE f.packet_id = k.id AND f.required AND f.answer_value_enc IS NULL) AS missing,
+              r.status AS r_status, r.step AS r_step, r.problem AS r_problem, r.waiting_for AS r_waiting, r.packet_id AS r_packet, r.finished_at AS r_finished, r.updated_at AS r_updated
+         FROM application a
+         LEFT JOIN LATERAL (SELECT * FROM application_packet k WHERE k.application_id = a.id AND k.state <> 'abandoned' ORDER BY k.version DESC LIMIT 1) k ON true
+         LEFT JOIN LATERAL (SELECT * FROM apply_run r WHERE r.application_id = a.id ORDER BY r.created_at DESC LIMIT 1) r ON true
+        WHERE ($1::text IS NULL OR a.public_ref = $1)`, [appRef ?? null])).rows;
+    return Object.fromEntries(rows.map((x) => {
+      // A run silent for 10 minutes has stopped (same rule as applyStatus).
+      const silent = x.r_status === "running" && Date.now() - new Date(x.r_updated).getTime() > 10 * 60_000;
+      const writing = x.writing ? "writing" : null;
+      const f: JourneyFacts = {
+        docs: { resume: x.resume === "approved" ? "approved" : writing ?? x.resume ?? null, letter: x.letter === "approved" ? "approved" : x.letter ?? null },
+        packet: x.k_id ? { state: x.k_state, failureReason: x.failure_reason, waitingReason: x.waiting_reason, submittedAt: x.submitted_at, confirmationRef: x.k_conf,
+          submitStarted: x.submit_started, submitApproved: x.submit_approved, draftsToCheck: x.drafts, missingRequired: x.missing } : null,
+        run: x.r_status ? { status: silent ? "stopped" : x.r_status, step: x.r_step, problem: silent ? `TC Hunter stopped responding while ${String(x.r_step ?? "working").charAt(0).toLowerCase()}${String(x.r_step ?? "working").slice(1)}. It carries on by itself after a restart.` : x.r_problem,
+          waitingFor: x.r_waiting, forPacket: !!x.k_id && x.r_packet === x.k_id, finishedAt: x.r_finished } : null,
+      };
+      return [x.public_ref as string, f];
+    }));
+  });
+}

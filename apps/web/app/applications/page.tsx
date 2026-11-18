@@ -1,92 +1,94 @@
-import { applyStatuses, listApplications, listEmailSignals, trackerSummary } from "@tc-hunter/db";
-import { CLOSED, STAGE_LABEL, type ApplicationStage } from "@tc-hunter/domain";
+import { applyStatuses, journeyFacts, listApplications, listEmailSignals, trackerSummary } from "@tc-hunter/db";
+import { JOURNEY_LABEL, JOURNEY_STAGES, needsYou as whoNeedsYou, stageCounts, type Journey, type JourneyStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { TopBar } from "@/components/TopBar";
 import { app, requireSession } from "@/lib/server";
-import { BudgetLine, dueText } from "@/components/applications/AppBits";
+import { BudgetLine } from "@/components/applications/AppBits";
 import { Flash } from "@/components/profile/Fact";
 import { flashOf, type PageProps } from "@/lib/profile";
-import { EmailSuggestions } from "@/components/applications/EmailSuggestions";
+import { EmailAttach, journeyFor, PipelineStrip, StatusBlock, type RunLine, type Signal } from "@/components/applications/Journey";
 
 export const dynamic = "force-dynamic";
 
-const GROUPS: Array<{ title: string; stages: ApplicationStage[] }> = [
-  { title: "Getting ready", stages: ["interested", "tailoring", "ready_to_apply"] },
-  { title: "Waiting to hear back", stages: ["applied"] },
-  { title: "Talking with the employer", stages: ["screening", "interview", "offer"] },
-];
-
 type AppRow = Awaited<ReturnType<typeof listApplications>>[number];
-type Applying = { status: string; step: string | null; problem: string | null };
+type Item = { a: AppRow; j: Journey; signal?: Signal };
 
-/** One line about TC Hunter's browser on this application; problems in red. */
-function ApplyLine({ s }: { s?: Applying }) {
-  if (!s) return null;
-  if (s.status === "queued") return <div className="status small">Applying for you: starting soon</div>;
-  if (s.status === "running") return <div className="status small">Applying for you now: {s.step}</div>;
-  if (s.status === "sent") return <div className="ok small">Sent by TC Hunter</div>;
-  if (s.status === "waiting") return <div className={s.problem ? "error small" : "warn small"}>Needs you: {s.problem ?? s.step}</div>;
-  if (s.status === "failed" || s.status === "unclear" || s.status === "stopped") return <div className="error small">{s.problem ?? s.step}</div>;
-  return null;
-}
-
-function Row({ a, today, applying }: { a: AppRow; today: string; applying?: Applying }) {
-  const due = a.next_step_due ? (a.next_step_due instanceof Date ? a.next_step_due : new Date(a.next_step_due)) : null;
+function Row({ it, back }: { it: Item; back: string }) {
   return (
     <li className="card app-row">
-      <div className="job-main">
-        <a className="job-title" href={`/applications/${a.public_ref}`}>{a.title}</a>
-        <div className="job-meta">{a.employer_canonical} · {STAGE_LABEL[a.stage as ApplicationStage]}</div>
-        <ApplyLine s={applying} />
-        {a.next_step ? <div className={due && dueText(due, today).late ? "warn" : "muted"}>{a.next_step}{due ? `, ${dueText(due, today).text}` : ""}</div> : null}
-      </div>
+      <StatusBlock j={it.j} appRef={it.a.public_ref} back={back} title={it.a.title} employer={it.a.employer_canonical}>
+        {it.signal && it.j.action?.kind !== "email" ? <EmailAttach s={it.signal} back={back} /> : null}
+      </StatusBlock>
     </li>
   );
 }
 
-/** Applications (design 5.6): every job you're tracking, grouped by where it is. */
+/**
+ * Applications (Tracker UI Redesign v1, section 6): what needs you first, then every application by stage,
+ * each with one status block. Closed stays folded at the bottom.
+ */
 export default async function ApplicationsPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
-  const [{ error, params }, rows, sum, signals] = await Promise.all([flashOf(props), listApplications(pool, session), trackerSummary(pool, session), listEmailSignals(pool, session)]);
-  const applying = await applyStatuses(pool, session);
+  const [{ error, params }, rows, sum, signals, facts, runs] = await Promise.all([flashOf(props), listApplications(pool, session), trackerSummary(pool, session),
+    listEmailSignals(pool, session), journeyFacts(pool, session), applyStatuses(pool, session)]);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: sum.timeZone }).format(new Date());
-  const closed = rows.filter((r) => CLOSED.includes(r.stage));
+  const ctx = { today, timeZone: sum.timeZone };
+  // The oldest suggestion still waiting, per application: it attaches to that application's row.
+  const signalFor = new Map<string, Signal>();
+  for (const s of [...signals].reverse()) if (!signalFor.has(s.appRef)) signalFor.set(s.appRef, s);
+  const items: Item[] = rows.map((a) => ({ a, signal: signalFor.get(a.public_ref), j: journeyFor(a, facts[a.public_ref], ctx, { run: runs[a.public_ref] as RunLine | undefined, signal: signalFor.get(a.public_ref) }) }));
+
+  const filter = JOURNEY_STAGES.includes(params.stage as JourneyStage) ? (params.stage as JourneyStage) : null;
+  const back = filter ? `/applications?stage=${filter}` : "/applications";
+  const counts = stageCounts(items.map((x) => x.j));
+  const needsYou = whoNeedsYou(items);
+  const shown = JOURNEY_STAGES.filter((s) => s !== "closed" && (!filter || filter === s));
+  const closed = items.filter((x) => x.j.stage === "closed");
+
   return (
     <>
       <TopBar signedIn />
       <h1>Applications</h1>
       <Flash error={error} />
       {params.moved === "1" ? <p className="status" role="status">Moved. You can change it any time.</p> : null}
+      {params.dismissed === "1" ? <p className="status" role="status">Noted. That email suggestion is gone.</p> : null}
+      {params.applying === "1" ? <p className="status" role="status">On it. TC Hunter is opening the employer&apos;s form now.</p> : null}
       <BudgetLine budget={sum.budget} />
-      <EmailSuggestions rows={signals} back="/applications" timeZone={sum.timeZone} />
-      {sum.followUpsDue.length ? (
-        <section className="card" aria-label="Follow-ups due">
-          <h2>Due now</h2>
-          <ul className="plain">
-            {sum.followUpsDue.map((f: { public_ref: string; next_step: string; title: string; employer_canonical: string }) => (
-              <li key={f.public_ref}><a href={`/applications/${f.public_ref}`}>{f.next_step}: {f.title} at {f.employer_canonical}</a></li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+
       {rows.length === 0 ? (
         <p className="muted empty">Nothing tracked yet. Open a job you like and choose <strong>Track this job</strong>, or prepare a resume for it. <a href="/jobs">See jobs</a></p>
-      ) : null}
-      {GROUPS.map((g) => {
-        const list = rows.filter((r) => g.stages.includes(r.stage));
-        return list.length ? (
-          <section key={g.title}>
-            <h2>{g.title} <span className="count muted">{list.length}</span></h2>
-            <ul className="plain job-list">{list.map((a) => <Row key={a.id} a={a} today={today} applying={applying[a.public_ref]} />)}</ul>
+      ) : (
+        <>
+          <section className="card needs-you" aria-label="Needs you">
+            <h2>Needs you {needsYou.length ? <span className="count muted">{needsYou.length}</span> : null}</h2>
+            {needsYou.length ? (
+              <ul className="plain job-list">{needsYou.map((x) => <li key={x.a.id} className="needs-row"><StatusBlock j={x.j} appRef={x.a.public_ref} back={back} title={x.a.title} employer={x.a.employer_canonical}>
+                {x.signal && x.j.action?.kind !== "email" ? <EmailAttach s={x.signal} back={back} /> : null}
+              </StatusBlock></li>)}</ul>
+            ) : <p className="muted">Nothing needs you right now.</p>}
           </section>
-        ) : null;
-      })}
-      {closed.length ? (
-        <Details summary={`Closed (${closed.length})`}>
-          <ul className="plain job-list">{closed.map((a) => <Row key={a.id} a={a} today={today} applying={applying[a.public_ref]} />)}</ul>
-        </Details>
-      ) : null}
+
+          <PipelineStrip counts={counts} active={filter} />
+          {filter ? <p className="small muted">Showing {JOURNEY_LABEL[filter]} only. <a href="/applications">Show all</a></p> : null}
+
+          {shown.map((s) => {
+            const list = items.filter((x) => x.j.stage === s);
+            return list.length ? (
+              <section key={s} id={`stage-${s}`}>
+                <h2>{JOURNEY_LABEL[s]} <span className="count muted">{list.length}</span></h2>
+                <ul className="plain job-list">{list.map((x) => <Row key={x.a.id} it={x} back={back} />)}</ul>
+              </section>
+            ) : filter === s ? <p key={s} className="muted">Nothing at {JOURNEY_LABEL[s]} right now.</p> : null;
+          })}
+
+          {closed.length && (!filter || filter === "closed") ? (
+            <Details summary={`Closed (${closed.length})`} open={filter === "closed"}>
+              <ul className="plain job-list">{closed.map((x) => <Row key={x.a.id} it={x} back={back} />)}</ul>
+            </Details>
+          ) : filter === "closed" ? <p className="muted">Nothing closed yet.</p> : null}
+        </>
+      )}
       <p><a href="/reports">See your reports</a> · <a href="/reports/weekly">Weekly look back</a></p>
     </>
   );
