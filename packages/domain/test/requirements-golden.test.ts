@@ -10,7 +10,7 @@ import { ClaudeRequirementsReader, readRequirementsText, scoreRequirements, summ
 const { postings } = JSON.parse(readFileSync(new URL("../../../fixtures/req-golden/postings.json", import.meta.url), "utf8")) as { postings: GoldenPosting[] };
 
 describe("requirements golden set", () => {
-  it("has 5 postings, and every expected requirement is named in its posting", () => {
+  it("has 5 postings (4 verbatim, 1 composite), and every expected requirement is named in its posting", () => {
     expect(postings.length).toBe(5);
     for (const p of postings) {
       const text = p.text.toLowerCase().replace(/-/g, " ");

@@ -3,3 +3,4 @@ export * from "./checker";
 export * from "./build";
 export * from "./render";
 export * from "./proposers";
+export * from "./genEval";

@@ -1,0 +1,214 @@
+{
+ "_about": "Generation golden set (Yong, 2026-11-18): letters, the About and essays for 4 verbatim scanned postings (same texts as fixtures/req-golden) with the fixture profile in profile.json. Requirements are the golden labels. g1 is a close fit, g2 partial, g3 and g4 are poor fits (gaps must stay gaps). Scored by the rubric in packages/domain/src/tailor/genEval.ts; run on the server with TC_EVAL_GEN=1.",
+ "cases": [
+  {
+   "key": "g1-premier",
+   "source": "Verbatim scanned posting J-001492, Premier Healthcare Solutions (premierinc.wd1.myworkdayjobs.com, R0008539), read 2026-11-18. Text kept from the start through the salary paragraph; benefits, awards and EEO boilerplate after it omitted.",
+   "posting": {
+    "title": "Vice President Management Services",
+    "employer": "Premier",
+    "text": "Vice President Management Services\n\nWhat you will be doing:\n\nThe VP of Management Services (also known as VP of Supply Chain Management externally at the member hospital) will be part of the team within Premier that is leading our clients supply chain departments and or supply chain transformation efforts. The VP will be responsible for projects transforming a hospital’s supply chain or the daily operations of one or more of our clients Supply Chain’s or other operational departments. These engagements can be interim or long term but are typically higher in volume and/or complexity than most other engagements. They will also be responsible for identifying and standardizing best practices among all our clients, as well developing, and maximizing shared services to create efficiencies amongst our clients. The VP should be an experienced leader who can develop and implement strategic initiatives for our members and for the Premier teams they lead to improve member partnerships and business operations.\n\nThe Vice President is also responsible for:\n\n-\nProvide overall operational and strategic leadership for Hospital’s Supply Chain\n\n-\nProvide day-to-date oversight and manage Hospital supply chain operations that would include inventory management, purchasing, strategic sourcing (supplies, purchase services, capital, and pharmacy), value analysis, regulatory & compliance, process improvements, and performance management.\n\n-\nImplementing best practice and maximizing technology\n\n-\nDevelop and socialize supply chain financial and operational dashboard\n\n-\nEstablish goals and metrics\n\n-\nDevelop and foster strong relationships with client at the C-Suite level.\n\n-\nDevelop and implement consulting strategy consistent with the goals of clients\n\n-\nDevelop and implement client goals, objectives, performance standards and priorities.\n\n-\nLead, mentor, and develop staff\n\n-\nBuild engagement with Executive, Physician, clinical and Business leaders\n\n-\nProvide supply chain project support for strategic and operational projects that impact supply chain\n\n-\nDevelop standard workflow and process to support organizational business requirements\n\n-\nRun operations for acute and non acute entities including distribution, Sourcing, Digital print center, Courier, Contracting and Analytics\n\n-\nDevelop and manage to supply chain budget for Hospital\n\n-\nDevelop cost savings strategies and targets and drive savings\n\n-\nEmergency Preparedness planning and Pandemic inventory\n\n-\nPerform supply chain related activities as may be reasonably requested by the Engagement Manager or the Executive Sponsor\n\nKey Responsibilities\n\nResponsibility #1 – 80%\n\nProvide overall operational and strategic leadership for Hospital’s Supply Chain\n\nResponsibility #2 – 15%\n\nIdentifying and standardizing best practices among all our clients, as well as developing and maximizing shared services to create efficiencies among our clients\n\nResponsibility #3 – 5%\n\nAdministrative functions\n\n​Required Qualifications\n\nWork Experience:\nYears of Applicable Experience - 12 or more years\nEducation:\nBachelors (Required)\n\nPreferred Qualifications\n\nSkills:\n\n-\nDemonstrated Supply Chain transformation experience\n\n-\nConsulting Experience\n\n-\nProgressive leadership within Supply Chain or Hospital Operations\n\nExperience:\n\n-\nKnowledge of healthcare supply chain management principals and concepts in the areas of procurement, receiving, distribution, replenishment, value analysis, materials management systems and equipment management.\n\n-\nExtensive leadership experience; developing and implementing short- and long-term strategy and leading teams.\n\n-\nProject and change Management\n\n-\nTechnical skills that include Microsoft Office (Word, Excel, PowerPoint, and Outlook) and current healthcare supply chain information systems.\n\nEducation:\n\n-\nMasters\n\nAdditional Job Requirements:\n\n-\nRemain in a stationary position for prolonged periods of time\n\n-\nBe adaptive and change priorities quickly; meet deadlines\n\n-\nAttention to detail\n\n-\nOperate computer programs and software\n\n-\nAbility to communicate effectively with audiences in person and in electronic formats .\n\n-\nDay-to-day contact with others (co-workers and/or the public)\n\n-\nMaking independent decisions\n\n-\nAbility to work in a collaborative business environment in close quarters with peers and varying interruptions\n\nWorking Conditions: Remote\n\nTravel Requirements: Travel 81-100% within the US\n\nPhysical Demands: Sedentary: Exerting up to 10 pounds of force occasionally, and/or a negligible amount of force frequently or constantly to lift, carry, push, pull or otherwise move objects, including the human body. Sedentary work involves remaining stationary most of the time. Jobs are sedentary if movement is required only occasionally, and all other sedentary criteria are met.\n\nPremier’s compensation philosophy is to ensure that compensation is reasonable, equitable, and competitive in order to attract and retain talented and highly skilled employees. Premier’s internal salary range for this role is $205,000 - $380,000. Final salary is dependent upon several market factors including, but not limited to, departmental budgets, internal equity, education, unique skills/experience, and geographic location. Premier utilizes a wide-range salary structure to allow base salary flexibility within our ranges.",
+    "requirements": {
+     "must_have": [
+      "attention to detail",
+      "communicate"
+     ],
+     "nice_to_have": [
+      "supply chain transformation",
+      "consulting",
+      "leadership",
+      "procurement",
+      "receiving",
+      "distribution",
+      "replenishment",
+      "value analysis",
+      "materials management",
+      "equipment management",
+      "change management",
+      "project",
+      "Word",
+      "Excel",
+      "PowerPoint",
+      "Outlook",
+      "supply chain information systems",
+      "masters"
+     ],
+     "years": 12,
+     "education": "Bachelor",
+     "authorisation": null,
+     "confidence": "high"
+    }
+   },
+   "essays": [
+    {
+     "key": "time",
+     "label": "Describe a time you led a significant process improvement and what it achieved. (1,000 characters max)",
+     "maxChars": 1000
+    },
+    {
+     "key": "why",
+     "label": "Why are you interested in this role?",
+     "maxChars": 2000
+    }
+   ]
+  },
+  {
+   "key": "g2-epicor",
+   "source": "Verbatim scanned posting J-001317, Epicor (epicorsoftware.wd5.myworkdayjobs.com, JR105873), read 2026-11-18. Text kept from the start through Qualifications; company, benefits, EEO and recruiter lines after it omitted.",
+   "posting": {
+    "title": "Professional Services Consultant, Principal",
+    "employer": "Epicor",
+    "text": "As a Professional Services Consultant, Principal you will lead consulting engagements and assume responsibility for performing implementation tasks and producing quality deliverables. You will also drive implementation deliverables and assist the Project Manager to organize and control tasks within the work plan. As a principal you will take a leadership position on project teams, engagements, and respective consulting practices.\n\nYou will work with clients in an independent basis for engagements with little\n\nsupervision.\n\nWhat you will be doing\n\n- Provide guidance to the PS team through proactive training, sharing knowledge, and communicating best practices.\n- Interact with members of cross-functional teams\n- Coordinate all aspects of a project for a client\n- Responsible for overall delivery of schedule, budget deliverables\n- Determine direction, timelines, schedules and activities for an area of the project\n- Establish solid working relationships through the management level.\n- Possess accurate estimating skills for various project tasks\n- Ensure all deliverables in area of responsibility is delivered on time and on budget.\n- Provide guidance to other Professional Services Consultants and clients\n- Focus on managing complex programs / projects\n- Develop best practices and associated documentation\n- Available to speak at conferences or events\n\nWhat you will likely bring\n\n- Meet utilization targets and completes project deliverables on time\n- Project management skills and strong technical background are required\n- Ability to perform work plans, identify resource requirements, establish priorities for available resources and monitor the performance of project tasks\n- Customer centric, results oriented, self-starter and able to work independently.\n- Strong listening, verbal and written communication skills, including virtual presentations.\n- Expertise in all applicable modules of the software\n- Breadth of knowledge across industry verticals\n- Ability to travel up to 100%\n\nQualifications\n\n- 8+ years applicable manufacturing , supply chain , and/or manufacturing accounting experience, and/or demonstrated success/knowledge\n- 10+ years of consulting experience\n- Bachelor’s degree preferred (or equivalent experience)",
+    "requirements": {
+     "must_have": [
+      "project management",
+      "technical background",
+      "work plans",
+      "customer centric",
+      "listening",
+      "verbal",
+      "written",
+      "presentations",
+      "modules",
+      "industry verticals",
+      "travel",
+      "manufacturing",
+      "supply chain",
+      "manufacturing accounting",
+      "consulting"
+     ],
+     "nice_to_have": [
+      "bachelor"
+     ],
+     "years": 8,
+     "education": null,
+     "authorisation": null,
+     "confidence": "high"
+    }
+   },
+   "essays": [
+    {
+     "key": "about",
+     "label": "Tell us about yourself and your background.",
+     "maxChars": 1500
+    }
+   ]
+  },
+  {
+   "key": "g3-bandwidth",
+   "source": "Verbatim scanned posting J-000022, Bandwidth (job-boards.greenhouse.io/bandwidth/jobs/8372869), read 2026-11-18. Text kept from the start through Bonus Points; benefits boilerplate after it omitted.",
+   "posting": {
+    "title": "Vice President, Channel & Strategic Alliances",
+    "employer": "Bandwidth",
+    "text": "Who We Are:\n\nAt Bandwidth , we shape how the world connects. We're the global communications software company and Tier 1 network operator with global reach. The voice, messaging, and emergency services infrastructure behind the brands and apps you use every day.\n\nBecause we own the network we build on, the problems you'll solve here are bigger, more complex, and more impactful. And as communications shifts to AI, we're the infrastructure layer making it possible.\n\nWe call ourselves BANDmates because building something this big takes collaboration, different perspectives, and the freedom to bring your authentic self to the table.\n\nWe're experts who speak like humans. Ready to build what's next? #JoinTheBand\n\nWhat We Are Looking For:\n\nOur partners put Bandwidth in front of customers we can't reach alone. As our VP of US channel and strategic alliances, you will decide how we grow through them.\n\nYou will lead the team that recruits, activates, and grows channel partners. You will also build sell-with alliances with companies like Salesforce, creating joint opportunities and repeatable revenue for both sides. You will own the pipeline and revenue that result, and you will have the executive support to build it right.\n\nWhat You'll Do:\n\n- Set the US channel and alliances strategy. Decide which partner segments and markets to pursue, how to cover them, and where to invest.\n\n- Build and lead the team. Coach your managers and partner leads to recruit, activate, and grow partners with clear goals and accountability.\n\n- Own the partner lifecycle. Run recruitment, registration, contracting, onboarding, enablement, and activation, and cut the time it takes a partner to reach a first deal.\n\n- Grow partner productivity. Review your partner base, focus on the partners with the most revenue potential, and set business plans that raise revenue per partner.\n\n- Build strategic alliances. Develop executive relationships and reciprocal sell-with motions with Salesforce and other technology, platform, and services leaders. Turn them into joint go-to-market plans, account mapping, and pipeline programs that run in the daily work of both sales teams.\n\n- Drive pipeline and revenue. Own partner-sourced and partner-influenced pipeline targets, forecasting, and reporting. Tie every program and investment to a commercial outcome.\n\n- Work across Bandwidth. Partner with direct sales, Product, Marketing, Customer Success, Finance, Legal, and Sales Operations. Set clear rules of engagement and deal registration to keep channel conflict low.\n\nWhat You Need:\n\nEducation:\n\n- Bachelor’s degree with business concentration\n\nExperience:\n\n- 15+ years leading channel, partner sales, strategic alliances, or indirect sales, with direct responsibility for revenue.\n\n- A record of building and leading high-performing partner organizations.\n\n- Experience scaling enterprise technology alliances, including co-selling and sell-with partnerships.\n\n- Experience in a complex B2B technology business with several routes to market.\n\nKnowledge:\n\n- Deep knowledge of the full partner lifecycle, from recruitment to revenue growth.\n\n- Command of partner economics, compensation models, incentives, and program structure.\n\n- Experience managing pipeline, forecasting, and revenue accountability for partner-sourced and partner-influenced business.\n\n- SI Proficiency: You don't just use SI — you build with it. You've created automations, workflows, or tools that others on your team rely on, combining SI with existing systems and data to solve real business problems. You design responsible use from day one.\n\nSkills:\n\n- Strong executive presence, negotiation skills, and a habit of working across sales, marketing, product, finance, and legal.\n\n- Ability to maintain a deep understanding of the sales pipeline, trends and potential risk.\n\n- Strong problem-solving and collaboration skills.\n\n- Ability to influence thinking or gain acceptance of others in sensitive situations\n\n- Ability to lead sales team in all areas of the sales cycle\n\n- Strong quantitative, analytical, and conflict resolution ability\n\nBonus Points:\n\nEducation:\n\n- MBA\n\nExperience:\n\n- Background in CPaaS, cloud communications, SaaS, or telecommunications.\n\n- Established relationships with technology ecosystem partners, systems integrators, or enterprise services firms.\n\n- A history of turning a channel organization into a predictable revenue contributor.\n\nKnowledge:\n\n- Direct partnership experience with Salesforce or a comparable platform.",
+    "requirements": {
+     "must_have": [
+      "channel",
+      "partner sales",
+      "strategic alliances",
+      "indirect sales",
+      "partner organizations",
+      "technology alliances",
+      "co-selling",
+      "sell-with",
+      "B2B",
+      "partner lifecycle",
+      "partner economics",
+      "compensation models",
+      "incentives",
+      "program structure",
+      "pipeline",
+      "forecasting",
+      "SI",
+      "executive presence",
+      "negotiation",
+      "problem-solving",
+      "collaboration",
+      "influence",
+      "sales cycle",
+      "quantitative",
+      "analytical",
+      "conflict resolution"
+     ],
+     "nice_to_have": [
+      "MBA",
+      "CPaaS",
+      "cloud communications",
+      "SaaS",
+      "telecommunications",
+      "ecosystem",
+      "systems integrators",
+      "enterprise services",
+      "channel organization",
+      "Salesforce"
+     ],
+     "years": 15,
+     "education": "Bachelor",
+     "authorisation": null,
+     "confidence": "high"
+    }
+   },
+   "essays": [
+    {
+     "key": "time-gap",
+     "label": "Describe a time you built or grew a channel partner program from the ground up.",
+     "expectEmpty": true
+    }
+   ]
+  },
+  {
+   "key": "g4-hitachi",
+   "source": "Verbatim scanned posting J-001790, Hitachi Solutions (jobs.smartrecruiters.com/HitachiSolutions/744000160641738), read 2026-11-18. Text kept from the start through the right-to-work line; consent and scam-warning boilerplate after it omitted.",
+   "posting": {
+    "title": "Finance & Operations Solution Lead",
+    "employer": "Hitachi Solutions",
+    "text": "Job Description\nWe’re looking for an experienced Finance & Operations Solution Lead to join our Lifetime Services team, supporting clients using Microsoft Dynamics 365 Finance & Operations in live, business-critical environments.\n\nThis is a hands-on role combining functional consulting with the day-to-day coordination and functional leadership of a small team of consultants. You’ll manage the flow of tickets and tasks, help unblock complex issues and maintain quality, while continuing to work directly on client cases, enhancements, service requests and advisory work. This role does not have formal line-management responsibility.\n\nYou’ll work closely with Service Delivery Managers and colleagues across Lifetime Services. The focus is on post-go-live support, service improvement and long-term client success rather than greenfield implementation or day-to-day project delivery.\n\nWhat you’ll be doing\n\n- Coordinate the day-to-day workload of a small team of Finance & Operations functional consultants, ensuring tickets and tasks are prioritised, allocated and progressed.\n- Take ownership of complex support cases, service requests, enhancements and advisory work across multiple client accounts.\n- Investigate complex functional issues, identify root causes and involve relevant technical or functional specialists when needed.\n- Monitor client backlogs and outstanding cases, working with consultants and Service Delivery Managers to address priorities, risks, capacity and ageing items.\n- Build trusted client relationships and provide clear updates on progress, risks, decisions and next steps.\n- Lead or support solution reviews, workshops and roadmap discussions, helping clients respond to Microsoft releases, product changes and improvement opportunities.\n- Design and review complex Finance & Operations solutions and supporting documentation, including functional specifications, impact assessments, estimates and test plans.\n- Guide functional consultants by unblocking issues, reviewing work and sharing functional expertise and recommended practice.\n- Contribute to resource planning, utilisation and forecasting, and provide Finance & Operations expertise for Work Orders, bids and pre-sales activity where required.\n\nQualifications\nWhat we’re looking for\n\n- Strong hands-on functional consulting experience in Microsoft Dynamics 365 Finance & Operations, with the confidence to guide clients and consultants through complex issues.\n- A minimum of five years’ full-cycle Microsoft Dynamics 365 Finance & Operations implementation experience, including solution decisions, testing, go-live and transition into live support.\n- Good knowledge of end-to-end Finance & Operations business processes, with functional expertise across relevant areas such as Finance, Supply Chain Management, Manufacturing, Project Management and Accounting, Asset Management or Human Resources.\n- Experience supporting Microsoft Dynamics 365 Finance & Operations in live, business-critical environments and resolving complex functional issues.\n- Experience coordinating functional consultants, including allocating work, providing guidance and reviewing deliverables.\n- Experience producing or reviewing solution designs, functional specifications, estimates and test plans.\n- Strong organisation and prioritisation skills, with the ability to balance competing client needs across multiple accounts.\n- Excellent communication and stakeholder-management skills, with a client-focused, accountable and commercially aware approach.\n\nDesirable skills & experience\n\n- Relevant Microsoft Dynamics 365 Finance & Operations certifications.\n- Experience contributing to client roadmaps, Work Orders, bids or pre-sales activity.\n- Experience supporting public-sector clients.\n- Experience working with Microsoft product releases, One Version updates and deprecations.\n\nSecurity Clearance\n\nAll applicants must either hold active Security Clearance or be eligible to obtain Security Clearance.\n\nAdditional Information\nWhat to expect, your benefits\n\nAlongside a competitive salary and annual bonus, we offer a comprehensive benefits package including pension, private medical insurance, life assurance and income protection.\n\nYou’ll also have annual leave with the option to buy and sell leave, paid volunteering days and the opportunity to work from abroad for up to 10 working days each year, subject to approval. We’re committed to your continued development, and you’ll have a dedicated Career Development Mentor to support your growth and career at Hitachi Solutions.\n\nThis is a home-based role, with occasional travel to Hitachi Solutions or client offices. Where business travel is required as part of your role, eligible travel expenses will be covered in line with company policy.\n\nOur commitment to inclusion\n\nWe want everyone to feel able to be themselves and do their best work at Hitachi Solutions Europe. We welcome applications from people with different backgrounds, experiences and perspectives.\n\nIf you need a reasonable adjustment during the recruitment process, please let our recruitment team know so that we can support you.\n\nAdditional information\n\nApplicants must have the right to work in the UK. We are unable to offer visa sponsorship for this role.",
+    "requirements": {
+     "must_have": [
+      "Dynamics 365",
+      "functional consulting",
+      "implementation",
+      "business processes",
+      "Supply Chain Management",
+      "Manufacturing",
+      "Project Management and Accounting",
+      "Asset Management",
+      "Human Resources",
+      "coordinating functional consultants",
+      "solution designs",
+      "functional specifications",
+      "estimates",
+      "test plans",
+      "organisation",
+      "prioritisation",
+      "communication",
+      "stakeholder",
+      "Security Clearance"
+     ],
+     "nice_to_have": [
+      "certifications",
+      "roadmaps",
+      "Work Orders",
+      "bids",
+      "pre-sales",
+      "public-sector",
+      "product releases",
+      "One Version",
+      "deprecations"
+     ],
+     "years": 5,
+     "education": null,
+     "authorisation": "right to work in the UK",
+     "confidence": "high"
+    }
+   },
+   "essays": [
+    {
+     "key": "time-short",
+     "label": "Give an example of a time you improved how a team worked. (500 characters max)",
+     "maxChars": 500
+    }
+   ]
+  }
+ ]
+}

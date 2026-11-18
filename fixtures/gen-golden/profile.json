@@ -1,0 +1,189 @@
+{
+ "_about": "Generation golden-set profile: the F9 fixture applicant (fictional) as the tailoring writers see it, plus an About written from those same facts. Bullet numbers are kept in the text (metricValue null) so the checker compares them as written.",
+ "about": {
+  "id": "applicant-f9",
+  "text": "Healthcare operations leader with more than 15 years of experience running service centers, improving patient access and controlling cost. Certified Lean Six Sigma Black Belt who has led a team of 45 across 3 regional service centers and managed a $12M annual operating budget.",
+  "careerYears": 16,
+  "since": "2010"
+ },
+ "experience": [
+  {
+   "id": "w1",
+   "employer": "Northwind Health",
+   "title": "Director of Operations",
+   "location": "Charlotte, NC",
+   "start": "2019-03-01",
+   "end": null,
+   "type": "full_time",
+   "verified": true,
+   "bullets": [
+    {
+     "id": "b1",
+     "itemId": "w1",
+     "text": "Led a team of 45 across 3 regional service centers",
+     "metricValue": null,
+     "metricUnit": null,
+     "verified": true
+    },
+    {
+     "id": "b2",
+     "itemId": "w1",
+     "text": "Cut patient intake processing time by 30% with a Lean redesign",
+     "metricValue": null,
+     "metricUnit": null,
+     "verified": true
+    },
+    {
+     "id": "b3",
+     "itemId": "w1",
+     "text": "Managed a $12M annual operating budget",
+     "metricValue": null,
+     "metricUnit": null,
+     "verified": true
+    }
+   ]
+  },
+  {
+   "id": "w2",
+   "employer": "Contoso Hospital Group",
+   "title": "Senior Manager, Process Improvement",
+   "location": "Raleigh, NC",
+   "start": "2014-06-01",
+   "end": "2019-02-28",
+   "type": "full_time",
+   "verified": true,
+   "bullets": [
+    {
+     "id": "b4",
+     "itemId": "w2",
+     "text": "Ran 20+ Lean Six Sigma projects saving $4.5M",
+     "metricValue": null,
+     "metricUnit": null,
+     "verified": true
+    },
+    {
+     "id": "b5",
+     "itemId": "w2",
+     "text": "Implemented Epic scheduling across 6 clinics",
+     "metricValue": null,
+     "metricUnit": null,
+     "verified": true
+    }
+   ]
+  },
+  {
+   "id": "w3",
+   "employer": "Fabrikam Insurance",
+   "title": "Operations Analyst",
+   "location": "Charlotte, NC",
+   "start": "2010-07-01",
+   "end": "2014-05-31",
+   "type": "full_time",
+   "verified": true,
+   "bullets": [
+    {
+     "id": "b6",
+     "itemId": "w3",
+     "text": "Built SQL and Tableau dashboards for claims leadership",
+     "metricValue": null,
+     "metricUnit": null,
+     "verified": true
+    }
+   ]
+  }
+ ],
+ "education": [
+  {
+   "id": "e1",
+   "institution": "University of North Carolina",
+   "degree": "Bachelor of Science",
+   "field": "Economics",
+   "start": "2006-08-15",
+   "end": "2010-05-10",
+   "honours": null,
+   "verified": true
+  },
+  {
+   "id": "e2",
+   "institution": "Duke University",
+   "degree": "MBA",
+   "field": "Healthcare Management",
+   "start": "2012-08-20",
+   "end": "2014-05-12",
+   "honours": null,
+   "verified": true
+  }
+ ],
+ "credentials": [
+  {
+   "id": "c1",
+   "name": "Lean Six Sigma Black Belt",
+   "kind": "certification",
+   "issuer": "ASQ",
+   "issuedOn": "2016-04-01",
+   "verified": true
+  }
+ ],
+ "skills": [
+  {
+   "id": "k1",
+   "name": "Lean Six Sigma",
+   "aliases": [],
+   "proficiency": "expert",
+   "verified": true,
+   "evidenceIds": []
+  },
+  {
+   "id": "k2",
+   "name": "SQL",
+   "aliases": [],
+   "proficiency": "working",
+   "verified": true,
+   "evidenceIds": []
+  },
+  {
+   "id": "k3",
+   "name": "Tableau",
+   "aliases": [],
+   "proficiency": "strong",
+   "verified": true,
+   "evidenceIds": []
+  },
+  {
+   "id": "k4",
+   "name": "Epic",
+   "aliases": [],
+   "proficiency": "working",
+   "verified": true,
+   "evidenceIds": []
+  },
+  {
+   "id": "k5",
+   "name": "Spanish",
+   "aliases": [],
+   "proficiency": "working",
+   "verified": true,
+   "evidenceIds": []
+  },
+  {
+   "id": "k6",
+   "name": "Budgeting",
+   "aliases": [],
+   "proficiency": "strong",
+   "verified": true,
+   "evidenceIds": []
+  }
+ ],
+ "answers": [],
+ "stories": [
+  {
+   "id": "st1",
+   "title": "Intake redesign",
+   "text": "Patient intake at our three service centers was slow and inconsistent. I was asked to fix it within two quarters. I mapped the process with front-line staff, removed duplicate data entry and set up daily huddles. Intake processing time fell by 30% and staff overtime dropped.",
+   "linkedFactIds": [
+    "b2"
+   ],
+   "approved": true
+  }
+ ]
+}
