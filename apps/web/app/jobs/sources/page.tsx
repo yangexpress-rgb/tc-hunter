@@ -112,7 +112,9 @@ export default async function SourcesPage(props: PageProps) {
   const fKind = KINDS.includes(params.kind ?? "") ? params.kind! : "";
   const fStatus = STATUSES.includes(params.status ?? "") ? params.status! : "";
   const fQ = (params.q ?? "").slice(0, 60);
-  const COLS = [["name", "Source"], ["detail", "Description"], ["kind", "Kind"], ["status", "Status"], ["last", "Last searched"], ["jobs", "Open jobs"], ["reason", "Reason"]] as const;
+  // Order (Yong, 2026-11-17): name, then how it went and Search again on the left; the rest after.
+  const COLS = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["last", "Last searched"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"]] as const;
+  const HEAD: [string, string][] = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["last", "Last searched"], ["again", "Search again"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"], ["remove", "Don't use"]];
   const BACK = "/jobs/sources#status";
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "name") as (typeof COLS)[number][0];
   const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "last" ? "desc" : "asc";
@@ -163,7 +165,8 @@ export default async function SourcesPage(props: PageProps) {
         <div className="table-wrap">
           <table className="report jobs-matrix compact-rows">
             <thead><tr>
-              {COLS.map(([k, label]) => {
+              {HEAD.map(([k, label]) => {
+                if (!COLS.some(([c]) => c === k)) return <th key={k} scope="col">{label}</th>;
                 const on = sortBy === k;
                 const next = on ? (dir === "asc" ? "desc" : "asc") : k === "jobs" || k === "last" ? "desc" : "asc";
                 return <th key={k} scope="col" className={k === "jobs" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
@@ -173,31 +176,30 @@ export default async function SourcesPage(props: PageProps) {
             <tbody>
               {shown.map((r) => (
                 <tr key={r.key}>
-                  {/* One line a row (Yong, 2026-11-17): the buttons sit beside the name, seen without scrolling. */}
-                  <td><div className="one-line-row"><strong>{r.name}</strong>
-                    {r.again ? (
-                      <form action={searchSourceAction}>
-                        <input type="hidden" name="id" value={r.again} /><input type="hidden" name="back" value={BACK} />
-                        <button className="small" title={`Search ${r.name} again now, without searching every other source`}>Search again</button>
-                      </form>) : null}
-                    {r.action ? (
-                      <form action={unfollowSourceAction}>
-                        <input type="hidden" name="id" value={r.action.id} /><input type="hidden" name="back" value={BACK} />
-                        <button className="small secondary">{r.action.label}</button>
-                      </form>) : null}
-                  </div></td>
+                  <td><strong>{r.name}</strong></td>
+                  <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
+                  <td className="num">{r.jobs}</td>
+                  <td>{r.last ? ago(r.last) : "Never"}</td>
+                  {/* Each button in its own column (Yong, 2026-11-17). */}
+                  <td>{r.again ? (
+                    <form action={searchSourceAction}>
+                      <input type="hidden" name="id" value={r.again} /><input type="hidden" name="back" value={BACK} />
+                      <button className="small" title={`Search ${r.name} again now, without searching every other source`}>Search again</button>
+                    </form>) : null}</td>
                   {/* One line to save space; press it to read the rest (Yong, 2026-11-17). */}
                   <td className="muted small">{r.detail ? <details className="more one-line"><summary title="Show all">{r.detail}</summary></details> : null}</td>
                   <td>{r.kind}</td>
-                  <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
-                  <td>{r.last ? ago(r.last) : "Never"}</td>
-                  <td className="num">{r.jobs}</td>
                   <td className={bad(r.status) ? "error small" : "muted small"}>{r.reason ? <details className="more one-line"><summary title="Show all">{r.reason}</summary>
                     {r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</details>
                     : r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</td>
+                  <td>{r.action ? (
+                    <form action={unfollowSourceAction}>
+                      <input type="hidden" name="id" value={r.action.id} /><input type="hidden" name="back" value={BACK} />
+                      <button className="small secondary">{r.action.label}</button>
+                    </form>) : null}</td>
                 </tr>
               ))}
-              {shown.length === 0 ? <tr><td colSpan={7} className="muted">No sources match these filters.</td></tr> : null}
+              {shown.length === 0 ? <tr><td colSpan={9} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>

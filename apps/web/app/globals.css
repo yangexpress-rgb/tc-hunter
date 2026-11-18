@@ -374,6 +374,5 @@ ol.steps > li > form.stack { margin-top: 10px; }
 table.compact-rows td, table.compact-rows th { white-space: nowrap; padding-top: 6px; padding-bottom: 6px; vertical-align: middle; }
 table.compact-rows details.one-line[open] > summary { white-space: normal; }
 table.compact-rows td:has(details.one-line[open]) { white-space: normal; }
-.one-line-row { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.one-line-row form { margin: 0; display: inline; }
-.one-line-row button.small { padding: 2px 8px; font-size: 13px; }
+table.compact-rows td form { margin: 0; display: inline; }
+table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
