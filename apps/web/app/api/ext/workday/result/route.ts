@@ -9,5 +9,5 @@ export async function POST(req: Request): Promise<Response> {
   return extCall(req, async (owner) => {
     const b = await bodyOf(req);
     return relayResult(app().pool, owner, { sourceId: String(b.sourceId ?? ""), listed: b.listed, checked: b.checked, details: b.details, error: b.error });
-  });
+  }, { desktop: true });
 }

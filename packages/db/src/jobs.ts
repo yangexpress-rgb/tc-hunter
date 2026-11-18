@@ -487,15 +487,16 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     await progress(`Reading ${s.name}`, done++, total, s.id);
     // A hiring system with no public feed we read (Yong's audit): not read, not a failure.
     if (s.health === "unreadable") return;
-    if (s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
-      notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
-      return;
-    }
-    // Read in the applicant's own browser (Yong, 2026-11-18: Workday shows our server a security check):
-    // a read from the last day stands in for fetching it from here.
+    // Read on the applicant's own Mac by TC Hunter for Mac (Yong, 2026-11-18: Workday shows our server
+    // a security check): a read from the last day stands in for fetching it from here, even when the
+    // server itself is turned away.
     const relayed = s.kind === "workday" ? await withApplicant(pool, ctx, async (c) => (await c.query(
       "SELECT read_at, listed, checked, postings FROM relayed_read WHERE job_source_id = $1 AND error IS NULL AND read_at > now() - make_interval(secs => $2)",
       [s.id, RELAY_FRESH_MS / 1000])).rows[0]) : null;
+    if (!relayed && s.health === "blocked" && s.last_checked_at && wall - new Date(s.last_checked_at).getTime() < 7 * 86_400_000) {
+      notes.push({ source: s.name, note: PLAIN_REFUSAL.refused! });
+      return;
+    }
     // A site that asked us to slow down is left alone, quietly, until the time it gave (Yong, 2026-11-17),
     // unless its own "Search again" was pressed.
     if (!relayed && s.retry_after_at && new Date(s.retry_after_at).getTime() > wall && !readAgain.has(s.id)) return;
@@ -871,6 +872,8 @@ export async function listSources(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
     `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.failures, s.retry_after_at, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
        (SELECT r.read_at FROM relayed_read r WHERE r.job_source_id = s.id AND r.error IS NULL) AS relayed_at,
+       (SELECT r.error FROM relayed_read r WHERE r.job_source_id = s.id) AS relayed_error,
+       (SELECT r.read_at FROM relayed_read r WHERE r.job_source_id = s.id) AS relayed_tried_at,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }

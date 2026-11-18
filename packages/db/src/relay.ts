@@ -4,11 +4,11 @@ import { withApplicant } from "./context";
 import { DomainError } from "./packets";
 import { asApplicant } from "./profile";
 import type { DeviceOwner } from "./assist";
-import { prefsForRelay, requestSourceScan } from "./jobs";
+import { prefsForRelay, requestSourceScan, scanStatus } from "./jobs";
 
 /**
- * Workday sites read in the applicant's own browser (Yong, 2026-11-18: Workday shows the Railway
- * server a security check). The extension asks which sites to read, reads their job lists on the
+ * Workday sites read on the applicant's own Mac (Yong, 2026-11-18: Workday shows the Railway
+ * server a security check). TC Hunter for Mac (desktop/) asks which sites to read, reads their job lists on the
  * site itself, asks which jobs to open, opens those, and hands them over. The next search of that
  * source uses what the browser read instead of fetching it from the server.
  */
@@ -28,8 +28,12 @@ async function workdaySource(c: pg.PoolClient, sourceId: string) {
   return s as { id: string; name: string; source_key: string };
 }
 
-/** The Workday sites this applicant follows, with the roles to search each for. */
+/**
+ * The Workday sites this applicant follows, with the roles to search each for, and when the next
+ * scheduled search runs (TC Hunter for Mac reads ahead of it).
+ */
 export async function relayTodo(pool: pg.Pool, owner: DeviceOwner) {
+  const nextSearchAt = (await scanStatus(pool, owner.session).catch(() => null))?.nextRunAt ?? null;
   return withApplicant(pool, asApplicant(owner.session), async (c) => {
     const rows = (await c.query(
       `SELECT s.id, s.name, s.source_key, r.read_at FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id
@@ -38,6 +42,7 @@ export async function relayTodo(pool: pg.Pool, owner: DeviceOwner) {
     const terms = (await targetsOf(c)).slice(0, 6);
     return {
       terms,
+      nextSearchAt,
       sources: rows.map((s) => {
         const w = workdayFromKey(s.source_key);
         return { id: s.id as string, name: s.name as string, page: `https://${w.host}/${w.site}`, api: workdayApi(w).replace(`https://${w.host}`, ""), readAt: s.read_at };

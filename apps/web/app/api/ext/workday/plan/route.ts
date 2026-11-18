@@ -9,5 +9,5 @@ export async function POST(req: Request): Promise<Response> {
   return extCall(req, async (owner) => {
     const b = await bodyOf(req);
     return relayPlan(app().pool, owner, String(b.sourceId ?? ""), b.jobs);
-  });
+  }, { desktop: true });
 }
