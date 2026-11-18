@@ -458,3 +458,9 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 .finish-yourself { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .finish-yourself h3 { margin: 0 0 6px; }
 .timeline li { padding: 6px 0; }
+/* "Your turn": the live view of the employer's page. */
+.live-view { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.live-screen { width: 100%; max-width: 900px; height: auto; border: 2px solid var(--border); border-radius: 6px; cursor: pointer; touch-action: manipulation; user-select: none; }
+.live-scroll { display: flex; gap: 8px; }
+.live-type { display: flex; flex-direction: column; gap: 4px; max-width: 900px; }
+.your-turn { border-left: 4px solid #a47a2c; padding-left: 12px; }

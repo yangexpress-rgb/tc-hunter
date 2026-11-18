@@ -35,18 +35,18 @@ export function ApplyPanel({ appRef, employer, initial, canApply }: { appRef: st
   const was = useRef(initial.status);
   useEffect(() => { setS(initial); was.current = initial.status; }, [initial]);
   useEffect(() => {
-    if (!LIVE.has(s.status)) return;
+    if (!LIVE.has(s.status) && s.status !== "handover") return;
     const id = setTimeout(async () => {
       try {
         const r = await fetch(`/api/apply-status?app=${encodeURIComponent(appRef)}`, { cache: "no-store" });
         if (r.ok && r.headers.get("content-type")?.includes("json")) {
           const next = (await r.json()) as ApplyStatus;
           setS(next);
-          if (LIVE.has(was.current) && !LIVE.has(next.status)) router.refresh();
+          if ((LIVE.has(was.current) || was.current === "handover") && next.status !== was.current && !LIVE.has(next.status)) router.refresh();
           was.current = next.status;
         }
       } catch { /* next tick */ }
-    }, 3000);
+    }, s.status === "handover" ? 10_000 : 3000);
     return () => clearTimeout(id);
   }, [s, appRef, router]);
 
@@ -74,6 +74,13 @@ export function ApplyPanel({ appRef, employer, initial, canApply }: { appRef: st
         </div>
       ) : null}
       {s.status === "sent" ? <p className="ok" role="status">{steps.at(-1)?.text ?? "Sent."}</p> : null}
+      {s.status === "handover" && s.handover ? (
+        <div className="your-turn" role="status">
+          <p><a className="button" href={`/applications/${appRef}/live`}>Your turn — finish this step</a></p>
+          <p className="status">{s.handover.what}</p>
+          <p className="muted small">This step is waiting until {s.handover.until}.{s.handover.remindedAt ? " It closes soon." : ""} TC Hunter holds their page, as it is, until then.</p>
+        </div>
+      ) : null}
       {s.status === "waiting" ? (
         <>
           {s.problem ? <p className="error" role="alert">{s.problem}</p> : <p className="status">{s.step}</p>}
@@ -87,10 +94,18 @@ export function ApplyPanel({ appRef, employer, initial, canApply }: { appRef: st
       {s.status === "failed" || s.status === "stopped" ? (
         <>
           {s.problem ? <p className="error" role="alert">{s.problem}</p> : <p className="status">{s.step}</p>}
-          {canApply ? <Button appRef={appRef} label="Try again" secondary /> : null}
+          <div className="inline-actions">
+            {s.finishYourself ? <a className="button" href={`/applications/${appRef}/finish`}>Finish it yourself</a> : null}
+            {canApply ? <Button appRef={appRef} label="Try again" secondary /> : null}
+          </div>
         </>
       ) : null}
-      {s.status === "unclear" ? <p className="error" role="alert">{s.problem}</p> : null}
+      {s.status === "unclear" ? (
+        <>
+          <p className="error" role="alert">{s.problem}</p>
+          <p><a className="button secondary" href={`/applications/${appRef}/finish`}>Finish it yourself</a> <span className="muted small">Their page, with your resume, cover letter and answers one tap away. Then tell TC Hunter below whether it went through.</span></p>
+        </>
+      ) : null}
 
       {steps.length ? (
         <details open={s.status === "running"}>

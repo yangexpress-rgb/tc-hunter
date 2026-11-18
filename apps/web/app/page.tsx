@@ -1,4 +1,4 @@
-import { coachCounts, getWeeklyReview, jobsSummary, listAlerts, listDocuments, listEmailSignals, trackerSummary } from "@tc-hunter/db";
+import { coachCounts, getWeeklyReview, jobsSummary, listAlerts, listDocuments, listEmailSignals, trackerSummary, waitingHandovers } from "@tc-hunter/db";
 import { evidenceCoach, t } from "@tc-hunter/domain";
 import { Details, NextAction } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -17,10 +17,15 @@ export default async function Home() {
   const [counts, jobs, alerts, docs, track, weekly] = await Promise.all([coachCounts(pool, session), jobsSummary(pool, session), listAlerts(pool, session), listDocuments(pool, session),
     trackerSummary(pool, session), getWeeklyReview(pool, session)]);
   const signals = await listEmailSignals(pool, session);
+  // "Your turn" (Yong, 2026-11-17): a step waiting on an employer's page comes first, so it never sits silently.
+  const turns = await waitingHandovers(pool, session);
+  const turn = turns[0];
   const due = track.followUpsDue[0] as { public_ref: string; next_step: string; title: string; employer_canonical: string } | undefined;
   const draftDoc = docs.find((d) => d.status === "draft");
   const nudges = evidenceCoach(counts);
-  const next = counts.experienceRows === 0
+  const next = turn
+    ? { title: `Your turn: finish a step on ${turn.employer}'s site`, note: `${turn.what} ${turn.remindedAt ? "It closes soon, at" : "It waits until"} ${turn.until}.${turns.length > 1 ? ` ${turns.length - 1} more waiting.` : ""}`, href: `/applications/${turn.appRef}/live` }
+    : counts.experienceRows === 0
     ? { title: t("home.next_action.profile"), note: t("home.next_action.profile_soon"), href: "/profile/import" }
     : counts.draftRows > 0 ? { title: t("home.next_action.review"), note: nudges.find((n) => n.key === "draft_rows")?.text, href: "/profile/review" }
     : !counts.hasPreferences ? { title: t("home.next_action.preferences"), href: "/profile/goals" }

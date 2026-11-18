@@ -241,10 +241,11 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
     return { stage: "submitted", status: `Sent${at ? ` on ${fmt(at)}` : ""}${conf ? `. Their confirmation number: ${conf}.` : ". Confirmation received."}`, owner: "employer", tone: "active", action: null };
   }
   // A live "Your turn" pause outranks everything else: it is happening now.
-  if (r?.status === "handover" && r.handover) {
+  if (r?.status === "handover") {
+    const what = (r.handover?.what ?? r.step ?? `${E}'s site needs a step only you can do`).replace(/^Your turn:\s*/, "");
     return {
-      stage: "applying", status: `Your turn: ${stripDot(lower(r.handover.what))}.`, owner: "applicant", tone: "yours",
-      note: r.handover.until ? `This step is waiting until ${r.handover.until}. Nothing will be sent again.` : undefined,
+      stage: "applying", status: `Your turn: ${stripDot(lower(what))}.`, owner: "applicant", tone: "yours",
+      note: r.handover?.until ? `This step is waiting until ${r.handover!.until}. Nothing will be sent again.` : undefined,
       action: { kind: "link", label: "Your turn — finish this step", href: `/applications/${i.ref}/live` },
     };
   }

@@ -80,6 +80,8 @@ export interface ApplyPage {
   enterSecurityCode?(code: string): Promise<boolean>;
   screenshot(): Promise<Uint8Array>;
   close(): Promise<void>;
+  /** The live view of this browser, for handing a step to the applicant ("Your turn"). Absent where the page can't be streamed. */
+  live?(): import("./handover").LiveView;
 }
 
 /** Workday's own steps: an account, then a form over several pages. */
@@ -179,7 +181,7 @@ export const APPLY_PROBLEM = {
   closed: "The employer's page says this job is closed or no longer exists.",
   unreachable: "TC Hunter couldn't open the employer's site. It may be down or blocking automated visits. Try again later, or apply there yourself.",
   noForm: "TC Hunter couldn't find the application form on the employer's page.",
-  humanCheck: "The employer's site asked TC Hunter to prove it's a person. It never gets past those checks, so this one is yours: apply on their site yourself.",
+  humanCheck: "The employer's site asked TC Hunter to prove it's a person. It never gets past those checks, so this one is yours: choose Finish it yourself to apply on their site with your resume, cover letter and answers one tap away.",
   formRejected: (errors: string[]) => `The employer's form didn't accept the answers${errors.length ? `: ${errors.slice(0, 3).join("; ")}` : ""}.`,
   noSubmit: "TC Hunter couldn't find the form's Submit button, so nothing was sent.",
 } as const;

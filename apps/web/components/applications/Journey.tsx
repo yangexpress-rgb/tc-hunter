@@ -23,7 +23,7 @@ export interface AppFacts {
   outcome_tag?: string | null; closed_at?: Date | null; next_step?: string | null; next_step_due?: Date | string | null; interview_at?: Date | null;
 }
 /** One line per application from the apply runs, with the live handover fields when there are any. */
-export type RunLine = { status: string; step: string | null; problem: string | null; what?: string | null; until?: string | null; finishYourself?: boolean };
+export type RunLine = { status: string; step: string | null; problem: string | null; what?: string | null; until?: string | null; expiresAt?: string | null; finishYourself?: boolean };
 export type Signal = { id: string; kind: string; employer: string; suggestedStage: string; appRef: string };
 
 /** Put one application's facts together and work out its journey. */
@@ -32,7 +32,7 @@ export function journeyFor(a: AppFacts, f: JourneyFacts | undefined, ctx: { toda
   const run = f?.run ? {
     ...f.run,
     status: extra.run?.status === "handover" ? "handover" : f.run.status,
-    handover: extra.run?.status === "handover" && extra.run.what ? { what: extra.run.what, until: extra.run.until ?? null } : null,
+    handover: extra.run?.status === "handover" && extra.run.what ? { what: extra.run.what, until: extra.run.until ?? untilWords(extra.run.expiresAt, ctx.timeZone) } : null,
     finishYourself: !!extra.run?.finishYourself,
   } : null;
   const input: JourneyInput = {
@@ -42,6 +42,12 @@ export function journeyFor(a: AppFacts, f: JourneyFacts | undefined, ctx: { toda
     email: extra.signal ? { id: extra.signal.id, says: `${extra.signal.employer} ${SAYS[extra.signal.kind] ?? "wrote to you"}`, moveTo: suggestedLabel(extra.signal.suggestedStage) } : null,
   };
   return journeyOf(input, ctx);
+}
+
+/** When a paused step stops waiting, in the applicant's time zone ("Nov 18, 10:15 PM"). */
+function untilWords(iso: string | null | undefined, timeZone: string): string | null {
+  if (!iso) return null;
+  return new Intl.DateTimeFormat("en-US", { timeZone, month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(iso));
 }
 
 /** Where a "yes" to an email suggestion takes the application, in journey words. */
