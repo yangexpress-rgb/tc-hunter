@@ -7,5 +7,7 @@ const path = require("node:path");
 exports.default = async function afterPack(ctx) {
   if (ctx.electronPlatformName !== "darwin" || process.platform !== "darwin") return;
   const app = path.join(ctx.appOutDir, `${ctx.packager.appInfo.productFilename}.app`);
+  // Files from a synced folder (iCloud) carry Finder and provider attributes codesign refuses.
+  execFileSync("xattr", ["-cr", app], { stdio: "inherit" });
   execFileSync("codesign", ["--force", "--deep", "--sign", "-", app], { stdio: "inherit" });
 };

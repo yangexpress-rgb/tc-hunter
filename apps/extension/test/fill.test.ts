@@ -14,19 +14,19 @@ const html = readFileSync(join(__dirname, "demo-form.html"), "utf8");
 const helper = readFileSync(join(__dirname, "..", "fill.js"), "utf8");
 const submitter = readFileSync(join(__dirname, "..", "submit.js"), "utf8");
 const background = readFileSync(join(__dirname, "..", "background.js"), "utf8");
-const workday = readFileSync(join(__dirname, "..", "workday.js"), "utf8");
+const workday = readFileSync(join(__dirname, "..", "..", "..", "desktop", "workday.js"), "utf8");
 const manifest = JSON.parse(readFileSync(join(__dirname, "..", "manifest.json"), "utf8"));
 
 describe("extension manifest", () => {
-  it("the Workday reader only reads: no clicks, no forms, only Workday's own job service", () => {
+  it("the Workday reader lives in the desktop app now (Yong, 2026-11-18), and only reads", () => {
+    expect(background).not.toMatch(/workday/i);
     expect(workday).not.toMatch(/\.click\(|\.submit\(|requestSubmit|password/i);
-    expect(workday).toMatch(/WORKDAY_ORIGINS = \["https:\/\/\*\.myworkdayjobs\.com\/\*"\]/);
+    expect(workday).toMatch(/myworkdayjobs/);
     expect(manifest.optional_host_permissions).toContain("https://*/*");
   });
   it("asks for no standing access to websites: only the tab you click it on", () => {
     expect(manifest.manifest_version).toBe(3);
-    // alarms: the Workday reader's 6-hourly read (Yong, 2026-11-18); its Workday access is asked for, not standing.
-    expect(manifest.permissions.sort()).toEqual(["activeTab", "alarms", "scripting", "storage"]);
+    expect(manifest.permissions.sort()).toEqual(["activeTab", "scripting", "storage"]);
     expect(manifest.host_permissions).toBeUndefined();
     expect(manifest.content_scripts).toBeUndefined();
   });

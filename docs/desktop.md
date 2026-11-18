@@ -39,7 +39,18 @@ that status. The app never tries to pass or work around a check.
 
 GitHub Actions (`.github/workflows/desktop.yml`, macOS runner) builds `TC-Hunter-<v>-arm64.dmg` and
 `-x64.dmg` (plus zips) on every PR touching `desktop/`, and publishes release `desktop-v<version>` from
-`main`. Locally on a Mac: `cd desktop && npm ci && npm run dist`.
+`main`. Locally on a Mac: `cd desktop && npm ci && npm run dist`, from a folder iCloud doesn't sync
+(in `~/Documents` codesign refuses the file attributes iCloud keeps adding). The GitHub Mac job was
+cancelled before starting on 2026-11-18 (no Mac runners for this private repository, likely billing),
+so 0.1.0 was built on Yong's Mac: arm64 DMG 114 MB, installed 252 MB.
+
+## Proof read (2026-11-18, Yong's Mac, counts only)
+
+All 14 Workday sites read with no security check: Cencora 1037 (audit 1037), Salesforce 1578 (1570),
+Accenture 2000 (Workday's count tops out at 2000), Avanade 680, Genpact 1737 (1708), Kyndryl 895 (886),
+Workday 344 (354), Huron 288 (285), Red Hat 164 (159), insightsoftware 64, Embecta 62 (63), Premier 37 (39),
+Epicor 38 (37), Automation Anywhere 33. A plain curl from the same Mac also got JSON: Workday's check is
+about the server's address, not the browser engine.
 
 The app is not signed with an Apple developer certificate (ad hoc signature only), so macOS asks once
 before opening it; see the install steps below.
