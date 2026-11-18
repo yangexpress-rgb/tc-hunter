@@ -14,10 +14,32 @@ export function excerpt(text: string): string {
 }
 
 export interface FetchOpts { kind?: "api" | "page"; headers?: Record<string, string>; body?: unknown }
-export interface Fetcher { get(url: string, opts?: FetchOpts): Promise<FetchResult> }
+export interface Fetcher { get(url: string, opts?: FetchOpts): Promise<FetchResult>; /** Asks this host less often from now on. */ slowDown?(host: string): void }
+
+/** What a site answered when it said no: the status, its Retry-After, and what kind of no it was. */
+export interface SiteAnswer { status: number; retryAfter?: string; contentType: string; excerpt: string; kind: "rate_limit" | "refusal" | "block_page" | "other" }
+
+/**
+ * How long a site asked us to wait: Retry-After in seconds or as a date. Without one, 2 hours,
+ * doubling with each slow-down in a row, up to a day.
+ */
+export function retryWaitMs(retryAfter: string | undefined | null, slowdowns: number, now = Date.now()): number {
+  const v = String(retryAfter ?? "").trim();
+  let ms = /^\d+$/.test(v) ? Number(v) * 1000 : v && !Number.isNaN(Date.parse(v)) ? Date.parse(v) - now : NaN;
+  if (!(ms > 0)) ms = 2 * 3_600_000 * 2 ** Math.max(0, slowdowns);
+  return Math.min(Math.max(ms, 15 * 60_000), 24 * 3_600_000);
+}
+
+/** A 403/401 that is an HTML page from a firewall (Akamai, Cloudflare…) rather than the site's own answer. */
+export function answerKind(status: number, contentType: string, text: string): SiteAnswer["kind"] {
+  if (status === 429) return "rate_limit";
+  if (status !== 401 && status !== 403) return "other";
+  return /html/i.test(contentType) || /^\s*</.test(text) || /access denied|captcha|cloudflare|akamai|incapsula|request blocked|bot/i.test(text.slice(0, 2000)) ? "block_page" : "refusal";
+}
 
 export class SourceRefusedError extends Error {
-  constructor(public readonly reason: "robots" | "refused" | "rate_limited" | "not_found" | "unreachable" | "too_big", public readonly detail: string) {
+  constructor(public readonly reason: "robots" | "refused" | "rate_limited" | "not_found" | "unreachable" | "too_big", public readonly detail: string,
+    public readonly answer?: SiteAnswer) {
     super(`source ${reason}: ${detail}`);
   }
 }
@@ -63,11 +85,21 @@ export class PoliteFetcher implements Fetcher {
   private get raw(): RawFetch { return this.opts.raw ?? ((u, i) => fetch(u, i) as never); }
   private sleep(ms: number) { return (this.opts.sleep ?? ((m) => new Promise((r) => setTimeout(r, m))))(ms); }
 
+  private slow = new Set<string>();
+  /**
+   * Hosts that share one pace: every Workday site (*.myworkdayjobs.com) is one service, so its requests
+   * are spaced across the whole search, not only within one employer's site (Yong, 2026-11-17).
+   */
+  static paceKey(host: string): string { return /\.myworkdayjobs\.com$/i.test(host) ? "myworkdayjobs.com" : host; }
+  /** After a site asks us to slow down, its pace is doubled for the rest of this search (one fetcher per work item). */
+  slowDown(host: string) { this.slow.add(PoliteFetcher.paceKey(host)); }
+
   private async pace(host: string) {
-    const gap = this.opts.perHostMs ?? 6000; // 10 a minute per site by default (job_source.rate_limit_per_min)
-    const wait = (this.last.get(host) ?? 0) + gap - Date.now();
+    const key = PoliteFetcher.paceKey(host);
+    const gap = (this.opts.perHostMs ?? 6000) * (this.slow.has(key) ? 2 : 1); // 10 a minute per site by default (job_source.rate_limit_per_min)
+    const wait = (this.last.get(key) ?? 0) + gap - Date.now();
     if (wait > 0) await this.sleep(wait);
-    this.last.set(host, Date.now());
+    this.last.set(key, Date.now());
   }
 
   private async once(url: string, accept: string, extra: Pick<FetchOpts, "headers" | "body"> = {}): Promise<FetchResult> {
@@ -108,8 +140,9 @@ export class PoliteFetcher implements Fetcher {
     const r = await this.once(url, opts.kind === "page" ? "text/html,application/xhtml+xml" : "application/json", { headers: opts.headers, body: opts.body });
     // What the site said, briefly, so a refusal can be told apart from a real slow-down (Yong, 2026-11-17: Salesforce).
     const said = r.status >= 400 ? excerpt(r.text) : "";
-    if (r.status === 401 || r.status === 403) throw new SourceRefusedError("refused", `${u.host} answered ${r.status}${said}`);
-    if (r.status === 429) throw new SourceRefusedError("rate_limited", `${u.host} answered 429${r.retryAfter ? ` (try again in ${r.retryAfter})` : ""}${said}`);
+    const answer: SiteAnswer = { status: r.status, retryAfter: r.retryAfter, contentType: r.contentType, excerpt: said.replace(/^ — /, ""), kind: answerKind(r.status, r.contentType, r.text) };
+    if (r.status === 401 || r.status === 403) throw new SourceRefusedError("refused", `${u.host} answered ${r.status}${answer.kind === "block_page" ? " (a firewall page)" : ""}${said}`, answer);
+    if (r.status === 429) throw new SourceRefusedError("rate_limited", `${u.host} answered 429${r.retryAfter ? ` (try again in ${r.retryAfter})` : ""}${said}`, answer);
     if (r.status === 404 || r.status === 410) throw new SourceRefusedError("not_found", `${u.host} answered ${r.status}`);
     if (r.status >= 400) throw new SourceRefusedError("unreachable", `${u.host} answered ${r.status}`);
     return r;
