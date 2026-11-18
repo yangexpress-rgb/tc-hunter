@@ -1,5 +1,5 @@
 import { getPreferences, jobsSummary, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
-import { JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, t } from "@tc-hunter/domain";
+import { JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, normalizeEmployer, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -54,7 +54,7 @@ export default async function JobsPage(props: PageProps) {
     (!levels.length || levels.includes(jobLevelKey(r.title ?? "")))
     && (!works.length || works.includes(workOf(r)))
     && (!goal || r.goal_id === goal)
-    && (!company || String(r.employer_canonical ?? "").toLowerCase() === company.toLowerCase())
+    && (!company || normalizeEmployer(String(r.employer_canonical ?? "")) === normalizeEmployer(company))
     && (!words.length || words.every((w) => `${r.title} ${r.employer_canonical} ${r.location_raw ?? ""}`.toLowerCase().includes(w))));
   const rows = sortRows(filtered, ...SORT_KEY[sort]);
   const narrowed = rows.length !== matched.rows.length;

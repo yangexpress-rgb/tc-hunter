@@ -48,7 +48,7 @@ describe("Workday careers sites (Yong: an Embecta job on Workday was missed)", (
     const link = detectJobLink(JOB)!;
     expect(link.kind).toBe("workday");
     const p = (await fetchJobLink(link, new Workday()))!;
-    expect(p).toMatchObject({ externalId: "workday:embecta:R21-00608407", employer: "embecta", title: "VP, Commercial and G&A IT",
+    expect(p).toMatchObject({ externalId: "workday:embecta:R21-00608407", employer: "Embecta", title: "VP, Commercial and G&A IT",
       locationRaw: "USA-NJ - Parsippany", workplaceType: "hybrid", postedAt: "2026-11-10", atsType: "workday" });
     expect(p.descriptionText).toContain("15+ years in enterprise IT");
   });
@@ -60,7 +60,7 @@ describe("Workday careers sites (Yong: an Embecta job on Workday was missed)", (
     // First how many jobs the site lists in all, then the search for the goal's title.
     expect(f.calls[0]!.body).toEqual({ appliedFacets: {}, limit: 20, offset: 0, searchText: "" });
     expect(f.calls[1]!.body).toEqual({ appliedFacets: {}, limit: 20, offset: 0, searchText: "VP Information Technology" });
-    expect(r.postings.map((p) => [p.title, p.employer])).toEqual([["VP, Commercial and G&A IT", "embecta"]]);
+    expect(r.postings.map((p) => [p.title, p.employer])).toEqual([["VP, Commercial and G&A IT", "Embecta"]]);
     expect(r.complete).toBe(false);
   });
 
@@ -82,5 +82,27 @@ describe("links in a Workday site's emails", () => {
   });
   it("only from that employer's own Workday site", () => {
     expect(verificationLinkIn(reset.replace("premierinc", "someoneelse"), host, "reset")).toBeNull();
+  });
+});
+
+describe("company codes in employer names (Yong, 2026-11-18)", () => {
+  it("takes Workday's company code off the name and keeps real numbers", async () => {
+    const { cleanEmployerName, normalizeEmployer } = await import("../src");
+    expect(cleanEmployerName("100 Salesforce")).toBe("Salesforce");
+    expect(cleanEmployerName("300 Premier Healthcare Solutions, Inc.")).toBe("Premier Healthcare Solutions, Inc.");
+    expect(cleanEmployerName("1000 - Acme Corp")).toBe("Acme Corp");
+    expect(cleanEmployerName("84 Lumber")).toBe("84 Lumber");
+    expect(cleanEmployerName("3M")).toBe("3M");
+    expect(cleanEmployerName("1-800-Flowers")).toBe("1-800-Flowers");
+    expect(normalizeEmployer("100 Salesforce")).toBe(normalizeEmployer("Salesforce, Inc."));
+  });
+
+  it("prefers the followed site's name when the posting is that company", async () => {
+    const { employerForSource } = await import("../src");
+    expect(employerForSource("100 Salesforce", "Salesforce")).toBe("Salesforce");
+    expect(employerForSource("300 Premier Healthcare Solutions, Inc.", "Premier")).toBe("Premier");
+    expect(employerForSource("300 Premier Healthcare Solutions, Inc.", "Premierinc")).toBe("Premier Healthcare Solutions, Inc.");
+    expect(employerForSource("", "Embecta")).toBe("Embecta");
+    expect(employerForSource("Tableau Software", "Salesforce")).toBe("Tableau Software");
   });
 });

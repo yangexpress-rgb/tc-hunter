@@ -27,3 +27,12 @@ describe("Jobs card layouts (Yong, 2026-11-18)", () => {
     expect(companyDomain("Acme", [null, "not a url"])).toBeNull();
   });
 });
+
+describe("Cards by company groups one company once (Yong, 2026-11-18)", () => {
+  it("puts '100 Salesforce' and 'Salesforce, Inc.' on one card, named without the code", async () => {
+    const { groupByCompany } = await import("../lib/jobsView");
+    const row = (employer_canonical: string, score: number) => ({ employer_canonical, score });
+    const cards = groupByCompany([row("100 Salesforce", 70), row("Salesforce", 80), row("Salesforce, Inc.", 60), row("84 Lumber", 50)]);
+    expect(cards.map((c) => [c.name, c.rows.length])).toEqual([["Salesforce", 3], ["84 Lumber", 1]]);
+  });
+});
