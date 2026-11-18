@@ -3,7 +3,8 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 import { z } from "zod";
 import { checkLine, type CheckContext } from "../tailor/checker";
 import type { ProposedLine, TailorPosting, TailorProfile } from "../tailor/types";
-import { ANSWER_MODEL } from "./infer";
+import { ANSWER_MODEL, cachedTurn, promptCacheOn } from "./infer";
+import { recordUsage } from "../ai/meter";
 import { VOICE_RULES, withPostingGuard } from "../promptShared";
 
 /**
@@ -102,7 +103,10 @@ Situation in one line, what they did, the result with its number, and nothing th
 
 export class ClaudeEssayDrafter implements EssayDrafter {
   readonly version = `essay-claude-2:${ANSWER_MODEL}`;
-  constructor(private client: Anthropic = new Anthropic()) {}
+  readonly cache: boolean;
+  constructor(private client: Anthropic = new Anthropic(), opts: { cache?: boolean } = {}) {
+    this.cache = opts.cache ?? promptCacheOn();
+  }
 
   async draft(questions: EssayQuestion[], profile: TailorProfile, posting: TailorPosting): Promise<EssayDraft[]> {
     if (!questions.length) return [];
@@ -124,8 +128,10 @@ export class ClaudeEssayDrafter implements EssayDrafter {
       fallbacks: "default",
       output_config: { effort: "high", format: zodOutputFormat(DraftOut) },
       system: ESSAY_SYSTEM,
-      messages: [{ role: "user", content: `<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>\n<motivation>${JSON.stringify(motivation)}</motivation>\n<questions>${JSON.stringify(questions.map((q) => ({ key: q.key, question: q.label, ...(TIME_QUESTION.test(q.label) ? { shape: "STAR" } : {}), ...(q.maxChars ? { max_chars: q.maxChars } : {}) })))}</questions>` }],
-    });
+      // The job and the facts are the same for every page of one application: a cached prefix (Yong, 2026-11-17).
+      messages: [{ role: "user", content: cachedTurn(`<job>${JSON.stringify(job)}</job>\n<facts>${JSON.stringify(facts)}</facts>\n<skills>${JSON.stringify(skills)}</skills>\n<motivation>${JSON.stringify(motivation)}</motivation>`, `\n<questions>${JSON.stringify(questions.map((q) => ({ key: q.key, question: q.label, ...(TIME_QUESTION.test(q.label) ? { shape: "STAR" } : {}), ...(q.maxChars ? { max_chars: q.maxChars } : {}) })))}</questions>`, this.cache) }],
+    } as never) as unknown as { stop_reason: string; model: string; usage: never; parsed_output: z.infer<typeof DraftOut> | null };
+    recordUsage("essays", r, ANSWER_MODEL);
     if (r.stop_reason === "refusal") throw new Error("Claude declined to draft");
     if (!r.parsed_output) throw new Error(`no drafts came back (${r.stop_reason})`);
     return r.parsed_output.drafts.filter((d) => questions.some((q) => q.key === d.key));

@@ -1,4 +1,4 @@
-import { hasFreshStepUp, listPasskeys, passkeysAvailable, type Session } from "@tc-hunter/db";
+import { aiCostSummary, hasFreshStepUp, listPasskeys, passkeysAvailable, type Session } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Status } from "@/components/Layers";
 import { Flash } from "@/components/profile/Fact";
@@ -12,12 +12,24 @@ export type SettingsPage = "/settings" | "/settings/email" | "/settings/job-site
 
 export const ago = (d: Date | string | null) => (d ? new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d)) : "not yet");
 
+/** Dollars as people read them: "$3.42", "under 1¢", "$0.00". */
+export const dollars = (n: number) => (n > 0 && n < 0.005 ? "under 1¢" : `$${n.toFixed(2)}`);
+
+/** Layer 1 of the AI cost meter (Yong, 2026-11-17): one line on every Settings page. */
+async function AiCostLine() {
+  let month: number | null = null;
+  try { month = (await aiCostSummary(app().pool)).thisMonth; } catch { month = null; }
+  if (month === null) return null;
+  return <p className="muted">AI cost this month: <strong>{dollars(month)}</strong> · <a href="/settings/data#ai-cost">See the breakdown</a></p>;
+}
+
 /** Page heading and the saved / error line (errors in red). */
 export function SettingsHeader({ title, intro, params, saved, error }: { title: string; intro?: string; params: Record<string, string>; saved: boolean; error?: string }) {
   return (
     <>
       <TopBar signedIn />
       <h1>{t("settings.title")} <span className="muted">· {title}</span></h1>
+      <AiCostLine />
       {intro ? <p className="muted">{intro}</p> : null}
       {params.confirmed ? <Status>{t("settings.confirm.done")}</Status> : <Flash saved={saved} error={error} />}
     </>

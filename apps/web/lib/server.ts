@@ -2,8 +2,8 @@ import "server-only";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type pg from "pg";
-import { createPool, getSession, loadConfig, mustSetUpMfa, type AppConfig, type Session } from "@tc-hunter/db";
-import { createLogger, deviceLabel } from "@tc-hunter/domain";
+import { aiUsageSink, createPool, getSession, loadConfig, mustSetUpMfa, type AppConfig, type Session } from "@tc-hunter/db";
+import { createLogger, deviceLabel, setUsageSink } from "@tc-hunter/domain";
 
 export const SESSION_COOKIE = "tc_session";
 export const log = createLogger();
@@ -14,6 +14,8 @@ export function app(): { pool: pg.Pool; cfg: AppConfig } {
   if (!g.__tc) {
     const cfg = loadConfig();
     g.__tc = { cfg, pool: createPool(cfg.databaseUrl) };
+    // Claude calls made by the web app (reading a resume, finding its About) go on the cost meter too.
+    setUsageSink(aiUsageSink(g.__tc.pool, log));
   }
   return g.__tc;
 }

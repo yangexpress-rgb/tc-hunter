@@ -3,11 +3,11 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
+import { aiUsageSink, createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeCareersLookup, ClaudeLetterProposer, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
-  HeldSessions, handoverHours,
+  HeldSessions, handoverHours, ClaudeRequirementsBatcher, setUsageSink, promptCacheOn,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
 import { liveServer } from "./apply/live";
@@ -16,8 +16,12 @@ import { dumpPostings, runF9, runGenEval, runRequirementsEval } from "./evalF9";
 const log = createLogger();
 const cfg = loadConfig();
 const pool = createPool(cfg.databaseUrl);
+// The AI cost meter (Yong, 2026-11-17): every Claude call's usage goes into ai_usage and the log.
+setUsageSink(aiUsageSink(pool, log));
 const reader: RequirementsReader = resumeReaderName() === "claude" && process.env.TC_POSTING_READER !== "rules"
   ? new ClaudeRequirementsReader() : new RulesRequirementsReader();
+// Scheduled searches read new postings in a batch at half price (Yong, 2026-11-17). On with TC_REQ_BATCH=on (until the before/after measurement is in).
+const batch = reader instanceof ClaudeRequirementsReader && process.env.TC_REQ_BATCH === "on" ? new ClaudeRequirementsBatcher(reader) : undefined;
 // Tailoring (design 5.4): Claude may reword, the rules decide what is true. TC_TAILOR_WRITER=rules keeps to the applicant's own words.
 const claudeWrites = resumeReaderName() === "claude" && process.env.TC_TAILOR_WRITER !== "rules";
 const tailor = {
@@ -82,13 +86,13 @@ const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);
 const SCHEDULE_MS = 15 * 60_000;
 
 /** How long one piece of work may take before the worker counts it as stuck (minutes). */
-const STUCK_MINUTES: Record<string, number> = { scan: 45, apply: 30, tailor: 20, resume_digest: 20, email_check: 15 };
+const STUCK_MINUTES: Record<string, number> = { scan: 45, scan_finish: 45, apply: 30, tailor: 20, resume_digest: 20, email_check: 15 };
 
 let stopping = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) process.on(sig, () => { stopping = true; log.info("worker.stopping", {}); });
 
 async function main() {
-  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", answers: apply?.inferrer?.version ?? "off", answers_effort: apply?.inferrer ? smart.effort : undefined, essays: apply?.drafter?.version ?? "off", companies: discover.proposer.version, search: search.map((s) => s.id).join(",") || "none" });
+  log.info("worker.started", { reader: reader.version, writer: tailor.resume.version, email: email ? "gmail (app password or Google sign-in)" : "off", apply: apply ? "browser" : "off", answers: apply?.inferrer?.version ?? "off", answers_effort: apply?.inferrer ? smart.effort : undefined, essays: apply?.drafter?.version ?? "off", companies: discover.proposer.version, careers: discover.careers?.version ?? "off", req_batch: batch ? "on" : "off", prompt_cache: promptCacheOn() ? "on" : "off", search: search.map((s) => s.id).join(",") || "none" });
   if (!apply?.inferrer) log.warn("worker.smart_answers_off", { reason: smart.problem ?? "apply browser off" });
   // The F9 answer eval, once, when TC_EVAL_F9=1 is set on the server (it uses the server's own key).
   if (process.env.TC_EVAL_F9 === "1" && smart.on) {
@@ -150,7 +154,7 @@ async function main() {
         if (queued || mail || applies) log.info("worker.scheduled", { scans: queued, email_checks: mail, applies });
       }
       // A fresh fetcher per piece of work: robots rules are read again each time.
-      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search, apply, onStart });
+      const did = await runNextWork(pool, { fetcher: new PoliteFetcher(), reader, tailor, email, digest, discover, search, apply, onStart, batch });
       current = null;
       if (!did) await new Promise((r) => setTimeout(r, IDLE_MS));
       // Counts and timings only, never names or content, so a stuck or failed search can be traced.

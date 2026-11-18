@@ -4,6 +4,7 @@ import { z } from "zod";
 import { matchChoice } from "./equivalents";
 import { NUMBER_QUESTION, type FieldType } from "./map";
 import { withPostingGuard } from "../promptShared";
+import { recordUsage, type AiPurpose } from "../ai/meter";
 
 /**
  * Working out an application question's answer from what the applicant already told TC Hunter
@@ -308,20 +309,64 @@ Check fit, not only support:
 - An answer can be supported yet wrong if it answers a different question than the one asked: a degree level is not a field of study, a school is not a degree, a job title is not an employer, a total career length is not years with one skill. Mark those unsupported and say which question the answer really answers.
 - Read the answers in <proposed> together with <other_answers_in_this_form>. If two answers in the same form contradict each other (for example "currently employed: No" and "currently work here: Yes", or two different start dates), mark the one with weaker support unsupported and say in its reason which answer it contradicts.`);
 
+/**
+ * Prompt caching of the evidence pack (Yong, 2026-11-17: "not paying full price for the same evidence
+ * pack repeatedly"). The system prompt and the pack are one cached prefix; only a batch's questions
+ * (or the answers being checked) come after it. TC_PROMPT_CACHE=on turns it on.
+ */
+export const promptCacheOn = (env: Record<string, string | undefined> = process.env) => env.TC_PROMPT_CACHE === "on";
+
+/** The user turn: the stable pack first (cached when caching is on), then what varies. Same text either way. */
+export function cachedTurn(prefix: string, rest: string, cache: boolean) {
+  return cache
+    ? [{ type: "text" as const, text: prefix, cache_control: { type: "ephemeral" as const } }, { type: "text" as const, text: rest }]
+    : `${prefix}${rest}`;
+}
+
+/**
+ * Runs calls that share one cached prefix: the first alone until its answer starts coming back (the
+ * cache is written by then), then the rest together, so they read the cache instead of each writing
+ * it. Without caching, all at once, as before.
+ */
+export async function warmThenFan<T, R>(items: T[], cache: boolean, run: (item: T, started: () => void) => Promise<R>): Promise<R[]> {
+  if (!cache || items.length < 2) return Promise.all(items.map((x) => run(x, () => undefined)));
+  let started!: () => void;
+  const ready = new Promise<void>((res) => { started = res; });
+  const first = run(items[0]!, started);
+  // A first call that fails before starting still lets the rest go.
+  await Promise.race([ready, first.then(() => undefined, () => undefined)]);
+  return Promise.all([first, ...items.slice(1).map((x) => run(x, () => undefined))]);
+}
+
 export class ClaudeAnswerInferrer implements AnswerInferrer {
   readonly version = `answers-claude-4:${ANSWER_MODEL}`;
-  constructor(private client: Anthropic = new Anthropic()) {}
+  readonly cache: boolean;
+  constructor(private client: Anthropic = new Anthropic(), opts: { cache?: boolean } = {}) {
+    this.cache = opts.cache ?? promptCacheOn();
+  }
 
-  private async ask<T extends z.ZodTypeAny>(schema: T, system: string, content: string, maxTokens: number): Promise<z.infer<T>> {
-    const r = await this.client.beta.messages.parse({
+  private async ask<T extends z.ZodTypeAny>(purpose: AiPurpose, schema: T, system: string, prefix: string, rest: string, maxTokens: number,
+    started: () => void = () => undefined): Promise<z.infer<T>> {
+    const params = {
       model: ANSWER_MODEL,
       max_tokens: maxTokens,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
       output_config: { effort: INFER_EFFORT, format: zodOutputFormat(schema) },
       system,
-      messages: [{ role: "user", content }],
-    });
+      messages: [{ role: "user", content: cachedTurn(prefix, rest, this.cache) }],
+    };
+    let r: { stop_reason: string | null; model: string; usage: never; parsed_output: unknown };
+    if (this.cache) {
+      // Streamed only to know when the answer starts (the cache is readable from then on).
+      const s = this.client.beta.messages.stream(params as never);
+      s.once("streamEvent", () => started());
+      r = await s.finalMessage() as never;
+    } else {
+      r = await this.client.beta.messages.parse(params as never) as never;
+    }
+    started();
+    recordUsage(purpose, r, ANSWER_MODEL);
     if (r.stop_reason === "refusal") throw new Error("Claude declined to answer");
     if (!r.parsed_output) throw new Error(`no answers came back (${r.stop_reason})`);
     return r.parsed_output as z.infer<T>;
@@ -330,28 +375,33 @@ export class ClaudeAnswerInferrer implements AnswerInferrer {
   async infer(questions: InferQuestion[], facts: InferFacts): Promise<InferOutcome> {
     if (!questions.length) return { answers: [], problems: [] };
     const problems: string[] = [];
-    const pack = `<facts>\n${JSON.stringify(facts, null, 1)}\n</facts>`;
+    // One text for the whole run: the same facts give the same bytes, so every call's prefix matches.
+    const pack = packText(facts);
     const show = (qs: InferQuestion[]) => JSON.stringify(qs.map((q) => ({ key: q.key, question: q.label, type: q.type, choices: q.options })), null, 1);
-    // 1. Proposals, at most 5 questions a call, all batches at once.
-    const proposed = (await Promise.all(chunks(questions, INFER_BATCH).map(async (qs) => {
+    // 1. Proposals, at most 5 questions a call, all batches at once (after the first has written the cache).
+    const proposed = (await warmThenFan(chunks(questions, INFER_BATCH), this.cache, async (qs, started) => {
       try {
-        const out = await this.ask(Output, INFER_SYSTEM, `${pack}\n<questions>\n${show(qs)}\n</questions>`, maxTokensFor(qs.length));
+        const out = await this.ask("answers", Output, INFER_SYSTEM, pack, `\n<questions>\n${show(qs)}\n</questions>`, maxTokensFor(qs.length), started);
         return acceptInferred(qs, out.answers.map((a) => ({ key: a.key, answer: a.answer, basis: a.basis || a.fact_id })));
       } catch (e) {
+        started();
         problems.push(`Smart answers couldn't work out ${qs.length === 1 ? "1 question" : `${qs.length} questions`}: ${String((e as Error)?.message ?? e).slice(0, 160)}`);
         return [];
       }
-    }))).flat();
+    })).flat();
     if (!proposed.length) return { answers: [], problems };
     // 2. The check: every answer against the facts, its basis quoting the fact's own words.
-    return verifyAnswers(proposed, questions, facts, (batch) => this.ask(Verdicts, VERIFY_SYSTEM,
-      `${pack}\n<proposed>\n${JSON.stringify(batch.map((a) => {
+    return verifyAnswers(proposed, questions, facts, (batch) => this.ask("answer_check", Verdicts, VERIFY_SYSTEM, pack,
+      `\n<proposed>\n${JSON.stringify(batch.map((a) => {
         const q = questions.find((x) => x.key === a.key)!;
         return { key: a.key, question: q.label, choices: q.options, answer: a.answer, proposer_basis: a.basis };
       }), null, 1)}\n</proposed>\n<other_answers_in_this_form>\n${JSON.stringify(proposed.filter((o) => !batch.includes(o)).map((o) => ({
         key: o.key, question: questions.find((x) => x.key === o.key)?.label, answer: o.answer })), null, 1)}\n</other_answers_in_this_form>`, verifyTokensFor(batch.length)).then((v) => v.checks), problems);
   }
 }
+
+/** The evidence pack as sent: the facts exactly as gathered at the start of the run. */
+export const packText = (facts: InferFacts) => `<facts>\n${JSON.stringify(facts, null, 1)}\n</facts>`;
 
 export interface Verdict { key: string; supported: boolean; fact_id: string; quote: string; reason: string }
 
