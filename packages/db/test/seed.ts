@@ -126,6 +126,7 @@ export async function seedEverything(
     await one("standing_answer", "INSERT INTO standing_answer (applicant_id, kind, answer_enc) VALUES ($1, 'eeo', '\\x00'::bytea) ON CONFLICT (applicant_id, kind) DO UPDATE SET updated_at = now() RETURNING id", [me]);
     await one("apply_run", "INSERT INTO apply_run (applicant_id, application_id, status, step) VALUES ($1, $2, 'failed', 'Seed') RETURNING id", [me, ids.application]);
     await one("apply_shot", "INSERT INTO apply_shot (applicant_id, run_id, kind, caption, image_enc) VALUES ($1, $2, 'stopped', 'Seed', '\\x00'::bytea) RETURNING id", [me, ids.apply_run]);
+    await one("apply_handover", "INSERT INTO apply_handover (applicant_id, run_id, application_id, step, phase, what, expires_at, state, outcome) VALUES ($1, $2, $3, 'person_check', 'before_submit', 'Seed', now(), 'closed', 'expired') RETURNING id", [me, ids.apply_run, ids.application]);
     return ids;
   });
 }

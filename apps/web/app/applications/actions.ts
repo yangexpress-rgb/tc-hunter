@@ -1,11 +1,12 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
+  acceptCalibration, acceptEmailSignal, giveUpHandover, handBackHandover, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
   resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
+import { toWorker } from "@/lib/live";
 
 /** Only ever send people back to an Applications, Reports or Jobs page. */
 function backTo(form: FormData, fallback: string): string {
@@ -175,4 +176,25 @@ export async function resolveOutcomeAction(form: FormData) {
     // Hands-free: "It didn't" means TC Hunter fills their form again and sends it (the applicant's answer, not a retry by itself).
     if (!went && (await getApplySettings(pool, cfg, s)).mode === "hands_free") await requestApply(pool, s, ref);
   }, `/applications/${ref}${went ? "#packet" : "#applying"}`, went ? "submitted" : "not_sent");
+}
+
+/** "I'm done — hand back": TC Hunter takes the employer's page back and carries on (Yong, 2026-11-17). */
+export async function handBackAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  await act(form, async () => {
+    const id = await handBackHandover(app().pool, s, ref);
+    // The live view stops taking input at once (the database already refuses it).
+    await toWorker(id, s.applicantId, "back");
+  }, `/applications/${ref}#applying`, "handed_back");
+}
+
+/** "I can't do it here": the page is closed and the card offers "Finish it yourself". */
+export async function giveUpAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  await act(form, async () => {
+    const id = await giveUpHandover(app().pool, s, ref);
+    await toWorker(id, s.applicantId, "close");
+  }, `/applications/${ref}#applying`, "gave_up");
 }

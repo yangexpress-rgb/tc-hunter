@@ -17,16 +17,18 @@ const GROUPS: Array<{ title: string; stages: ApplicationStage[] }> = [
 ];
 
 type AppRow = Awaited<ReturnType<typeof listApplications>>[number];
-type Applying = { status: string; step: string | null; problem: string | null };
+type Applying = { status: string; step: string | null; problem: string | null; what?: string | null; finishYourself?: boolean };
 
 /** One line about TC Hunter's browser on this application; problems in red. */
-function ApplyLine({ s }: { s?: Applying }) {
+function ApplyLine({ s, appRef }: { s?: Applying; appRef: string }) {
   if (!s) return null;
+  // "Your turn" (Yong, 2026-11-17): one action, one plain sentence.
+  if (s.status === "handover") return <div className="warn small">{s.what ?? s.step} <a href={`/applications/${appRef}/live`}>Your turn — finish this step</a></div>;
   if (s.status === "queued") return <div className="status small">Applying for you: starting soon</div>;
   if (s.status === "running") return <div className="status small">Applying for you now: {s.step}</div>;
   if (s.status === "sent") return <div className="ok small">Sent by TC Hunter</div>;
   if (s.status === "waiting") return <div className={s.problem ? "error small" : "warn small"}>Needs you: {s.problem ?? s.step}</div>;
-  if (s.status === "failed" || s.status === "unclear" || s.status === "stopped") return <div className="error small">{s.problem ?? s.step}</div>;
+  if (s.status === "failed" || s.status === "unclear" || s.status === "stopped") return <div className="error small">{s.problem ?? s.step}{s.finishYourself ? <> <a href={`/applications/${appRef}/finish`}>Finish it yourself</a></> : null}</div>;
   return null;
 }
 
@@ -37,7 +39,7 @@ function Row({ a, today, applying }: { a: AppRow; today: string; applying?: Appl
       <div className="job-main">
         <a className="job-title" href={`/applications/${a.public_ref}`}>{a.title}</a>
         <div className="job-meta">{a.employer_canonical} · {STAGE_LABEL[a.stage as ApplicationStage]}</div>
-        <ApplyLine s={applying} />
+        <ApplyLine s={applying} appRef={a.public_ref} />
         {a.next_step ? <div className={due && dueText(due, today).late ? "warn" : "muted"}>{a.next_step}{due ? `, ${dueText(due, today).text}` : ""}</div> : null}
       </div>
     </li>

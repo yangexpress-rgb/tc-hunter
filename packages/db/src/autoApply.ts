@@ -5,6 +5,7 @@ import {
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
   checkContext, checkEssay, essayLimit, isEssayQuestion, companyKey, findOnEmployerSite, isNoFetchHost, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec,
+  HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
 } from "@tc-hunter/domain";
@@ -20,6 +21,7 @@ import { approveSubmission, consumeSubmissionKey, DomainError, recordSubmitted }
 import { asApplicant, dataKeyFor } from "./profile";
 import { tz, weeklyBudget } from "./tracker";
 import { upsertSource } from "./jobs";
+import { closeHandover, endWithFallback, handoverFor, type Handover } from "./handover";
 
 const applyLog = createLogger();
 
@@ -115,6 +117,8 @@ export async function requestApply(pool: pg.Pool, session: Session, appRef: stri
     if (!["interested", "tailoring", "ready_to_apply"].includes(a.stage)) throw new DomainError("TC_PACKET_CLOSED");
     const unknown = (await c.query("SELECT 1 FROM application_packet WHERE application_id = $1 AND state = 'failed' AND failure_reason = 'outcome_unknown'", [a.id])).rowCount;
     if (unknown) throw new DomainError("TC_ALREADY_SUBMITTED_OR_UNKNOWN");
+    // The applicant's turn on the employer's page: nothing else runs on it until they hand it back.
+    if ((await c.query("SELECT 1 FROM apply_handover WHERE application_id = $1 AND state IN ('waiting','open')", [a.id])).rowCount) throw new DomainError("TC_YOUR_TURN");
     await queueApply(c, a.id, { asked: true, ...(opts.anyway ? { anyway: true } : {}) });
     await recordAudit(c, "apply.requested", { payload: { application_ref: appRef } });
   });
@@ -140,7 +144,7 @@ export async function enqueueDueApplies(pool: pg.Pool): Promise<number> {
 
 export interface ApplyStatus {
   runId: string | null;
-  status: "none" | "queued" | "running" | "waiting" | "sent" | "unclear" | "failed" | "stopped";
+  status: "none" | "queued" | "running" | "waiting" | "handover" | "sent" | "unclear" | "failed" | "stopped";
   step: string | null;
   problem: string | null;
   waitingFor: string | null;
@@ -151,6 +155,10 @@ export interface ApplyStatus {
   finishedAt: string | null;
   mode: ApplyMode;
   packetId: string | null;
+  /** "Your turn": the step waiting for the applicant on the employer's page, while it lasts. */
+  handover: Handover | null;
+  /** The card offers "Finish it yourself" (the page is gone, the site turned the browser away, or the send is unclear). */
+  finishYourself: boolean;
 }
 
 export async function applyStatus(pool: pg.Pool, session: Session, appRef: string): Promise<ApplyStatus> {
@@ -158,7 +166,8 @@ export async function applyStatus(pool: pg.Pool, session: Session, appRef: strin
     const mode = ((await c.query("SELECT mode FROM apply_setting")).rows[0]?.mode ?? DEFAULT_APPLY_MODE) as ApplyMode;
     const r = (await c.query(
       `SELECT r.* FROM apply_run r JOIN application a ON a.id = r.application_id WHERE a.public_ref = $1 ORDER BY r.created_at DESC LIMIT 1`, [appRef])).rows[0];
-    if (!r) return { runId: null, status: "none", step: null, problem: null, waitingFor: null, steps: [], shots: [], host: null, startedAt: null, finishedAt: null, mode, packetId: null };
+    if (!r) return { runId: null, status: "none", step: null, problem: null, waitingFor: null, steps: [], shots: [], host: null, startedAt: null, finishedAt: null, mode, packetId: null, handover: null, finishYourself: false };
+    const handover = await handoverFor(c, appRef);
     // A run silent for 10 minutes has stopped (the worker picks the work up again after a restart).
     const silent = r.status === "running" && Date.now() - new Date(r.updated_at).getTime() > 10 * 60_000;
     const shots = (await c.query("SELECT id, kind, caption, created_at FROM apply_shot WHERE run_id = $1 ORDER BY created_at", [r.id])).rows;
@@ -168,17 +177,22 @@ export async function applyStatus(pool: pg.Pool, session: Session, appRef: strin
       steps: r.steps ?? [], shots: shots.map((s) => ({ id: s.id, kind: s.kind, caption: s.caption, at: new Date(s.created_at).toISOString() })),
       host: r.form_host, startedAt: r.started_at ? new Date(r.started_at).toISOString() : null, finishedAt: r.finished_at ? new Date(r.finished_at).toISOString() : null, mode,
       packetId: r.packet_id ?? null,
+      handover: handover ? (({ applicationId: _a, ...h }) => h)(handover) : null,
+      finishYourself: r.status === "unclear" || !!r.finish_yourself,
     };
   });
 }
 
 /** One line per application for the Applications list: what the browser is doing or why it stopped. */
-export async function applyStatuses(pool: pg.Pool, session: Session): Promise<Record<string, { status: string; step: string | null; problem: string | null }>> {
+export async function applyStatuses(pool: pg.Pool, session: Session): Promise<Record<string, { status: string; step: string | null; problem: string | null; what?: string | null; expiresAt?: string | null; finishYourself?: boolean }>> {
   return withApplicant(pool, asApplicant(session), async (c) => {
     const rows = (await c.query(
-      `SELECT DISTINCT ON (r.application_id) a.public_ref, r.status, r.step, r.problem, r.updated_at FROM apply_run r JOIN application a ON a.id = r.application_id
-        ORDER BY r.application_id, r.created_at DESC`)).rows;
-    return Object.fromEntries(rows.map((r) => [r.public_ref, { status: r.status, step: r.step, problem: r.problem }]));
+      `SELECT DISTINCT ON (r.application_id) a.public_ref, r.status, r.step, r.problem, r.updated_at, r.finish_yourself, h.what, h.expires_at
+         FROM apply_run r JOIN application a ON a.id = r.application_id
+         LEFT JOIN apply_handover h ON h.run_id = r.id AND h.state IN ('waiting','open')
+        ORDER BY r.application_id, r.created_at DESC, h.created_at DESC`)).rows;
+    return Object.fromEntries(rows.map((r) => [r.public_ref, { status: r.status, step: r.step, problem: r.problem, what: r.what ?? null,
+      expiresAt: r.expires_at ? new Date(r.expires_at).toISOString() : null, finishYourself: r.status === "unclear" || !!r.finish_yourself }]));
   });
 }
 
@@ -201,6 +215,8 @@ export async function approveServerSend(pool: pg.Pool, cfg: AppConfig, session: 
   if (!k) throw new DomainError("TC_NOT_FOUND");
   if (k.state !== "ready_to_submit") throw new DomainError("TC_PACKET_BAD_TRANSITION");
   if (!k.filled_hash || k.filled_hash !== filledHash) throw new DomainError("TC_APPROVAL_STALE");
+  const turn = await withApplicant(pool, asApplicant(session), async (c) => (await c.query("SELECT 1 FROM apply_handover WHERE application_id = $1 AND state IN ('waiting','open')", [k.app_id])).rowCount);
+  if (turn) throw new DomainError("TC_YOUR_TURN");
   await approveSubmission(pool, cfg, session, k.id, filledHash, requestKey);
   await withApplicant(pool, asApplicant(session), (c) => queueApply(c, k.app_id, { asked: true }));
 }
@@ -240,6 +256,10 @@ export interface ApplyDeps {
   fetcher?: Fetcher;
   /** Where an employer lists its jobs, when the usual board names don't answer. */
   careers?: CareersLookup;
+  /** Pages kept open for the applicant ("Your turn", Yong 2026-11-17). Without it, a step only they can do ends with "Finish it yourself". */
+  held?: HeldSessions;
+  /** How long a paused step waits (ms); TC_HANDOVER_HOURS on the server, shorter in tests. */
+  handoverMs?: number;
 }
 
 /** What was worked out for a question this run, by its words and choices (Workday asks page by page). */
@@ -433,8 +453,10 @@ class Run {
     applyLog.info("apply.ended", { run: this.id, status, waiting_for: waitingFor, problem: problem ?? stepText ?? null });
     // The heading shows the current step: a run that stops with a message ("Answers ready…") shows that, not the
     // last thing it was doing ("Filling in 15 answers"), which read as if it were stuck (Yong, 2026-11-17).
-    return this.set({ status, problem, waiting_for: waitingFor, finished_at: status === "waiting" ? null : new Date(), ...(stepText ? { step: stepText } : {}) }, stepText ?? problem ?? undefined, !!problem && status !== "sent");
+    return this.set({ status, problem, waiting_for: waitingFor, finished_at: status === "waiting" || status === "handover" ? null : new Date(), ...(stepText ? { step: stepText } : {}) }, stepText ?? problem ?? undefined, !!problem && status !== "sent");
   }
+  /** The card offers "Finish it yourself" for this run. */
+  finishYourself() { return this.set({ finish_yourself: true }); }
   async shot(kind: "form_filled" | "after_submit" | "stopped", caption: string, page: ApplyPage | null, cfg: AppConfig) {
     if (!page) return;
     let img: Uint8Array;
@@ -449,29 +471,137 @@ class Run {
 
 interface AppRow { id: string; public_ref: string; match_id: string; job_ref: string; stage: string; apply_url: string | null; urls: string[]; employer: string; title: string }
 
+/**
+ * "Your turn" (Yong, 2026-11-17) for one run: pauses at a step only the applicant may do, keeping the
+ * browser open and untouched at that page for them to finish in the live view; or, where that isn't
+ * possible, ends the way it always did, with "Finish it yourself" on the card.
+ */
+class Hand {
+  /** The page stays open for the applicant: the run must not close it. */
+  kept = false;
+  /** The page this run took back (the applicant's turn just ended, or a filled form kept for the send's approval). */
+  taken: HeldSession | null = null;
+  /** How the handover this run took back ended, when not by the run's own status. */
+  outcome: string | null = null;
+  constructor(private pool: pg.Pool, private auto: RequestContext, private deps: ApplyDeps, private app: AppRow, private run: Run) {}
+
+  /** Whether a step can be handed to the applicant on this page now. */
+  possible(page: ApplyPage | null): boolean {
+    return !!(this.deps.held && page?.live && this.deps.held.canHold(this.auto.applicantId));
+  }
+
+  /** Pauses for the applicant. True when the page is now theirs; false when it can't be handed over (the caller ends the run its usual way). */
+  async pause(page: ApplyPage | null, step: HandoverStep, phase: HandoverPhase, opts: { ats: string; labels?: string[]; keys?: string[] }): Promise<boolean> {
+    if (!page || !this.possible(page)) return false;
+    // A step that comes back after the applicant handed it over keeps its first window: no endless pauses.
+    const expiresAt = this.taken?.purpose === "handover" ? this.taken.expiresAt : Date.now() + (this.deps.handoverMs ?? handoverHours() * 3600_000);
+    const what = handoverSentence(step, this.app.employer, opts.labels ?? []);
+    const id = await withApplicant(this.pool, this.auto, async (c) => {
+      if (this.taken?.purpose === "handover") await closeHandover(c, this.taken.handoverId, "resumed");
+      const h = (await c.query(
+        `INSERT INTO apply_handover (applicant_id, run_id, application_id, step, phase, what, expires_at) VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6) RETURNING id`,
+        [this.run.id, this.app.id, step, phase, what, new Date(expiresAt)])).rows[0].id as string;
+      // After Submit the send stays "being sent" (never pressed again) while the applicant finishes the step.
+      if (phase === "after_submit") await c.query(
+        `UPDATE submission_attempt s SET lease_expires_at = $2 FROM application_packet k
+          WHERE s.packet_id = k.id AND k.application_id = $1 AND s.outcome = 'in_progress'`, [this.app.id, new Date(expiresAt)]);
+      await recordAudit(c, "handover.paused", { objectType: "apply_handover", objectId: h,
+        payload: { application_ref: this.app.public_ref, step, phase, expires_at: new Date(expiresAt).toISOString() } });
+      return h;
+    });
+    this.deps.held!.hold({ handoverId: id, applicantId: this.auto.applicantId, userAccountId: this.auto.userAccountId, applicationId: this.app.id, runId: this.run.id,
+      ats: opts.ats, purpose: "handover", step, phase, page, expiresAt, keys: opts.keys });
+    this.kept = true;
+    this.taken = null;
+    await this.run.shot("stopped", `Where ${this.app.employer}'s site needs you`, page, this.deps.cfg).catch(() => {});
+    await this.run.end("handover", null, null, `Your turn: ${what}`);
+    applyLog.info("apply.handover", { run: this.run.id, step, phase });
+    return true;
+  }
+
+  /** A "you're a person" check: the applicant's turn, or the usual stop with "Finish it yourself". */
+  async personCheck(page: ApplyPage | null, ats: string, phase: HandoverPhase = "before_submit"): Promise<Status> {
+    if (await this.pause(page, "person_check", phase, { ats })) return "handover";
+    await this.run.shot("stopped", "Where the employer's site asked for a person", page, this.deps.cfg).catch(() => {});
+    await this.run.finishYourself();
+    await this.run.end("failed", APPLY_PROBLEM.humanCheck);
+    return "failed";
+  }
+
+  /**
+   * A filled form whose send waits for the applicant's approval, after they did a step on it: kept open
+   * (until the step's window ends) so approving sends this same page, without meeting the step again.
+   */
+  keepForApproval(page: ApplyPage | null, ats: string, resumedFrom: HeldSession | null) {
+    if (!page || !resumedFrom || !this.deps.held) return;
+    this.deps.held.hold({ ...resumedFrom, handoverId: `approval:${this.run.id}`, runId: this.run.id, ats, purpose: "approval", page, handedBack: true });
+    this.kept = true;
+  }
+
+  /** Ends the handover this run took back, with how the run ended. */
+  async settle(status: string) {
+    const t = this.taken;
+    if (!t || t.purpose !== "handover") return;
+    const outcome = this.outcome ?? (status === "sent" ? "sent" : status === "unclear" ? "unclear" : status === "failed" || status === "stopped" ? "not_sent" : "resumed");
+    await withApplicant(this.pool, this.auto, (c) => closeHandover(c, t.handoverId, outcome)).catch(() => {});
+  }
+}
+
 /** The background job: one application, start to finish (or to the step that needs the applicant). */
-export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean }, deps: ApplyDeps): Promise<{ status: string }> {
+export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string }> {
   const auto: RequestContext = { ...ctx, actor: "automation" };
+  // The applicant's turn on this application's page: no run touches it until they hand it back (Yong, 2026-11-17).
+  const theirs = deps.held?.all().find((h) => h.applicationId === payload.application_id && h.purpose === "handover");
+  if (theirs && payload.handover !== theirs.handoverId) return { status: "handover" };
   const setup = await withApplicant(pool, auto, async (c) => {
     const app = (await c.query(
       `SELECT a.id, a.public_ref, a.match_id, a.stage, p.public_ref AS job_ref, p.apply_url, p.employer_canonical AS employer, p.title,
               coalesce((SELECT array_agg(ps.url) FROM job_posting_source ps WHERE ps.job_posting_id = p.id), '{}') AS urls
          FROM application a JOIN job_posting p ON p.id = a.job_posting_id WHERE a.id = $1`, [payload.application_id])).rows[0] as AppRow | undefined;
     if (!app) return null;
+    let handover: { id: string; state: string; run_id: string; phase: HandoverPhase } | null = null;
+    if (payload.handover) {
+      handover = (await c.query("SELECT id, state, run_id, phase FROM apply_handover WHERE id = $1 AND application_id = $2", [payload.handover, app.id])).rows[0] ?? null;
+      // Taken back only once the applicant (or the page) handed it back, or after an app update lost it.
+      if (handover && ["waiting", "open"].includes(handover.state) && theirs) return { busy: true as const };
+    }
     let run = (await c.query("SELECT id FROM apply_run WHERE application_id = $1 AND status = 'queued' ORDER BY created_at DESC LIMIT 1", [app.id])).rows[0];
+    if (!run && handover && handover.state !== "closed") run = { id: handover.run_id };
     if (!run) run = (await c.query("INSERT INTO apply_run (applicant_id, application_id) VALUES (app_applicant_id(), $1) RETURNING id", [app.id])).rows[0];
-    await c.query("UPDATE apply_run SET status = 'running', started_at = now(), updated_at = now() WHERE id = $1", [run.id]);
+    await c.query("UPDATE apply_run SET status = 'running', started_at = coalesce(started_at, now()), finished_at = NULL, updated_at = now() WHERE id = $1", [run.id]);
     const mode = ((await c.query("SELECT mode FROM apply_setting")).rows[0]?.mode ?? DEFAULT_APPLY_MODE) as ApplyMode;
-    return { app, runId: run.id as string, mode };
+    return { app, runId: run.id as string, mode, handover };
   });
   if (!setup) return { status: "gone" };
+  if ("busy" in setup) return { status: "handover" };
   const { app, mode } = setup;
   const run = new Run(pool, auto, setup.runId);
-  let page: ApplyPage | null = null;
+  const hand = new Hand(pool, auto, deps, app, run);
+  // A page kept for this application: the applicant's turn just ended, or a filled form waiting for the send's approval.
+  hand.taken = deps.held?.takeForApplication(app.id) ?? null;
+  let page: ApplyPage | null = hand.taken?.page ?? null;
   let clicked = false;
+  let status = "failed";
   try {
+    if (payload.handover && hand.taken?.handoverId !== payload.handover) {
+      // Its page is gone (an app update closed it): end it in plain words, with "Finish it yourself".
+      const ended = setup.handover && setup.handover.state !== "closed"
+        ? await withApplicant(pool, auto, (c) => endWithFallback(c, setup.handover!.id, "lost")) : null;
+      if (ended) return { status: (status = ended) };
+      if (!hand.taken) { await run.end("stopped", null, null, "Nothing to do."); return { status: (status = "stopped") }; }
+    }
+    if (hand.taken) await run.step(hand.taken.purpose === "handover" ? `Taking over again on ${app.employer}'s page` : `Back to ${app.employer}'s filled form`);
+    // After Submit: the applicant did the step their site asked for. Watch for the thank-you; never press again.
+    if (hand.taken?.purpose === "handover" && hand.taken.phase === "after_submit") {
+      return { status: (status = await afterHandBack(pool, auto, deps, app, run, hand, hand.taken)) };
+    }
     const pre = await before(pool, auto, app, mode, payload, run);
-    if (pre) return { status: pre };
+    if (pre) return { status: (status = pre) };
+    if (page && hand.taken) {
+      const ats = hand.taken.ats as Ats;
+      if (ats === "workday") return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, page as WorkdayPage, () => { clicked = true; }, hand)) };
+      return { status: (status = await onForm(pool, auto, deps, app, mode, run, hand, page, ats, () => { clicked = true; })) };
+    }
     // Never LinkedIn or Indeed: any link to the employer's own site first, else the same job found there.
     const links = [app.apply_url, ...app.urls].filter((u): u is string => !!u);
     let url = links.find((u) => !isNoFetchHost(u)) ?? null;
@@ -489,8 +619,7 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
       const wd = await deps.browser.openWorkday(url).catch(() => null);
       if (!wd) { await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
       page = wd;
-      const r = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; });
-      return { status: r };
+      return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }, hand)) };
     }
     page = await deps.browser.open(url).catch(() => null);
     if (!page) { await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
@@ -503,85 +632,22 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
       const wd = await deps.browser.openWorkday(page.url()).catch(() => null);
       if (!wd) { page = null; await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
       page = wd;
-      return { status: await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }) };
+      return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }, hand)) };
     }
     if (!SERVER_APPLY_ATS.includes(ats) || ats === "workday") {
       await run.shot("stopped", "The employer's page", page, deps.cfg);
       await run.end("failed", APPLY_PROBLEM.unsupported(formHost));
       return { status: "failed" };
     }
-    await run.step(`Finding the application form on ${formHost}`);
-    let form = await page.openForm(ats);
-    if (form.humanCheck || form.captcha) {
-      await run.shot("stopped", "Where the employer's site asked for a person", page, deps.cfg);
-      await run.end("failed", APPLY_PROBLEM.humanCheck);
-      return { status: "failed" };
-    }
-    if (!form.fields.length) {
-      const now = await page.now();
-      await run.shot("stopped", "The employer's page", page, deps.cfg);
-      await run.end("failed", /no longer (available|accepting)|position (has been )?(filled|closed)|job (is )?closed|page (was )?not found|404/i.test(now.text) ? APPLY_PROBLEM.closed : APPLY_PROBLEM.noForm);
-      return { status: "failed" };
-    }
-    // Answer, approve (as the setting allows), fill; read the form again, since answers can bring up more questions.
-    const filledKeys = new Set<string>();
-    let labels = new Map<string, string>();
-    for (let round = 0; round < 3; round++) {
-      const r = await prepare(pool, auto, deps, app, mode, run, form, ats, { prefilled: prefilledOf(form) });
-      if (r.stop) return { status: r.stop };
-      await run.step(`Filling in ${r.fill.length} answers${r.fill.some((f) => f.file) ? " and attaching your documents" : ""}`);
-      const results = await page.fill(r.fill);
-      const failed = results.filter((x) => x.status !== "filled");
-      for (const x of results) if (x.status === "filled") filledKeys.add(x.key);
-      labels = new Map([...labels, ...r.labels]);
-      await markFilled(pool, auto, r.packetId, results);
-      const missedRequired = failed.filter((x) => r.requiredKeys.has(x.key));
-      if (missedRequired.length) {
-        await run.shot("stopped", "The form where an answer didn't fit", page, deps.cfg);
-        await run.end("failed", `TC Hunter couldn't put ${missedRequired.length === 1 ? "an answer" : `${missedRequired.length} answers`} into their form (${missedRequired.map((x) => `"${r.labels.get(x.key) ?? x.key}"`).slice(0, 3).join(", ")}). Nothing was sent. Check the answer, or apply on their site yourself.`);
-        return { status: "failed" };
-      }
-      const again = await page.readForm();
-      if (again.humanCheck || again.captcha) {
-        await run.shot("stopped", "Where the employer's site asked for a person", page, deps.cfg);
-        await run.end("failed", APPLY_PROBLEM.humanCheck);
-        return { status: "failed" };
-      }
-      // Only new questions count. A dropdown that lists its choices once it has been opened (Greenhouse's new
-      // forms do) changes the form's shape but asks nothing new; treating it as new made a fresh packet to
-      // approve on every run, round and round (Dollar Shave Club, 2026-11-17).
-      const known = new Set(form.fields.map((f) => f.key));
-      if (!again.fields.some((f) => !known.has(f.key))) break;
-      if (round === 2) { await run.end("failed", "Their form kept changing as answers went in, so TC Hunter stopped. Nothing was sent."); return { status: "failed" }; }
-      await run.step("More questions appeared after the first answers; answering those too");
-      form = again;
-    }
-    // Last look before sending: every required question has an answer in their form and every
-    // required file is attached. Anything missing stops it here, before Submit, so nothing is sent.
-    const check = await page.readForm();
-    const empty = check.fields.filter((f) => f.required && f.hasValue === false && (f.type === "file" || !filledKeys.has(f.key)));
-    if (empty.length) {
-      await run.shot("stopped", "Their form, with what's still empty", page, deps.cfg);
-      const names = empty.map((f) => `"${labels.get(f.key) ?? f.label}"`).slice(0, 3).join(", ");
-      await run.end("failed", empty.some((f) => f.type === "file")
-        ? `${app.employer}'s form still needs ${names}: the file didn't attach. TC Hunter stopped before pressing Submit, so nothing was sent. Choose Try again, or apply on their site yourself.`
-        : `${app.employer}'s form still needs ${names}. TC Hunter stopped before pressing Submit, so nothing was sent. Answer it below, then choose Try again.`);
-      return { status: "failed" };
-    }
-    // The filled form: its fingerprint is what gets approved and sent.
-    const filled = await page.filledHash();
-    const ready = await readyForSend(pool, auto, deps.cfg, app, mode, filled, run);
-    await run.shot("form_filled", "Their form, filled in, before sending", page, deps.cfg);
-    if (ready !== "go") return { status: ready };
-    const adapter = (ADAPTERS as Record<string, { submit: string }>)[ats]!;
-    return { status: await pressSubmit(pool, auto, deps, app, run, page, ats, adapter.submit, () => { clicked = true; }) };
+    return { status: (status = await onForm(pool, auto, deps, app, mode, run, hand, page, ats, () => { clicked = true; })) };
   } catch (e) {
     const detail = String((e as Error)?.message ?? e).slice(0, 300);
     applyLog.warn("apply.error", { host: (() => { try { return new URL(page?.url() ?? "").host; } catch { return ""; } })(), clicked, detail: detail.replace(/[^\s@]+@[^\s@]+/g, "[email]") });
+    hand.kept = false;
     if (clicked) {
       await settleAfterClickError(pool, auto, app);
       await run.end("unclear", `TC Hunter pressed Submit, then lost track of ${app.employer}'s page. Nothing will be sent again. It's checking your email for their confirmation; if none comes, tell TC Hunter below whether it went through.`);
-      return { status: "unclear" };
+      return { status: (status = "unclear") };
     }
     await run.shot("stopped", "Where it stopped", page, deps.cfg).catch(() => {});
     const retry = await withApplicant(pool, auto, async (c) => (await c.query(
@@ -592,8 +658,130 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
     if (retry) await withApplicant(pool, auto, (c) => queueApply(c, app.id, { retry: true }, 600));
     return { status: "failed" };
   } finally {
-    await page?.close().catch(() => {});
+    await hand.settle(status);
+    // A page handed to the applicant (or kept for the send's approval) stays open; every other page is closed.
+    if (!hand.kept) await page?.close().catch(() => {});
   }
+}
+
+/** The employer's form on an open page (a fresh one, or the page the applicant handed back): answer, approve, fill, send. */
+async function onForm(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, mode: ApplyMode, run: Run, hand: Hand,
+  page: ApplyPage, ats: Ats, onClick: () => void): Promise<Status> {
+  const formHost = (() => { try { return new URL(page.url()).hostname; } catch { return ""; } })();
+  const resumedFrom = hand.taken;
+  // The applicant may have pressed Submit themselves while it was their turn: never fill or press again then.
+  if (resumedFrom) {
+    const now = await page.now().catch(() => null);
+    if (now && looksConfirmed(ats, now.url, now.text)) return thanksAfterTheirSubmit(pool, auto, deps, app, run, page, now.text);
+  }
+  await run.step(`Finding the application form on ${formHost}`);
+  let form = await page.openForm(ats);
+  if (form.humanCheck || form.captcha) return hand.personCheck(page, ats);
+  if (!form.fields.length) {
+    const now = await page.now();
+    await run.shot("stopped", "The employer's page", page, deps.cfg);
+    await run.end("failed", /no longer (available|accepting)|position (has been )?(filled|closed)|job (is )?closed|page (was )?not found|404/i.test(now.text) ? APPLY_PROBLEM.closed : APPLY_PROBLEM.noForm);
+    if (resumedFrom) hand.outcome = "job_closed";
+    return "failed";
+  }
+  // Answer, approve (as the setting allows), fill; read the form again, since answers can bring up more questions.
+  const filledKeys = new Set<string>();
+  let labels = new Map<string, string>();
+  let personal = new Set<string>();
+  const canHand = hand.possible(page);
+  for (let round = 0; round < 3; round++) {
+    const r = await prepare(pool, auto, deps, app, mode, run, form, ats, { prefilled: prefilledOf(form), canHandOver: canHand });
+    if (r.stop) {
+      // Waiting for the applicant's approval of the answers, after they did a step on this page: the page stays open for it.
+      if (r.stop === "waiting") hand.keepForApproval(page, ats, resumedFrom);
+      return r.stop;
+    }
+    await run.step(`Filling in ${r.fill.length} answers${r.fill.some((f) => f.file) ? " and attaching your documents" : ""}`);
+    const results = await page.fill(r.fill);
+    const failed = results.filter((x) => x.status !== "filled");
+    for (const x of results) if (x.status === "filled") filledKeys.add(x.key);
+    labels = new Map([...labels, ...r.labels]);
+    personal = new Set([...personal, ...r.personalKeys]);
+    await markFilled(pool, auto, r.packetId, results);
+    const missedRequired = failed.filter((x) => r.requiredKeys.has(x.key));
+    if (missedRequired.length) {
+      await run.shot("stopped", "The form where an answer didn't fit", page, deps.cfg);
+      await run.end("failed", `TC Hunter couldn't put ${missedRequired.length === 1 ? "an answer" : `${missedRequired.length} answers`} into their form (${missedRequired.map((x) => `"${r.labels.get(x.key) ?? x.key}"`).slice(0, 3).join(", ")}). Nothing was sent. Check the answer, or apply on their site yourself.`);
+      return "failed";
+    }
+    const again = await page.readForm();
+    if (again.humanCheck || again.captcha) return hand.personCheck(page, ats);
+    // Only new questions count. A dropdown that lists its choices once it has been opened (Greenhouse's new
+    // forms do) changes the form's shape but asks nothing new; treating it as new made a fresh packet to
+    // approve on every run, round and round (Dollar Shave Club, 2026-11-17).
+    const known = new Set(form.fields.map((f) => f.key));
+    if (!again.fields.some((f) => !known.has(f.key))) break;
+    if (round === 2) { await run.end("failed", "Their form kept changing as answers went in, so TC Hunter stopped. Nothing was sent."); return "failed"; }
+    await run.step("More questions appeared after the first answers; answering those too");
+    form = again;
+  }
+  // Last look before sending: every required question has an answer in their form and every
+  // required file is attached. Anything missing stops it here, before Submit, so nothing is sent.
+  const check = await page.readForm();
+  const empty = check.fields.filter((f) => f.required && f.hasValue === false && (f.type === "file" || !filledKeys.has(f.key)));
+  if (empty.length) {
+    // Only statements the applicant makes themselves are left: their turn, on this page (Yong, 2026-11-17).
+    if (empty.every((f) => personal.has(f.key))
+      && await hand.pause(page, "attestation", "before_submit", { ats, labels: empty.map((f) => labels.get(f.key) ?? f.label), keys: empty.map((f) => f.key) })) return "handover";
+    await run.shot("stopped", "Their form, with what's still empty", page, deps.cfg);
+    const names = empty.map((f) => `"${labels.get(f.key) ?? f.label}"`).slice(0, 3).join(", ");
+    if (empty.every((f) => personal.has(f.key))) await run.finishYourself();
+    await run.end("failed", empty.some((f) => f.type === "file")
+      ? `${app.employer}'s form still needs ${names}: the file didn't attach. TC Hunter stopped before pressing Submit, so nothing was sent. Choose Try again, or apply on their site yourself.`
+      : empty.every((f) => personal.has(f.key))
+        ? `${app.employer}'s form still needs ${names}, which only you can answer. TC Hunter stopped before pressing Submit, so nothing was sent. Choose Finish it yourself to apply on their site with your answers one tap away.`
+        : `${app.employer}'s form still needs ${names}. TC Hunter stopped before pressing Submit, so nothing was sent. Answer it below, then choose Try again.`);
+    return "failed";
+  }
+  // The filled form: its fingerprint is what gets approved and sent.
+  const filled = await page.filledHash();
+  const ready = await readyForSend(pool, auto, deps.cfg, app, mode, filled, run);
+  await run.shot("form_filled", "Their form, filled in, before sending", page, deps.cfg);
+  if (ready !== "go") {
+    // The applicant did a step on this page: keep it open for their approval, so the send doesn't meet the step again.
+    if (ready === "waiting") hand.keepForApproval(page, ats, resumedFrom);
+    return ready;
+  }
+  const adapter = (ADAPTERS as Record<string, { submit: string }>)[ats]!;
+  return pressSubmit(pool, auto, deps, app, run, page, ats, adapter.submit, onClick, hand);
+}
+
+/**
+ * While it was their turn before Submit, the applicant pressed Submit themselves and the thank-you page
+ * shows. TC Hunter never presses again; the send is theirs, so they confirm it with the usual control,
+ * the confirmation number filled in from the page.
+ */
+async function thanksAfterTheirSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, page: ApplyPage, text: string): Promise<Status> {
+  await withApplicant(pool, auto, async (c) => {
+    const k = (await c.query("SELECT id, version, state FROM application_packet WHERE application_id = $1 AND state IN ('filling','ready_to_submit','waiting_for_applicant') ORDER BY version DESC LIMIT 1", [app.id])).rows[0];
+    if (k) await settleUnclear(c, { id: k.id, app_ref: app.public_ref, version: k.version });
+  });
+  await run.shot("after_submit", `${app.employer}'s confirmation page`, page, deps.cfg);
+  const found = confirmationIn(text);
+  await run.end("unclear", `${app.employer}'s thank-you page is showing${found && CONF_RE.test(found) ? ` (confirmation number ${found})` : ""}, so it looks like you pressed Submit yourself. TC Hunter didn't press it. Choose "It went through" below to record it.`);
+  return "unclear";
+}
+
+/**
+ * The applicant did the step the employer's site asked for after Submit, and handed the page back.
+ * TC Hunter watches for the thank-you page and records it; it never presses Submit again.
+ */
+async function afterHandBack(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, hand: Hand, held: HeldSession): Promise<Status> {
+  const page = held.page;
+  const k = await withApplicant(pool, auto, async (c) => (await c.query(
+    "SELECT id, version, application_id FROM application_packet WHERE application_id = $1 AND state = 'ready_to_submit' AND submission_key_used_at IS NOT NULL ORDER BY version DESC LIMIT 1", [app.id])).rows[0] as { id: string; version: number; application_id: string } | undefined);
+  if (!k) {
+    // Already settled another way (the applicant said whether it went through).
+    await run.end("stopped", null, null, "Already settled. Nothing more to do.");
+    return "stopped";
+  }
+  await run.step(`Waiting for ${app.employer}'s confirmation`);
+  return watchForThanks(pool, auto, deps, app, run, page, held.ats as Ats, k, null, hand);
 }
 
 /** Checks before opening any page: already applied, an unclear earlier send, documents, this week's limit. */
@@ -631,7 +819,9 @@ async function before(pool: pg.Pool, auto: RequestContext, app: AppRow, mode: Ap
 
 const prefilledOf = (form: PageForm) => new Set(form.fields.filter((f) => f.hasValue).map((f) => f.key));
 
-interface Prepared { stop?: undefined; packetId: string; fill: FillItem[]; requiredKeys: Set<string>; labels: Map<string, string> }
+interface Prepared { stop?: undefined; packetId: string; fill: FillItem[]; requiredKeys: Set<string>; labels: Map<string, string>;
+  /** Required statements and personal questions left for the applicant to make on the page themselves (no standing answer). */
+  personalKeys: Set<string> }
 
 /**
  * The packet for the form as read now: answers proposed, the applicant's earlier typed answers
@@ -639,7 +829,7 @@ interface Prepared { stop?: undefined; packetId: string; fill: FillItem[]; requi
  * Returns what to type, or why it stopped.
  */
 async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, mode: ApplyMode,
-  run: Run, form: PageForm, ats: Ats, opts: { workdayPage?: boolean; prefilled?: Set<string>; inferCache?: InferCache } = {}): Promise<Prepared | { stop: Status }> {
+  run: Run, form: PageForm, ats: Ats, opts: { workdayPage?: boolean; prefilled?: Set<string>; inferCache?: InferCache; canHandOver?: boolean } = {}): Promise<Prepared | { stop: Status }> {
   const keyPrefix = "";
   const fields = cleanForm(form.fields);
   const prefilled = opts.prefilled ?? new Set<string>();
@@ -670,7 +860,9 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     const fill = (f: { step_kind: string | null; answer_value_enc: Buffer | null; confidence: string | number | null; source: string | null }) =>
       willFill({ step: f.step_kind as never, answer: f.answer_value_enc ? "x" : null, confidence: Number(f.confidence ?? 0), source: f.source as never });
     // Required questions with no answer TC Hunter is sure of (a value the site filled in itself, as Workday does from the resume, counts).
-    const missing = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key));
+    // A statement only the applicant may make (no standing answer) is theirs to do on the page itself when it can be handed to them.
+    const personal = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && PERSONAL_STEPS.has(f.step_kind ?? ""));
+    const missing = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && !(opts.canHandOver && personal.includes(f)));
     if (missing.length) {
       return { stop: "waiting" as Status, waitingFor: "answers",
         problem: `${missing.length === 1 ? "1 question needs" : `${missing.length} questions need`} your answer before TC Hunter can send this: ${missing.slice(0, 4).map((f) => `"${f.question_as_shown}"`).join(", ")}${missing.length > 4 ? " and more" : ""}. Answer below and TC Hunter carries on by itself.` };
@@ -695,6 +887,7 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     return {
       packetId: k.id as string, docs, labels: new Map(rows.map((f) => [String(f.field_key).slice(keyPrefix.length), f.question_as_shown as string])),
       requiredKeys: new Set(rows.filter((f) => f.required).map((f) => String(f.field_key).slice(keyPrefix.length))),
+      personalKeys: new Set(personal.map((f) => String(f.field_key).slice(keyPrefix.length))),
       items: rows.filter(fill).map((f) => ({ key: String(f.field_key).slice(keyPrefix.length), type: f.field_type, docId: f.source === "tailored_doc" && f.field_type === "file" ? f.source_ref_id : null,
         value: decryptField(dk, "packet_field.answer_value", f.answer_value_enc) })),
     };
@@ -703,7 +896,7 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     await run.end(result.stop, result.problem ?? null, result.waitingFor, (result as { step?: string }).step);
     return { stop: result.stop };
   }
-  const r = result as { packetId: string; docs: Array<{ id: string; public_ref: string }>; labels: Map<string, string>; requiredKeys: Set<string>; items: Array<{ key: string; type: string; value: string; docId: string | null }> };
+  const r = result as { packetId: string; docs: Array<{ id: string; public_ref: string }>; labels: Map<string, string>; requiredKeys: Set<string>; personalKeys: Set<string>; items: Array<{ key: string; type: string; value: string; docId: string | null }> };
   const session = { userAccountId: auto.userAccountId, applicantId: auto.applicantId } as Session;
   const files = new Map<string, { name: string; mime: string; bytes: Uint8Array }>();
   for (const d of r.docs) {
@@ -711,7 +904,7 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     files.set(d.id, { name: out.fileName, mime: out.contentType, bytes: out.bytes });
   }
   return {
-    packetId: r.packetId, requiredKeys: r.requiredKeys, labels: r.labels,
+    packetId: r.packetId, requiredKeys: r.requiredKeys, labels: r.labels, personalKeys: r.personalKeys,
     fill: r.items.map((i) => ({ key: i.key, type: i.type as FillItem["type"], value: i.docId ? null : i.value, file: i.docId ? files.get(i.docId) ?? null : null })),
   };
 }
@@ -750,7 +943,7 @@ async function readyForSend(pool: pg.Pool, auto: RequestContext, cfg: AppConfig,
 const CONF_RE = /^[A-Za-z0-9-]{4,41}$/;
 
 /** Spends the single-use key, presses Submit once, and reads the page for the thank-you. */
-async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, page: ApplyPage, ats: Ats, selector: string, onClick: () => void): Promise<Status> {
+async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, page: ApplyPage, ats: Ats, selector: string, onClick: () => void, hand: Hand): Promise<Status> {
   const k = await withApplicant(pool, auto, async (c) => {
     const k = (await c.query("SELECT * FROM application_packet WHERE application_id = $1 AND state = 'ready_to_submit' ORDER BY version DESC LIMIT 1 FOR UPDATE", [app.id])).rows[0];
     if (!k || !(await consumeSubmissionKey(c, k.id))) return null;
@@ -776,6 +969,17 @@ async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps,
     return "failed";
   }
   await run.step(`Waiting for ${app.employer}'s confirmation`);
+  return watchForThanks(pool, auto, deps, app, run, page, ats, k, selector, hand);
+}
+
+/**
+ * After the one press of Submit (or after the applicant handed back a step their site asked for then):
+ * reads the page for the thank-you and records it. A "you're a person" check here is the applicant's
+ * turn (Crusoe, 2026-11-17); Submit is never pressed again. `selector` is null when it may not press
+ * anything at all (after a hand back), not even to finish with an emailed code.
+ */
+async function watchForThanks(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, page: ApplyPage, ats: Ats,
+  k: { id: string; version: number; application_id: string }, selector: string | null, hand: Hand): Promise<Status> {
   const until = Date.now() + (deps.confirmWaitMs ?? 45_000);
   let last = { url: "", text: "", errors: [] as string[], humanCheck: false };
   let errorsSince = 0;
@@ -797,9 +1001,13 @@ async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps,
       await run.end("sent", null, null, `Sent. ${conf ? `${app.employer}'s confirmation number: ${conf}.` : `${app.employer} showed their thank-you page (no confirmation number).`}`);
       return "sent";
     }
+    // The site asked for a person after Submit: the applicant's turn on this same page.
+    if (last.humanCheck && !securityCodeAsked(last.text) && hand.possible(page)) {
+      if (await hand.pause(page, "person_check", "after_submit", { ats })) return "handover";
+    }
     // The site emailed the applicant a security code and waits for it (Greenhouse). Yong (2026-11-17): read it
     // from their Gmail, enter it and finish sending. Once per application; without the code nothing was sent.
-    if (!codeTried && securityCodeAsked(last.text) && page.enterSecurityCode) {
+    if (selector && !codeTried && securityCodeAsked(last.text) && page.enterSecurityCode) {
       codeTried = true;
       const done = await finishWithCode(pool, auto, deps, app, run, page, k, selector, last.text);
       if (done) return done;
@@ -812,9 +1020,13 @@ async function pressSubmit(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps,
   }
   await run.shot("after_submit", "What their page showed after Submit", page, deps.cfg);
   await withApplicant(pool, auto, async (c) => settleUnclear(c, { id: k.id, app_ref: app.public_ref, version: k.version }));
-  const why = last.humanCheck ? ` Their site then asked for a "you're a person" check, which TC Hunter never does.`
+  const closed = /no longer (available|accepting)|position (has been )?(filled|closed)|job (is )?closed/i.test(last.text);
+  if (closed) hand.outcome = "job_closed";
+  else if (last.errors.length) hand.outcome = "rejected";
+  const why = closed ? ` Their page now says the job is closed, so it most likely wasn't accepted.`
+    : last.humanCheck ? ` Their site then asked for a "you're a person" check, which TC Hunter never does.`
     : last.errors.length ? ` Their form showed: ${last.errors.slice(0, 3).map((e) => `"${e}"`).join(", ")}. That usually means it wasn't sent.` : "";
-  await run.end("unclear", `TC Hunter pressed Submit, but ${app.employer}'s thank-you page didn't appear.${why} Nothing will be sent again. It's checking your email for their confirmation; if none comes, tell TC Hunter below whether it went through.`);
+  await run.end("unclear", `TC Hunter pressed Submit, but ${app.employer}'s thank-you page didn't appear.${why} Nothing will be sent again. It's checking your email for their confirmation; if none comes, finish it yourself or tell TC Hunter below whether it went through.`);
   return "unclear";
 }
 
@@ -870,7 +1082,10 @@ async function settleAfterClickError(pool: pg.Pool, auto: RequestContext, app: A
 // Workday: an account on the employer's site, then a form over several pages
 // ---------------------------------------------------------------------------
 
-async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, wd: WorkdayPage, tenant: string): Promise<"ok" | Status> {
+async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, wd: WorkdayPage, tenant: string, hand: Hand): Promise<"ok" | Status> {
+  /** Signing in failed in a way only the applicant can fix on the site: their turn to sign in there, else the usual message. */
+  const theirSignIn = async (fallback: () => Promise<"ok" | Status>): Promise<"ok" | Status> =>
+    (await hand.pause(wd, "sign_in", "before_submit", { ats: "workday" })) ? "handover" : fallback();
   const info = await withApplicant(pool, auto, async (c) => {
     const dk = await dataKeyFor(c, deps.cfg, auto.applicantId);
     const a = (await c.query("SELECT email_enc FROM applicant WHERE id = app_applicant_id()")).rows[0];
@@ -889,7 +1104,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       await withApplicant(pool, auto, (c) => c.query("UPDATE site_account SET verified_at = coalesce(verified_at, now()), updated_at = now() WHERE site_host = $1", [tenant]));
       return "ok";
     }
-    if (r === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+    if (r === "human_check") { return hand.personCheck(wd, "workday"); }
     if (r === "site_error") {
       // Signed in, but Workday's own page failed ("Something went wrong") even after refreshing. Not the
       // password: wait a minute and open the job again, once. Nothing was sent.
@@ -900,7 +1115,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
         const again = await wd.reopen();
         if (again === "form") return "ok";
         if (again === "sign_in") return signIn(password, mayCreate);
-        if (again === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+        if (again === "human_check") { return hand.personCheck(wd, "workday"); }
         // "closed" here means neither the form nor sign-in showed: still the error page.
       }
       await run.shot("stopped", "Workday's error page", wd, deps.cfg);
@@ -929,9 +1144,11 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       }
     }
     if (!recovering) { recovering = true; return recover(password); }
-    await run.shot("stopped", "The sign-in page", wd, deps.cfg);
-    await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
-    return "waiting";
+    return theirSignIn(async () => {
+      await run.shot("stopped", "The sign-in page", wd, deps.cfg);
+      await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
+      return "waiting";
+    });
   };
   let siteRetried = false, recovering = false, verifiedTries = 0, createdThisRun = false, waitedForVerify = false;
   /**
@@ -952,18 +1169,18 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
           await withApplicant(pool, auto, (c) => c.query("UPDATE site_account SET verified_at = now(), updated_at = now() WHERE site_host = $1", [tenant]));
           return "ok";
         }
-        if (r === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+        if (r === "human_check") { return hand.personCheck(wd, "workday"); }
       }
     }
-    if (!info.mail || !wd.forgotPassword || !wd.setPassword) {
+    if (!info.mail || !wd.forgotPassword || !wd.setPassword) return theirSignIn(async () => {
       await run.shot("stopped", "The sign-in page", wd, deps.cfg);
       await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. ${info.mail ? "Reset it on their site" : "Connect Gmail in Settings and TC Hunter resets it for you, or reset it on their site"}, or apply there yourself this time.`, "sign_in");
       return "waiting";
-    }
+    });
     await run.step(`Resetting the password on ${app.employer}'s Workday site ("Forgot your password?")`);
     const fresh = newSitePassword();
     const asked = await wd.forgotPassword(info.email!);
-    if (asked === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+    if (asked === "human_check") { return hand.personCheck(wd, "workday"); }
     if (asked === "failed") {
       await run.shot("stopped", "The password reset page", wd, deps.cfg);
       await run.end("waiting", `TC Hunter couldn't ask ${app.employer}'s Workday site for a password reset. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
@@ -983,11 +1200,11 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       return "waiting";
     }
     await run.step("Setting a new password with the link from your email");
-    if (!(await wd.setPassword(link, fresh))) {
+    if (!(await wd.setPassword(link, fresh))) return theirSignIn(async () => {
       await run.shot("stopped", "The new password page", wd, deps.cfg);
       await run.end("waiting", `TC Hunter couldn't set a new password on ${app.employer}'s Workday site. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
       return "waiting";
-    }
+    });
     return signIn(fresh, false);
   };
   const verify = async (): Promise<"ok" | Status> => {
@@ -1026,7 +1243,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     if (fresh) await keepPassword(password);
     createdThisRun = true;
     const made = await wd.createAccount(info.email!, password);
-    if (made === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+    if (made === "human_check") { return hand.personCheck(wd, "workday"); }
     if (made === "exists") {
       if (!recovering) { recovering = true; return recover(password); }
       await run.end("waiting", `You already have an account on ${app.employer}'s Workday site, and its password reset email hasn't arrived yet. Choose Try again in a few minutes and TC Hunter looks again.`, "email_link");
@@ -1046,7 +1263,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
 
   if (info.acct) {
     const secret = await deps.vault.get(auto.applicantId, info.acct.vault_ref);
-    if (!secret) { await run.end("waiting", `TC Hunter lost the password for ${app.employer}'s Workday site. Reset it on their site, or apply there yourself.`, "sign_in"); return "waiting"; }
+    if (!secret) return theirSignIn(async () => { await run.end("waiting", `TC Hunter lost the password for ${app.employer}'s Workday site. Reset it on their site, or apply there yourself.`, "sign_in"); return "waiting"; });
     // An account TC Hunter kept a password for but never saw confirmed may not exist yet: making it is the next try.
     const r = await signIn(secret.reveal(), !info.acct.verified_at);
     if (r === ("create" as Status)) return create(secret.reveal(), false);
@@ -1072,14 +1289,15 @@ async function waitForLink(deps: ApplyDeps, applicantId: string, mailRef: string
   return null;
 }
 
-async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode: ApplyMode, payload: { anyway?: boolean }, deps: ApplyDeps, run: Run, wd: WorkdayPage, onClick: () => void): Promise<Status> {
+async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode: ApplyMode, payload: { anyway?: boolean }, deps: ApplyDeps, run: Run, wd: WorkdayPage, onClick: () => void, hand: Hand): Promise<Status> {
+  const resumedFrom = hand.taken;
   const tenant = workdayTenant(wd.url()) ?? "workday";
   await run.meta({ ats: "workday", form_host: tenant });
   const start = await wd.start();
   if (start === "closed") { await run.end("failed", APPLY_PROBLEM.closed); return "failed"; }
-  if (start === "human_check") { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+  if (start === "human_check") { return hand.personCheck(wd, "workday"); }
   if (start === "sign_in") {
-    const a = await workdayAccount(pool, auto, deps, app, run, wd, tenant);
+    const a = await workdayAccount(pool, auto, deps, app, run, wd, tenant, hand);
     if (a !== "ok") return a;
   }
   // Page by page: every page's questions go into one packet (keys carry the page number).
@@ -1088,13 +1306,13 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
   const inferCache: InferCache = new Map();
   for (let n = 1; n <= 12; n++) {
     const pg = await wd.page();
-    if (pg.form.humanCheck || pg.form.captcha) { await run.shot("stopped", "Where the site asked for a person", wd, deps.cfg); await run.end("failed", APPLY_PROBLEM.humanCheck); return "failed"; }
+    if (pg.form.humanCheck || pg.form.captcha) { return hand.personCheck(wd, "workday"); }
     if (pg.review) break;
     await run.step(`Workday page ${n}: ${pg.title || "questions"}`);
     const prefix = `p${n}|`;
     all.push(...pg.form.fields.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
     for (const f of pg.form.fields) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
-    const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache });
+    const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache, canHandOver: hand.possible(wd) });
     if ("stop" in r && r.stop) {
       // What the page asked, with the site's own choices, so a stop can be explained from the logs (no answers).
       applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, stopped: true, fields: pg.form.fields.map((f) =>
@@ -1115,7 +1333,7 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
       all.push(...added.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
       for (const f of added) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
       applyLog.info("workday.follow_up", { run: run.id, page: n, asked: added.map((f) => f.label.slice(0, 80)).join(" | ").slice(0, 600) });
-      const r2 = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache });
+      const r2 = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache, canHandOver: hand.possible(wd) });
       if ("stop" in r2 && r2.stop) {
         applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, stopped: true, fields: added.map((f) => `${f.label} [${f.type}]`).join(" | ").slice(0, 3000) });
         return r2.stop;
@@ -1130,6 +1348,9 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
       return `${f.label} [${f.type}${f.options ? `, ${f.options.length} choices` : ""}${f.hasValue ? ", had value" : ""}] ${r ? r.status : "not filled"}`;
     }).join(" | ").slice(0, 3000) });
     await markFilled(pool, auto, p.packetId, results, prefix);
+    // Statements on this page only the applicant may make: their turn, on this page, before moving on.
+    const theirs = pg.form.fields.filter((f) => p.personalKeys.has(`${prefix}${f.key}`));
+    if (theirs.length && await hand.pause(wd, "attestation", "before_submit", { ats: "workday", labels: theirs.map((f) => f.label), keys: theirs.map((f) => f.key) })) return "handover";
     const next = await wd.next();
     if (!next.moved) {
       await run.shot("stopped", `Workday page ${n}, where it stopped`, wd, deps.cfg);
@@ -1160,8 +1381,11 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
   const filled = sha(`workday|${(await wd.now()).text}`);
   const ready = await readyForSend(pool, auto, deps.cfg, app, mode, await wd.filledHash().catch(() => filled), run);
   await run.shot("form_filled", "Their Workday Review page, before sending", wd, deps.cfg);
-  if (ready !== "go") return ready;
-  return pressSubmit(pool, auto, deps, app, run, wd, "workday", WORKDAY.submit, onClick);
+  if (ready !== "go") {
+    if (ready === "waiting") hand.keepForApproval(wd, "workday", resumedFrom);
+    return ready;
+  }
+  return pressSubmit(pool, auto, deps, app, run, wd, "workday", WORKDAY.submit, onClick, hand);
 }
 
 

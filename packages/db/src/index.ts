@@ -20,5 +20,6 @@ export * from "./email";
 export * from "./assist";
 export * from "./resumes";
 export * from "./autoApply";
+export * from "./handover";
 export * from "./profileFill";
 export * from "./answerFacts";
