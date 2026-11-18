@@ -10,7 +10,7 @@
     "start": 1,
     "step": 1,
     "maxPages": 400,
-    "link": "^https://careers\\.cognizant\\.com/global-en/jobs/\\d{8,}/[a-z0-9-]+/",
+    "link": "^https://careers\\.cognizant\\.com/global-en/jobs/\\d{5,}/[a-z0-9-]+/",
     "total": "Displaying\\s+[\\d,]+\\s+to\\s+[\\d,]+\\s+of\\s+([\\d,]+)"
   },
   {
@@ -39,7 +39,7 @@
     "start": 0,
     "step": 10,
     "maxPages": 400,
-    "link": "^https://apply\\.deloitte\\.com/en_US/careers/JobDetail/[^/?#]+/\\d+",
+    "link": "^https://apply\\.deloitte\\.com/en_US/careers/JobDetail/(?:[^/?#]+/)?\\d+",
     "total": "[\\d,]+\\s*-\\s*[\\d,]+\\s+of\\s+([\\d,]+)\\s+jobs",
     "detail": "article.article--details",
     "ld": false
@@ -59,7 +59,7 @@
       "size": 100,
       "hits": "hits.hits",
       "totalAt": "hits.total.value",
-      "body": "{\"appId\":\"careers\",\"scopes\":[\"careers2\"],\"query\":{\"bool\":{\"must\":[]}},\"size\":100,\"from\":{from},\"sort\":[{\"_id\":\"asc\"}],\"lang\":\"zz\",\"localeSelector\":{},\"sm\":{\"query\":\"\",\"lang\":\"zz\"}}",
+      "body": "{\"appId\":\"careers\",\"scopes\":[\"careers2\"],\"query\":{\"bool\":{\"must\":[]}},\"size\":100,\"from\":{from},\"sort\":[{\"_id\":\"asc\"}],\"lang\":\"zz\",\"localeSelector\":{},\"sm\":{\"query\":\"\",\"lang\":\"zz\"},\"_source\":[\"_id\",\"title\",\"url\",\"field_keyword_19\"]}",
       "fields": {
         "title": "title",
         "url": "url",
@@ -101,7 +101,7 @@
     "start": 0,
     "step": 10,
     "maxPages": 400,
-    "link": "^https://jobs\\.lenovo\\.com/en_US/careers/JobDetail/[^/?#]+/\\d+",
+    "link": "^https://jobs\\.lenovo\\.com/en_US/careers/JobDetail/(?:[^/?#]+/)?\\d+",
     "total": "[\\d,]+\\s*-\\s*[\\d,]+\\s+of\\s+([\\d,]+)\\s+jobs",
     "detail": "article.article--details",
     "ld": false

@@ -880,6 +880,8 @@ export async function listSources(pool: pg.Pool, session: Session) {
        (SELECT r.read_at FROM relayed_read r WHERE r.job_source_id = s.id AND r.error IS NULL) AS relayed_at,
        (SELECT r.error FROM relayed_read r WHERE r.job_source_id = s.id) AS relayed_error,
        (SELECT r.read_at FROM relayed_read r WHERE r.job_source_id = s.id) AS relayed_tried_at,
+       (SELECT r.listed FROM relayed_read r WHERE r.job_source_id = s.id AND r.error IS NULL) AS relayed_listed,
+       (SELECT r.checked FROM relayed_read r WHERE r.job_source_id = s.id AND r.error IS NULL) AS relayed_checked,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
 }

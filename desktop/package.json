@@ -1,7 +1,7 @@
 {
   "name": "tc-hunter-desktop",
   "productName": "TC Hunter",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "TC Hunter for Mac: the TC Hunter app in its own window, with the Workday reader built in.",
   "main": "main.js",

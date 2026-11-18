@@ -58,19 +58,33 @@ async function stillOk(w) {
 
 async function listByPages(w, r) {
   const jobs = new Map();
-  let listed = null;
-  for (let i = 0; i < (r.maxPages || 500); i++) {
-    if (i) await sleep(GAP_MS);
-    const url = r.list.replace("{n}", String((r.start || 0) + i * (r.step || 1)));
+  let listed = null, empty = 0;
+  const totalOf = (t) => { if (!r.total) return null; const m = new RegExp(r.total, "i").exec(t); return m ? Number(String(m[1]).replace(/[^0-9]/g, "")) || null : null; };
+  const readPage = async (url) => {
     await load(w, url);
     await sleep(1500);  // the list fills in after the page loads on some portals
     await stillOk(w);
-    const got = await run(w, pageJobs, r.link);
-    // The portal's own count, from whichever page shows it (Avature shows it only on its last page).
-    if (r.total) { const m = new RegExp(r.total, "i").exec(got.text); if (m) listed = Number(String(m[1]).replace(/[^0-9]/g, "")) || listed; }
+    return run(w, pageJobs, r.link);
+  };
+  for (let i = 0; i < (r.maxPages || 500); i++) {
+    if (i) await sleep(GAP_MS);
+    const url = r.list.replace("{n}", String((r.start || 0) + i * (r.step || 1)));
+    let got = await readPage(url);
+    const fresh = (g) => g.jobs.filter((j) => !jobs.has(j.path)).length;
+    // Now and then a portal answers one page with a different, smaller result set (Cognizant, 2026-11-18):
+    // its count differs from the first page's, or it adds nothing before the count is reached. Read it once more.
+    const odd = (g) => { const t = totalOf(g.text); return (listed !== null && t !== null && t !== listed) || (fresh(g) === 0 && listed !== null && jobs.size < listed); };
+    if (i && odd(got)) { await sleep(GAP_MS); got = await readPage(url); }
+    const t = totalOf(got.text);
     const before = jobs.size;
     for (const j of got.jobs) if (!jobs.has(j.path)) jobs.set(j.path, j);
-    if (jobs.size === before || jobs.size >= MAX_JOBS) break;
+    // The portal's own count: the first one shown on a page that listed jobs (a page past the end can
+    // say otherwise; Avature shows it only on its last page). It stands against odd pages.
+    if (t !== null && jobs.size > before && listed === null) listed = t;
+    if (jobs.size >= MAX_JOBS) break;
+    // The end: a page with nothing new. Short of the portal's own count, an odd page is skipped, up to 3 in a row.
+    empty = jobs.size === before ? empty + 1 : 0;
+    if (empty >= (listed !== null && jobs.size < listed ? 3 : 1)) break;
   }
   return { jobs: [...jobs.values()], listed: listed ?? jobs.size, full: new Map() };
 }

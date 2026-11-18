@@ -125,11 +125,14 @@ export default async function SourcesPage(props: PageProps) {
       const appWhen = (d: Date | string) => new Date(d).toLocaleString("en-US", { timeZone: scan.scanTz, weekday: "short", hour: "numeric", minute: "2-digit" });
       const appBlocked = fromApp && !!s.relayed_error && /security check/i.test(String(s.relayed_error));
       const labelNote = portal?.label ? ` (${portal.label} jobs)` : "";
+      // A careers portal read short of its own count says so (Yong, 2026-11-18: no partial read under a full-read label).
+      const partNote = portal && Number(s.relayed_listed) > 0 && Number(s.relayed_checked) < Number(s.relayed_listed) * 0.98
+        ? ` It read ${s.relayed_checked} of the ${s.relayed_listed} jobs the site lists, so some may be missing.` : "";
       const appNote = !fromApp ? ""
         : portal && readHere ? " The TC Hunter desktop app reads it from your own computer; it hasn't read it yet."
         : appBlocked ? ` The TC Hunter desktop app was shown a security check too (${appWhen(s.relayed_tried_at)}), so it stopped: it never tries to get past one.`
         : s.relayed_error && s.relayed_tried_at ? ` The desktop app couldn't read it (${appWhen(s.relayed_tried_at)}): ${s.relayed_error}`
-        : s.relayed_at ? ` Read from this app · ${appWhen(s.relayed_at)}${labelNote}.` : "";
+        : s.relayed_at ? ` Read from this app · ${appWhen(s.relayed_at)}${labelNote}.${partNote}` : "";
       const status = portal && readHere ? "Not searched yet" : readHere ? "Can't be read directly" : appBlocked ? "Blocked by a security check" : never ? "Not searched yet" : suspect ? "Check the address"
         : (failed || empty) && unproven && s.kind !== "job_search" && s.kind !== "pasted_link" ? "Needs a correct address"
         : waitUntil && /security check|enable javascript/i.test(String(s.health_reason ?? "")) ? "Blocked by a security check"

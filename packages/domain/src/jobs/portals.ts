@@ -41,26 +41,28 @@ export interface PortalRecipe {
 
 const AVATURE = (host: string) => ({
   how: "pages" as const, list: `https://${host}/en_US/careers/SearchJobs/?jobRecordsPerPage=10&jobOffset={n}`, start: 0, step: 10, maxPages: 400,
-  link: `^https://${host.replace(/\./g, "\\.")}/en_US/careers/JobDetail/[^/?#]+/\\d+`, total: "[\\d,]+\\s*-\\s*[\\d,]+\\s+of\\s+([\\d,]+)\\s+jobs",
+  link: `^https://${host.replace(/\./g, "\\.")}/en_US/careers/JobDetail/(?:[^/?#]+/)?\\d+`, total: "[\\d,]+\\s*-\\s*[\\d,]+\\s+of\\s+([\\d,]+)\\s+jobs",
   detail: "article.article--details", ld: false,
 });
 
 /** Checked on Yong's Mac, 2026-11-18 (each site's own total then). */
 export const DESKTOP_PORTALS: PortalRecipe[] = [
-  { // Own site, 2,016 worldwide, 10 a page.
+  { // Own site, 2,016 worldwide, 10 a page. Ids are 5 digits or more. Now and then a page answers with a
+    // smaller, different result set; the app reloads such a page once (portal.js).
     company: "Cognizant", home: "https://careers.cognizant.com/global-en/jobs/", hosts: ["careers.cognizant.com"], how: "pages",
     list: "https://careers.cognizant.com/global-en/jobs/?page={n}", start: 1, step: 1, maxPages: 400,
-    link: "^https://careers\\.cognizant\\.com/global-en/jobs/\\d{8,}/[a-z0-9-]+/", total: "Displaying\\s+[\\d,]+\\s+to\\s+[\\d,]+\\s+of\\s+([\\d,]+)" },
+    link: "^https://careers\\.cognizant\\.com/global-en/jobs/\\d{5,}/[a-z0-9-]+/", total: "Displaying\\s+[\\d,]+\\s+to\\s+[\\d,]+\\s+of\\s+([\\d,]+)" },
   { // Paycor, 40 on one page.
     company: "Coastal Cloud", home: "https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c69b1375e0019bb78d357f7b9e", hosts: ["recruitingbypaycor.com"],
     how: "pages", list: "https://recruitingbypaycor.com/career/CareerHome.action?clientId=8a7883c69b1375e0019bb78d357f7b9e", start: 0, step: 1, maxPages: 1,
     link: "JobIntroduction\\.action\\?clientId=8a7883c69b1375e0019bb78d357f7b9e&id=[0-9a-f]{32}", detail: "#gnewtonJobDescriptionText" },
   { // Avature, the US member firm only (1,489; the site shows "999+").
     company: "Deloitte", label: "Deloitte US", home: "https://apply.deloitte.com/en_US/careers/SearchJobs/", hosts: ["apply.deloitte.com"], ...AVATURE("apply.deloitte.com") },
-  { // IBM's own public job search, 3,550; sorted by id, since its default order repeats jobs across pages.
+  { // IBM's own public job search, 3,550; sorted by id, since its default order repeats jobs across pages;
+    // `_source` names the fields, as IBM's own search page does (without it hits carry only ids).
     company: "IBM", home: "https://www.ibm.com/careers/search", hosts: ["www.ibm.com", "careers.ibm.com", "www-api.ibm.com"], how: "json",
     api: { url: "https://www-api.ibm.com/search/api/v2", method: "POST", size: 100, hits: "hits.hits", totalAt: "hits.total.value",
-      body: JSON.stringify({ appId: "careers", scopes: ["careers2"], query: { bool: { must: [] } }, size: 100, from: "{from}", sort: [{ _id: "asc" }], lang: "zz", localeSelector: {}, sm: { query: "", lang: "zz" } }).replace('"{from}"', "{from}"),
+      body: JSON.stringify({ appId: "careers", scopes: ["careers2"], query: { bool: { must: [] } }, size: 100, from: "{from}", sort: [{ _id: "asc" }], lang: "zz", localeSelector: {}, sm: { query: "", lang: "zz" }, _source: ["_id", "title", "url", "field_keyword_19"] }).replace('"{from}"', "{from}"),
       fields: { title: "title", url: "url", location: "field_keyword_19" } },
     detail: "article.article--details", ld: false },
   { // Pinpoint, 239, one public list with full descriptions.
