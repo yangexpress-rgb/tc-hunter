@@ -188,3 +188,29 @@ describe("searching one source again (Yong, 2026-11-17)", () => {
     expect(w.payload).toEqual({ fresh_ids: [other] });
   });
 });
+
+describe("a new link for a company already in the list (Yong, 2026-11-17: Salesforce showed twice)", () => {
+  it("replaces the old place instead of adding a second row", async () => {
+    const lee = (await newApplicant(pool, cfg, "Lee")).session;
+    await followSource(pool, lee, "https://jobs.lever.co/contoso", "Contoso");
+    await followSource(pool, lee, "https://careers.contoso.example/jobs", "Contoso, Inc.");
+    expect((await listSources(pool, lee)).map((s) => [s.name, s.kind])).toEqual([["Contoso, Inc.", "careers_page"]]);
+  });
+
+  it("reads a careers page for the hiring system behind it, and follows that instead", async () => {
+    const wd = "https://initech.wd5.myworkdayjobs.com/wday/cxs/initech/Careers";
+    const sites: Fetcher = { async get(url: string): Promise<FetchResult> {
+      const ok = (text: string) => ({ status: 200, text, url, contentType: "text/html" });
+      if (url === "https://www.initech.example/careers") return ok('<div id="app"></div><script>window.jobs="https://initech.wd5.myworkdayjobs.com/Careers"</script>');
+      if (url === `${wd}/jobs`) return ok(JSON.stringify({ total: 1, jobPostings: [{ title: "Operations Analyst", externalPath: "/job/A/Ops_R1" }] }));
+      if (url === `${wd}/job/A/Ops_R1`) return ok(JSON.stringify({ jobPostingInfo: { title: "Operations Analyst", jobReqId: "R1", jobDescription: "SQL reports" } }));
+      throw new SourceRefusedError("not_found", url);
+    } };
+    const max = (await newApplicant(pool, cfg, "Max")).session;
+    await saveGoal(pool, max, goal({ roles: ["Operations Analyst"] }));
+    await followSource(pool, max, "https://www.initech.example/careers", "Initech");
+    await requestScan(pool, max);
+    while (await runNextWork(pool, { ...deps, fetcher: sites, discover: { proposer: { version: "named-only-test", async propose() { return []; } } } })) { /* drain */ }
+    expect((await listSources(pool, max)).map((s) => [s.name, s.kind, s.open_jobs])).toEqual([["Initech", "workday", 1]]);
+  });
+});

@@ -378,7 +378,9 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     if (s.kind === "pasted_link" || s.kind === "job_search" || repairs >= 5) return null;
     repairs++;
     let spec: SourceSpec | null = null;
-    try { spec = (await findBoardOrAsk({ name: s.name }, deps.fetcher, deps.discover?.careers, new Set([`${s.kind}:${s.source_key}`]))).spec; } catch (e) {
+    // A careers page is read for links to the hiring system behind it; the lookup is told it shows no jobs.
+    const idea = { name: s.name, careersUrl: s.kind === "careers_page" ? s.url as string : undefined };
+    try { spec = (await findBoardOrAsk(idea, deps.fetcher, deps.discover?.careers, new Set([`${s.kind}:${s.source_key}`]))).spec; } catch (e) {
       if (!(e instanceof SourceRefusedError)) throw e;
     }
     if (!spec) return null;
@@ -594,6 +596,18 @@ export async function followSource(pool: pg.Pool, session: Session, address: str
     const id = await upsertSource(c, spec);
     await c.query(`INSERT INTO applicant_job_source (applicant_id, job_source_id) VALUES (app_applicant_id(), $1)
       ON CONFLICT (applicant_id, job_source_id) DO UPDATE SET origin = 'you', muted = false`, [id]);
+    // A new link for a company already in the list replaces the old one, not a second row (Yong, 2026-11-17:
+    // Salesforce showed twice). The old place is kept as "don't use", so it isn't found and followed again.
+    const key = companyKey(spec.name);
+    if (key) {
+      const same = (await c.query(
+        `SELECT s.id, s.name FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id
+          WHERE NOT f.muted AND s.id <> $1 AND s.kind NOT IN ('job_search', 'pasted_link')`, [id])).rows.filter((r) => companyKey(r.name) === key).map((r) => r.id as string);
+      if (same.length) {
+        await c.query("UPDATE applicant_job_source SET muted = true, updated_at = now() WHERE job_source_id = ANY($1)", [same]);
+        await c.query("UPDATE employer_board SET job_source_id = $2, note = NULL, checked_at = now() WHERE company_key = $1", [key, id]);
+      }
+    }
     await recordAudit(c, "source.followed", { objectType: "job_source", objectId: id, payload: { kind: spec.kind } });
     return id;
   });
