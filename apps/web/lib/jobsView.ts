@@ -1,8 +1,9 @@
-/** The four ways to show Jobs (Yong, 2026-11-18). Tables by goal, one list, cards by job, cards by company. */
-export const JOBS_VIEWS = ["goals", "list", "jobs", "companies"] as const;
+/** The ways to show Jobs (Yong, 2026-11-18): one list, cards by job, cards by company. "By goal" was dropped the same day. */
+export const JOBS_VIEWS = ["list", "jobs", "companies"] as const;
 export type JobsView = (typeof JOBS_VIEWS)[number];
-export const JOBS_VIEW_LABEL: Record<JobsView, string> = { goals: "By goal", list: "List", jobs: "Cards by job", companies: "Cards by company" };
-export const asJobsView = (v: unknown): JobsView | null => (JOBS_VIEWS as readonly string[]).includes(String(v)) ? (v as JobsView) : null;
+export const JOBS_VIEW_LABEL: Record<JobsView, string> = { list: "List", jobs: "Cards by job", companies: "Cards by company" };
+export const asJobsView = (v: unknown): JobsView | null =>
+  v === "goals" ? "list" : (JOBS_VIEWS as readonly string[]).includes(String(v)) ? (v as JobsView) : null;
 
 type Row = Record<string, any>;
 

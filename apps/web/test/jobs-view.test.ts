@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { asJobsView, companyDomain, pay, payShort } from "../lib/jobsView";
 
 describe("Jobs card layouts (Yong, 2026-11-18)", () => {
-  it("knows the four layouts and nothing else", () => {
-    expect(["goals", "list", "jobs", "companies"].map(asJobsView)).toEqual(["goals", "list", "jobs", "companies"]);
+  it("knows the three layouts and nothing else", () => {
+    expect(["list", "jobs", "companies"].map(asJobsView)).toEqual(["list", "jobs", "companies"]);
+    expect(asJobsView("goals")).toBe("list");
     expect(asJobsView("grid")).toBeNull();
     expect(asJobsView(undefined)).toBeNull();
   });
