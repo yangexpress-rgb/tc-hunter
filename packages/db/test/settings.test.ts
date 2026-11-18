@@ -65,3 +65,16 @@ describe("job-site keys saved in Settings (Yong, 2026-11-15)", () => {
     expect(googleClientFrom(await settingsEnv(pool, cfg, { TC_PUBLIC_ORIGIN: "https://tc.example.app" }))).toBeNull();
   });
 });
+
+describe("Jobs page layout (Yong, 2026-11-18)", () => {
+  it("is saved for each applicant on their own, and only the four layouts are allowed", async () => {
+    const { getPreferences, savePreferences } = await import("../src");
+    const leo = (await newApplicant(pool, cfg, "Leo")).session;
+    expect((await getPreferences(pool, yong))?.jobs_view ?? "goals").toBe("goals");
+    await savePreferences(pool, yong, { jobs_view: "companies" });
+    await savePreferences(pool, leo, { jobs_view: "jobs" });
+    expect((await getPreferences(pool, yong))?.jobs_view).toBe("companies");
+    expect((await getPreferences(pool, leo))?.jobs_view).toBe("jobs");
+    await expect(savePreferences(pool, yong, { jobs_view: "grid" })).rejects.toThrow();
+  });
+});

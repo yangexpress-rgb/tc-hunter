@@ -14,16 +14,16 @@ const COLS: Array<[GoalSort, string]> = [
 ];
 const PER_YEAR: Record<string, number> = { year: 1, month: 12, hour: 2080 };
 
-const kindOf = (r: Record<string, any>) => { const k = employmentKind(r.title ?? ""); return k ? goalTypeLabel(k) : "Not stated"; };
-const statusOf = (r: Record<string, any>) =>
+export const kindOf = (r: Record<string, any>) => { const k = employmentKind(r.title ?? ""); return k ? goalTypeLabel(k) : "Not stated"; };
+export const statusOf = (r: Record<string, any>) =>
   r.posting_status !== "active" ? "Closed" : r.filtered ? "Ruled out" : r.status === "saved" ? "Saved" : r.status === "new" ? (r.seen_at ? "New" : "New, unseen") : "Passed";
-const yearlyPay = (r: Record<string, any>) => {
+export const yearlyPay = (r: Record<string, any>) => {
   const top = r.salary_max ?? r.salary_min;
   return top === null || top === undefined ? null : Number(top) * (PER_YEAR[r.salary_period ?? "year"] ?? 1);
 };
 const shortDate = (d: Date | string | null) => (d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "Not given");
 
-function sortRows(rows: Array<Record<string, any>>, by: GoalSort, dir: "asc" | "desc") {
+export function sortRows(rows: Array<Record<string, any>>, by: GoalSort, dir: "asc" | "desc") {
   const key = (r: Record<string, any>): string | number | null => ({
     score: r.score, level: ((k) => (k === "none" ? null : goalLevelIndex(k as never)))(jobLevelKey(r.title ?? "")), company: String(r.employer_canonical ?? "").toLowerCase(), role: String(r.title ?? "").toLowerCase(),
     location: place(r).toLowerCase(), type: kindOf(r), pay: yearlyPay(r), posted: r.posted_at ? new Date(r.posted_at).getTime() : null, status: statusOf(r),
@@ -85,20 +85,23 @@ function GoalTable({ title, sub, rows, by, dir, sortHref }: {
   );
 }
 
-export function GoalTables({ goals, rows, by, dir, sortHref }: {
-  goals: Goal[]; rows: Array<Record<string, any>>; by: GoalSort; dir: "asc" | "desc"; sortHref: (by: GoalSort, dir: "asc" | "desc") => string;
-}) {
+/** Each goal in use (or with jobs under it), its jobs, and the jobs tied to no goal: shared by the tables and the job cards. */
+export function goalGroups(goals: Goal[], rows: Array<Record<string, any>>) {
   const known = new Set(goals.map((g) => g.id));
   const shown = goals.filter((g) => g.active || rows.some((r) => r.goal_id === g.id));
   const loose = rows.filter((r) => !r.goal_id || !known.has(r.goal_id));
-  if (!shown.length && !loose.length) return null;
-  return (
-    <>
-      {shown.map((g) => (
-        <GoalTable key={g.id} title={goalName(g)} rows={rows.filter((r) => r.goal_id === g.id)} by={by} dir={dir} sortHref={sortHref}
-          sub={[timeFrameLabel(g.timeFrame), g.levels.map(goalLevelLabel).join(", "), g.employmentTypes.map(goalTypeLabel).join(", "), g.locations.join(", "), g.active ? null : "Not used to find jobs"].filter(Boolean).join(" · ")} />
-      ))}
-      {loose.length ? <GoalTable title={shown.length ? "Not tied to a goal" : "Matched jobs"} sub="Jobs you added yourself, or scored before you had goals." rows={loose} by={by} dir={dir} sortHref={sortHref} /> : null}
-    </>
-  );
+  const groups: Array<{ key: string; title: string; sub: string; rows: Array<Record<string, any>> }> = shown.map((g) => ({
+    key: g.id, title: goalName(g), rows: rows.filter((r) => r.goal_id === g.id),
+    sub: [timeFrameLabel(g.timeFrame), g.levels.map(goalLevelLabel).join(", "), g.employmentTypes.map(goalTypeLabel).join(", "), g.locations.join(", "), g.active ? null : "Not used to find jobs"].filter(Boolean).join(" · "),
+  }));
+  if (loose.length) groups.push({ key: "loose", title: shown.length ? "Not tied to a goal" : "Matched jobs", sub: "Jobs you added yourself, or scored before you had goals.", rows: loose });
+  return groups;
+}
+
+export function GoalTables({ goals, rows, by, dir, sortHref }: {
+  goals: Goal[]; rows: Array<Record<string, any>>; by: GoalSort; dir: "asc" | "desc"; sortHref: (by: GoalSort, dir: "asc" | "desc") => string;
+}) {
+  const groups = goalGroups(goals, rows);
+  if (!groups.length) return null;
+  return <>{groups.map((g) => <GoalTable key={g.key} title={g.title} sub={g.sub} rows={g.rows} by={by} dir={dir} sortHref={sortHref} />)}</>;
 }

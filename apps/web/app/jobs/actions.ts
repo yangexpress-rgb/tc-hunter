@@ -4,11 +4,12 @@ import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, re
 import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 import { TIMES, ZONES } from "@/lib/schedule";
+import { JOBS_VIEWS } from "@/lib/jobsView";
 
 /** Only ever send people back to a Jobs page. */
 function backTo(form: FormData, fallback = "/jobs"): string {
   const b = String(form.get("back") ?? "");
-  return /^\/jobs(\/[A-Za-z0-9-]*)?(\?[a-z=&0-9_-]*)?(#[a-z-]*)?$/.test(b) ? b : fallback;
+  return /^\/jobs(\/[A-Za-z0-9-]*)?(\?[A-Za-z0-9=&_.,%+*-]*)?(#[a-z-]*)?$/.test(b) ? b : fallback;
 }
 const withParam = (path: string, k: string, v: string) => {
   const [base, hash] = path.split("#");
@@ -72,6 +73,14 @@ export async function feedbackAction(form: FormData) {
   const action = String(form.get("action")) as "save" | "dismiss" | "not_a_fit" | "undo";
   if (!["save", "dismiss", "not_a_fit", "undo"].includes(action)) redirect("/jobs");
   await act(form, () => giveFeedback(app().pool, s, String(form.get("match_id")), action, String(form.get("reason") ?? "") || null), "/jobs");
+}
+
+/** The layout the Jobs page opens in, for this applicant (Yong, 2026-11-18). */
+export async function jobsViewAction(form: FormData) {
+  const s = await requireSession();
+  const v = String(form.get("jobs_view") ?? "");
+  if (!JOBS_VIEWS.includes(v as never)) redirect("/jobs");
+  await act(form, () => savePreferences(app().pool, s, { jobs_view: v }), "/jobs", "view_saved");
 }
 
 export async function adjustmentAction(form: FormData) {
