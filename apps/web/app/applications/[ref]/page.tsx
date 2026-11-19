@@ -130,7 +130,7 @@ export default async function ApplicationPage(props: Props) {
 
       {notes.length ? notes.map((n) => <p key={n} className="status" role="status">{n}</p>) : null}
 
-      {packet && stuckHere.length ? <AnswerHere p={packet} fields={stuckHere} back={back} /> : null}
+      {packet && stuckHere.length ? <AnswerHere p={packet} fields={stuckHere} back={back} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} /> : null}
 
       <Stepper j={j} />
 

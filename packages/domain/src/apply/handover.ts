@@ -9,7 +9,8 @@ import type { ApplyPage, PageNow } from "./index";
  */
 
 /** The kinds of step handed over. */
-export type HandoverStep = "person_check" | "sign_in" | "verification" | "attestation";
+/** "answer": an answer TC Hunter put in that their form still says is missing (a tick box it won't take). */
+export type HandoverStep = "person_check" | "sign_in" | "verification" | "attestation" | "answer";
 /** Before Submit was pressed, or after (the site asked for a person once the form was sent). */
 export type HandoverPhase = "before_submit" | "after_submit";
 
@@ -30,6 +31,10 @@ export function handoverSentence(step: HandoverStep, employer: string, labels: s
   if (step === "person_check") return `${employer}'s site is asking you to confirm you're a person.`;
   if (step === "sign_in") return `${employer}'s site needs you to sign in yourself.`;
   if (step === "verification") return `${employer}'s site needs you to confirm your account.`;
+  if (step === "answer") {
+    const q = labels.length ? `"${labels[0]!.replace(/\s*\*\s*$/, "").slice(0, 120)}"${labels.length > 1 ? ` and ${labels.length - 1} more` : ""}` : "a question";
+    return `${employer}'s form won't take TC Hunter's answer to ${q}. Put it in yourself on their page, then hand it back.`;
+  }
   const what = labels.length ? ` ("${labels[0]!.replace(/\s*\*\s*$/, "").slice(0, 120)}"${labels.length > 1 ? ` and ${labels.length - 1} more` : ""})` : "";
   return `${employer}'s form has ${labels.length > 1 ? "statements" : "a statement"} only you can make${what}.`;
 }

@@ -1,8 +1,11 @@
 import type { getPacket } from "@tc-hunter/db";
 import { answerHereAction } from "@/app/applications/actions";
+import { StandingAsk } from "@/components/applications/Packet";
+import { standingKindFor, type StepKind } from "@tc-hunter/domain";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 type Field = Packet["fields"][number];
+const NO_SAY = /decline|prefer not|rather not|do not wish|don.t wish|not to (answer|disclose|say)/i;
 
 /**
  * The questions TC Hunter stopped on, answered right on the application page (Yong, 2026-11-19: "i don't
@@ -16,13 +19,17 @@ export function answerHereFields(p: Packet | null, stuckKeys: string[], waitingF
   return p.fields.filter((f) => f.type !== "file" && (stuck.has(f.key) || (waitingForAnswers && f.required && !f.willFill)));
 }
 
-export function AnswerHere({ p, fields, back }: { p: Packet; fields: Field[]; back: string }) {
+export function AnswerHere({ p, fields, back, fresh, mfa }: { p: Packet; fields: Field[]; back: string; fresh: boolean; mfa: boolean }) {
   const approved = p.state !== "packet_draft" && p.state !== "packet_ready_for_review";
   const theirs = fields.filter((f) => f.step && f.step !== "work_auth");
   const ask = fields.filter((f) => !f.step || f.step === "work_auth");
+  // One standing answer covers every statement of its kind: ask once per kind (Accenture, 2026-11-19).
+  const kinds = new Map<string, Field>();
+  for (const f of theirs) { const k = standingKindFor(f.step as StepKind, f.label) ?? `own:${f.id}`; if (!kinds.has(k)) kinds.set(k, f); }
+  const total = ask.length + theirs.length;
   return (
     <section className="card answer-here" id="answer-here" aria-label="Questions waiting for your answer">
-      <h2>{ask.length === 1 ? "1 question needs you" : `${ask.length} questions need you`}</h2>
+      <h2>{total === 1 ? "1 question needs you" : `${total} questions need you`}</h2>
       {ask.length ? (
         <form action={answerHereAction} className="stack">
           <input type="hidden" name="app" value={p.appRef} />
@@ -33,10 +40,10 @@ export function AnswerHere({ p, fields, back }: { p: Packet; fields: Field[]; ba
                 <input type="hidden" name="field" value={f.id} />
                 <label htmlFor={`answer_${f.id}`} className="packet-q">{f.label.replace(/\s*\*\s*$/, "")}{f.required ? <span className="error"> (required)</span> : null}</label>
                 {f.step === "work_auth" ? <><input type="hidden" name={`wa_${f.id}`} value="1" /><input type="hidden" name={`q_${f.id}`} value={f.label} /></> : null}
-                {f.options?.length ? (
-                  <select id={`answer_${f.id}`} name={`answer_${f.id}`} required defaultValue={f.answer && f.options.includes(f.answer) ? f.answer : ""}>
+                {f.options?.length || f.type === "checkbox" ? (
+                  <select id={`answer_${f.id}`} name={`answer_${f.id}`} required defaultValue={f.answer && (f.options ?? ["Yes", "No"]).includes(f.answer) ? f.answer : ""}>
                     <option value="" disabled>Choose</option>
-                    {f.options.map((o) => <option key={o}>{o}</option>)}
+                    {(f.options?.length ? f.options : ["Yes", "No"]).map((o) => <option key={o}>{o}</option>)}
                   </select>
                 ) : f.type === "textarea" ? (
                   <>
@@ -65,8 +72,20 @@ export function AnswerHere({ p, fields, back }: { p: Packet; fields: Field[]; ba
         </form>
       ) : null}
       {theirs.length ? (
-        <p className="small">Only you can make {theirs.length === 1 ? "this statement" : "these statements"} ({theirs.map((f) => `"${f.label.replace(/\s*\*\s*$/, "")}"`).join(", ")}).
-          {" "}Choose Finish it yourself to do it on their site, or let TC Hunter answer {theirs.length === 1 ? "it" : "them"} for you in <a href="/settings/applying">Settings</a>.</p>
+        <ol className="answer-here-list" start={ask.length + 1}>
+          {[...kinds.values()].map((f) => {
+            const same = theirs.filter((x) => x !== f && (standingKindFor(x.step as StepKind, x.label) ?? `own:${x.id}`) === (standingKindFor(f.step as StepKind, f.label) ?? `own:${f.id}`));
+            return (
+              <li key={f.id}>
+                <div className="packet-q">{f.label.replace(/\s*\*\s*$/, "")}{same.length ? <span className="muted"> and {same.length} more like it</span> : null}{f.required ? <span className="error"> (required)</span> : null}</div>
+                <p className="small muted">A statement or personal question only you can answer. Answer it once here for every application, or put it in yourself on their site.</p>
+                {f.step === "eeo" && !(f.options ?? []).some((o) => NO_SAY.test(o))
+                  ? <p className="small">Their form offers no &quot;I&apos;d rather not say&quot; here, so this one is yours on their site: choose Finish it yourself, or Continue and TC Hunter hands you their page when it gets there.</p>
+                  : <StandingAsk p={p} f={f} back={`${back}#answer-here`} fresh={fresh} mfa={mfa} />}
+              </li>
+            );
+          })}
+        </ol>
       ) : null}
     </section>
   );

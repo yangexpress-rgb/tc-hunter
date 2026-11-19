@@ -316,6 +316,29 @@ class PwPage implements ApplyPage {
       ways.push(["click the drawn button", () => r.locator("xpath=..").click({ timeout: 3000 })]);
       ways.push(["press Space on it", async () => { await r.focus(); await this.pg.keyboard.press("Space"); }]);
       ways.push(["tick by script", () => r.evaluate((el: HTMLInputElement) => { el.click(); el.dispatchEvent(new Event("change", { bubbles: true })); })]);
+    } else if (it.type === "checkbox" || await loc.getAttribute("type").then((t) => t?.toLowerCase() === "checkbox").catch(() => false)) {
+      // A tick box their form says is still empty although it reads ticked (Accenture's Workday "I accept",
+      // 2026-11-19): clear it and tick it again the ways a person would, so the site's own code hears it.
+      const want = ANSWER_YES.test(value.trim());
+      const id = await loc.getAttribute("id").catch(() => null);
+      const label = id ? this.pg.locator(`label[for="${id.replace(/"/g, '\\"')}"]`).filter({ visible: true }).first() : null;
+      const reset = async () => { if ((await loc.isChecked().catch(() => !want)) === want) await loc.evaluate((el: HTMLInputElement) => el.click()).catch(() => {}); };
+      ways.push(["click its words", async () => { await reset(); if (label && await label.count()) await label.click({ timeout: 3000 }); }]);
+      ways.push(["press Space on it", async () => { await reset(); await loc.focus(); await this.pg.keyboard.press("Space"); }]);
+      ways.push(["click where the box is drawn", async () => {
+        await reset();
+        const box = await loc.locator("xpath=..").boundingBox().catch(() => null) ?? await loc.boundingBox().catch(() => null);
+        if (box) await this.pg.mouse.click(box.x + Math.min(10, box.width / 2), box.y + box.height / 2);
+      }]);
+      // Each way is checked by the tick itself; the site's verdict comes when Next is pressed again.
+      for (const [way, run] of ways) {
+        await run().catch(() => {});
+        await this.pg.waitForTimeout(400);
+        const ok = (await loc.isChecked().catch(() => null)) === want;
+        log.info("apply.fill_switch", { key: it.key.slice(0, 80), type: "checkbox", way, ok });
+        if (ok) return "filled";
+      }
+      return "failed";
     } else {
       const tag = await loc.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
       if (tag === "select") {
