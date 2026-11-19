@@ -821,3 +821,88 @@ describe("an emailed security code after Submit (Yong, 2026-11-17)", () => {
     expect((await applyStatus(pool, yong, ref)).status).toBe("sent");
   });
 });
+
+describe("jobs found on Adzuna and other job-gathering sites (Yong, 2026-11-19)", () => {
+  /** A page that follows links: each address shows its own links; an address in `redirect` lands elsewhere. */
+  class HopPage extends FakePage {
+    at: string;
+    constructor(spec: FakeSpec, start: string, private pages: Record<string, Array<{ text: string; href: string }>>, private redirect: Record<string, string>) {
+      super(spec);
+      this.at = redirect[start] ?? start;
+    }
+    override url() { return this.at; }
+    async links() { return this.pages[this.at] ?? []; }
+    async goto(u: string) {
+      const to = this.redirect[u] ?? u;
+      if (/linkedin|indeed/.test(to)) throw new Error("net::ERR_BLOCKED_BY_CLIENT");
+      this.at = to;
+    }
+  }
+  const ADZ = (n: number) => `https://www.adzuna.com/land/ad/${n}?se=abc&v=1`;
+  let opened: string[] = [];
+  const hopBrowser = (spec: FakeSpec, pages: Record<string, Array<{ text: string; href: string }>>, redirect: Record<string, string>): ApplyBrowser => ({
+    async open(url: string) {
+      opened.push(url);
+      if (/linkedin|indeed/.test(redirect[url] ?? "")) throw new Error("net::ERR_BLOCKED_BY_CLIENT");
+      const p = new HopPage(spec, url, pages, redirect);
+      browser.pages.push(p);
+      return p;
+    },
+  });
+  async function adzunaApp(employer: string, n: number): Promise<string> {
+    await requestLink(pool, yong, { url: ADZ(n), title: "Digital Transformation Expert", employer, location: "Remote", text: "Lead change.\n\nRequirements:\n- SQL\n- Excel" });
+    await drain();
+    const ref = (await listMatches(pool, yong, { status: "all" })).rows.find((r: { employer_canonical: string }) => r.employer_canonical === employer).public_ref;
+    await requestTailor(pool, yong, ref, ["resume"]);
+    await drain();
+    return trackJob(pool, yong, ref);
+  }
+
+  it("follows Adzuna's listing on to the employer's own posting and applies there", async () => {
+    await saveApplyMode(pool, cfg, yong, "hands_free");
+    const ref = await adzunaApp("Gatherer Co", 1);
+    const gh = "https://job-boards.greenhouse.io/gathererco/jobs/77";
+    opened = [];
+    applyDeps = { ...applyDeps, fetcher: noFetch, browser: hopBrowser({ url: gh, fields: BASE, after: "thanks" },
+      { "https://www.adzuna.com/details/1": [{ text: "Share on Facebook", href: "https://www.facebook.com/sharer" }, { text: "Apply for this job", href: "https://www.adzuna.com/land/ad/1?go=1" }] },
+      { [ADZ(1)]: "https://www.adzuna.com/details/1", "https://www.adzuna.com/land/ad/1?go=1": gh }) };
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.problem).toBeNull();
+    expect(s.status).toBe("sent");
+    expect(s.steps.map((x) => x.text).join("\n")).toMatch(/Found on Adzuna, which lists jobs from other sites[\s\S]*Adzuna's link led to Gatherer Co's own posting \(job-boards\.greenhouse\.io\)/);
+    const p = (await ownerQuery("SELECT employer_apply_url FROM job_posting WHERE employer_canonical = 'Gatherer Co'")).rows[0];
+    expect(p.employer_apply_url).toBe(gh);
+  });
+
+  it("an employer site TC Hunter can't apply on: red reason names that site, and Finish it yourself opens it", async () => {
+    const ref = await adzunaApp("Siemens Like", 2);
+    const own = "https://jobs.siemens-like.example/en_US/externaljobs/JobDetail/504882";
+    applyDeps = { ...applyDeps, browser: hopBrowser({ url: own, fields: [] }, { [own]: [{ text: "Apply", href: "https://jobs.siemens-like.example/apply/504882" }] }, { [ADZ(2)]: own }) };
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.status).toBe("failed");
+    expect(s.problem).toMatch(/^jobs\.siemens-like\.example isn't a hiring site TC Hunter can apply on by itself yet\. Choose Finish it yourself/);
+    expect(s.problem).not.toMatch(/adzuna/i);
+    expect(s.finishYourself).toBe(true);
+    const p = (await ownerQuery("SELECT employer_apply_url FROM job_posting WHERE employer_canonical = 'Siemens Like'")).rows[0];
+    expect(p.employer_apply_url).toBe(own);
+    // Try again goes straight to the employer's page, not through Adzuna.
+    opened = [];
+    await requestApply(pool, yong, ref);
+    await runNow();
+    expect(opened).toEqual([own]);
+  });
+
+  it("a listing that leads to LinkedIn is never opened there: it looks for the job on the employer's own careers site", async () => {
+    const ref = await adzunaApp("Nowhere Gatherer", 3);
+    applyDeps = { ...applyDeps, browser: hopBrowser({ url: GH(3), fields: BASE }, {}, { [ADZ(3)]: "https://www.linkedin.com/jobs/view/9" }) };
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.status).toBe("failed");
+    expect(s.problem).toMatch(/came from Adzuna, which only lists jobs from other sites.*couldn't find Nowhere Gatherer's careers site/);
+  });
+});

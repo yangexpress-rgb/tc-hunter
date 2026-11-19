@@ -82,6 +82,10 @@ export interface ApplyPage {
   close(): Promise<void>;
   /** The live view of this browser, for handing a step to the applicant ("Your turn"). Absent where the page can't be streamed. */
   live?(): import("./handover").LiveView;
+  /** The page's links (what each says and where it goes), to follow a job site's listing on to the employer. */
+  links?(): Promise<import("./employerSite").PageLink[]>;
+  /** Opens another address in this same page. */
+  goto?(url: string): Promise<void>;
 }
 
 /** Workday's own steps: an account, then a form over several pages. */
@@ -175,7 +179,7 @@ export function verificationLinkIn(body: string, tenantHost: string, kind: "veri
 
 /** Plain words for why the browser stopped, by cause. Shown in red on the application. */
 export const APPLY_PROBLEM = {
-  unsupported: (host: string) => `${host} isn't a hiring site TC Hunter can apply on by itself yet. Apply on their site, then choose "I applied" here.`,
+  unsupported: (host: string) => `${host} isn't a hiring site TC Hunter can apply on by itself yet. Choose Finish it yourself to apply on their site with your resume, cover letter and answers one tap away, then choose "I applied" here.`,
   never: "TC Hunter never applies on LinkedIn or Indeed for you. Apply there yourself, then choose \"I applied\" here.",
   noLink: "This job has no link to an application form. Open the job and apply on the employer's site.",
   closed: "The employer's page says this job is closed or no longer exists.",

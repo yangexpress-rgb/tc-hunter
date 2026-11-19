@@ -1,6 +1,7 @@
 import { findBoard, type CareersLookup } from "../jobs/discover";
 import { SourceRefusedError, type Fetcher } from "../jobs/fetcher";
-import { fetchSource, isNoFetchHost, unreadableCareersSystem } from "../jobs/sources";
+import { fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem } from "../jobs/sources";
+import { detectAts } from "../packet/adapters";
 import type { RawPosting, SourceSpec } from "../jobs/types";
 
 /**
@@ -134,3 +135,29 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
 }
 
 const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
+
+/** A link on a page: what it says and where it goes. */
+export interface PageLink { text: string; href: string }
+
+const APPLY_WORDS = /\bapply\b|application|continue to (the )?(job|site|employer|application)|view (the )?(full )?(job|posting|listing) on|go to (the )?(job|employer|company)|see (the )?job on|original (job|posting|listing)/i;
+const NOT_A_JOB = /(^|\.)(facebook|twitter|x|instagram|youtube|tiktok|pinterest|google|apple|play\.google|microsoft|bing|reddit|whatsapp|t)\.(com|co|me)$/i;
+
+/**
+ * On a job-gathering site's page (Adzuna, Jooble…), the link that leads on to the employer's own
+ * posting. A link to a hiring system TC Hunter knows (Greenhouse, Workday…) wins; then an "Apply"
+ * link to another site. `leaves: false` is an "Apply" link that stays on the same job site (its own
+ * redirect page), to be followed one more step. Never a link to LinkedIn, Indeed or a site like them.
+ */
+export function pickEmployerLink(links: PageLink[], here: string): { href: string; leaves: boolean } | null {
+  const hostOfUrl = (u: string) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ""; } };
+  const ok = links
+    .map((l) => ({ text: (l.text ?? "").replace(/\s+/g, " ").trim(), href: (l.href ?? "").trim() }))
+    .filter((l) => /^https:\/\//i.test(l.href) && l.href.split("#")[0] !== here.split("#")[0] && !isNoFetchHost(l.href) && !NOT_A_JOB.test(hostOfUrl(l.href)));
+  const off = ok.filter((l) => !isJobBoardHost(l.href));
+  const known = off.find((l) => detectAts(l.href) !== "other" && detectAts(l.href) !== "linkedin" && detectAts(l.href) !== "indeed");
+  if (known) return { href: known.href, leaves: true };
+  const apply = off.find((l) => APPLY_WORDS.test(l.text));
+  if (apply) return { href: apply.href, leaves: true };
+  const onward = ok.find((l) => isJobBoardHost(l.href) && APPLY_WORDS.test(l.text) && hostOfUrl(l.href) === hostOfUrl(here));
+  return onward ? { href: onward.href, leaves: false } : null;
+}

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
-import { AGREE_CHOICE, createLogger, matchChoice, sameAnswer, searchTermsFor,
+import { AGREE_CHOICE, NO_FETCH_HOSTS, createLogger, matchChoice, sameAnswer, searchTermsFor,
   formUrlFor, humanCheckIn, type LiveInput, type LiveView, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type PageForm, type PageNow, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { PAGE_SCRIPT } from "./pageScript";
@@ -45,6 +45,11 @@ export class ServerBrowser implements ApplyBrowser {
     // Only the page's own sites: no reaching the server itself or the home network (the gate refuses those too).
     await ctx.route(/^https?:\/\/(localhost|127\.|10\.|192\.168\.|169\.254\.)/, (r) =>
       (this.opts.proxy ? r.abort() : r.continue()));
+    // Never LinkedIn, Indeed or a site like them as the page itself, even when a job site's link redirects there.
+    await ctx.route((u) => NO_FETCH_HOSTS.test(u.hostname), (r) => {
+      const req = r.request();
+      return req.isNavigationRequest() && !req.frame().parentFrame() ? r.abort("blockedbyclient") : r.continue();
+    });
     return { browser, ctx };
   }
 
@@ -94,6 +99,18 @@ const norm = (s: string) => s.toLowerCase().replace(/[*:?]+/g, " ").replace(/\s+
 class PwPage implements ApplyPage {
   constructor(protected browser: Browser, protected pg: Page) {}
   url() { return this.pg.url(); }
+
+  async links() {
+    const all = await this.pg.evaluate(() => Array.from(document.querySelectorAll("a[href]")).slice(0, 2000).map((a) => ({
+      text: ((a as HTMLElement).innerText || a.getAttribute("aria-label") || a.getAttribute("title") || "").slice(0, 200), href: (a as HTMLAnchorElement).href,
+    }))).catch(() => [] as Array<{ text: string; href: string }>);
+    return all;
+  }
+
+  async goto(url: string) {
+    await this.pg.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    await settle(this.pg);
+  }
 
   protected async helpers() { await this.pg.evaluate(PAGE_SCRIPT); }
 
