@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
@@ -1080,7 +1080,8 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
   }
   return {
     packetId: r.packetId, requiredKeys: r.requiredKeys, labels: r.labels, personalKeys: r.personalKeys,
-    fill: r.items.map((i) => ({ key: i.key, type: i.type as FillItem["type"], value: i.docId ? null : i.value, file: i.docId ? files.get(i.docId) ?? null : null })),
+    fill: r.items.map((i) => ({ key: i.key, type: i.type as FillItem["type"], value: i.docId ? null : i.value, file: i.docId ? files.get(i.docId) ?? null : null,
+      ...(isHeardAbout(r.labels.get(i.key) ?? "") ? { anyChoice: true } : {}) })),
   };
 }
 

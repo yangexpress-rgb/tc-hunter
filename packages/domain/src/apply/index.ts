@@ -65,6 +65,8 @@ export interface FillItem {
   key: string; type: FieldType; value: string | null; file?: { name: string; mime: string; bytes: Uint8Array } | null;
   /** The site flagged this question after the first fill: put the answer in another way this time. */
   again?: boolean;
+  /** A question any general choice answers ("How did you hear about us?"): when the answer isn't offered, take the closest general choice, else the first. */
+  anyChoice?: boolean;
 }
 export interface FillResult { key: string; status: "filled" | "not_found" | "no_match" | "failed" }
 export interface PageNow { url: string; text: string; errors: string[]; humanCheck: boolean }

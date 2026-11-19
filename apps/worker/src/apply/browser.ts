@@ -229,8 +229,17 @@ class PwPage implements ApplyPage {
    * look, since its choices may load late. `again` (the site flagged this question after Next) starts with
    * the other ways, since the first way already didn't hold.
    */
+  /** The question being filled takes any general choice when its answer isn't offered ("How did you hear about us?"). */
+  protected anyChoice = false;
+
   protected async fillChecked(it: FillItem): Promise<FillResult["status"]> {
     this.chose = null;
+    this.anyChoice = !!it.anyChoice;
+    try { return await this.fillCheckedOnce(it); }
+    finally { this.anyChoice = false; }
+  }
+
+  private async fillCheckedOnce(it: FillItem): Promise<FillResult["status"]> {
     if (it.again && !it.file && it.value?.trim()) {
       if (await this.otherWays(it) === "filled") return "filled";
       this.chose = null;
@@ -280,7 +289,7 @@ class PwPage implements ApplyPage {
     const shown = await this.shownFor(it.key);
     if (shown === null) return true;
     if (!shown.trim()) return false;
-    if (!(it.key.startsWith("radio:") || it.type === "select")) return true;
+    if (!(it.key.startsWith("radio:") || it.type === "select") || it.anyChoice) return true;
     return showsAnswer(shown, this.chose ?? it.value ?? "", it.value ?? "");
   }
 
@@ -495,7 +504,8 @@ class PwPage implements ApplyPage {
     // for an agreement the site's wording may differ, so look at the whole list.
     const terms = isButton || agreeing ? [""] : [...searchTermsFor(value), ""];
     for (const term of terms) {
-      await loc.click();
+      // Something on the page can sit over the box: a short wait, then the click goes straight to it.
+      await loc.click({ timeout: 5000 }).catch(() => loc.click({ force: true, timeout: 5000 }));
       if (!isButton) { await loc.fill(term).catch(() => loc.pressSequentially(term)); }
       await this.pg.waitForTimeout(700 * this.pace);
       const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
@@ -513,6 +523,15 @@ class PwPage implements ApplyPage {
       const match = matchChoice(texts.filter(Boolean), value);
       if (match) at = texts.indexOf(match);
       if (at < 0 && agreeing) at = texts.findIndex((t) => AGREE_OPTION.test(t));
+      // "How did you hear about us?" whose list doesn't offer the answer (grouped "Advertisement / Partnership /
+      // Website"; Workday's own site, 2026-11-19): the closest general choice, else the first (Yong, 2026-11-16).
+      // Only on the whole list, so the answer itself is looked for first.
+      if (at < 0 && this.anyChoice && !term) {
+        at = texts.findIndex((t) => GENERAL_SOURCE.test(t));
+        // Never a choice left over from another list still open (a phone code, "Afghanistan (+93)").
+        if (at < 0) at = texts.findIndex((t) => !!t && !PLACEHOLDER.test(t) && !/\(\+\d{1,4}\)\s*$/.test(t));
+        if (at >= 0) log.info("apply.list_general_choice", { choice: texts[at]!.slice(0, 80) });
+      }
       if (at >= 0) {
         this.chose = texts[at] ?? null;
         await options.nth(at).click();
@@ -525,7 +544,7 @@ class PwPage implements ApplyPage {
         const opened = inner.filter(Boolean).length > 0 && inner.join("|") !== texts.join("|") && !(await this.chosenIn(loc));
         if (!opened) return "filled";
         const leaf = matchChoice(inner.filter(Boolean), value) ?? inner.find((t) => /^other\b|\bother$/i.test(t))
-          ?? inner.find((t) => GENERAL_SOURCE.test(t));
+          ?? inner.find((t) => GENERAL_SOURCE.test(t)) ?? (this.anyChoice ? inner.find((t) => !!t && !PLACEHOLDER.test(t)) : undefined);
         if (leaf) {
           this.chose = leaf;
           await options.nth(inner.indexOf(leaf)).click();
