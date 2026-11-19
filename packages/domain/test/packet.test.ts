@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ANSWER_PRESETS, applicantStepFor, confirmationIn, FILL_CONFIDENCE, packetHash, proposeField, proposeFields, receiptPdf, willFill, type PacketProfile } from "../src";
+import { ANSWER_PRESETS, applicantStepFor, confirmationIn, FILL_CONFIDENCE, packetHash, profileFieldFor, proposeField, proposeFields, receiptPdf, willFill, type PacketProfile } from "../src";
 
 const preset = (k: string) => [...ANSWER_PRESETS.find((p) => p.key === k)!.patterns];
 const profile = (over: Partial<PacketProfile> = {}): PacketProfile => ({
@@ -156,5 +156,14 @@ describe("a personal question asked as separate tick boxes (Premier self-identif
   it("leaves other tick-all-that-apply groups as they were", () => {
     const jobs = [{ key: "f", label: "Job type: Full-Time", type: "checkbox" as const }, { key: "p", label: "Job type: Part-Time", type: "checkbox" as const }];
     expect(proposeFields(jobs, profile())).toEqual(jobs.map((f) => proposeField(f, profile())));
+  });
+});
+
+describe("a yes/no question that names a place (GitLab, 2026-11-19)", () => {
+  it("is never taken for the applicant's city, so a typed \"No\" doesn't become their city", () => {
+    expect(profileFieldFor("Will you now or in the future require sponsorship for a visa to remain in your current location?*")).toBeNull();
+    expect(profileFieldFor("Are you currently located in the United States?")).toBeNull();
+    expect(profileFieldFor("What is your current country of residence?*")).toBe("country");
+    expect(profileFieldFor("Current location")).toBe("city");
   });
 });

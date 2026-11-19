@@ -6,7 +6,7 @@ import {
   type AnswerInferrer, type EssayDrafter, type InferFacts, type InferQuestion, type ApplyBrowser, type ApplyPage, type FillItem, type Fetcher, type FormField, type MailReader, type PageForm, type WorkdayPage,
 } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, answerPacketField, applyStatus, applyStatuses, applyShot, approveDocument, approvePacket, approveServerSend, connectEmail, continueAfterAnswers,
+  addEvidence, addFact, answerAndContinue, answerPacketField, applyStatus, applyStatuses, applyShot, approveDocument, approvePacket, approveServerSend, connectEmail, continueAfterAnswers,
   getApplication, getApplySettings, getPacket, listDocuments, listMatches, markDiffViewed, requestApply, requestLink, requestTailor, runNextWork,
   resolveOutcome, saveAbout, saveAnswer, saveApplyMode, savePreferences, saveWorkAuthAnswer, setStandingAnswer, storeResumeFile, trackJob, withApplicant, getProfile,
   type AppConfig, type ApplyDeps, type Session, type WorkDeps,
@@ -19,7 +19,7 @@ import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./
  * one press of Submit. The real browser runs against local pages in apps/worker/test.
  */
 
-interface FakeSpec { throws?: string; prefilled?: Record<string, string>; securityCode?: boolean; growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
+interface FakeSpec { throws?: string; prefilled?: Record<string, string>; securityCode?: boolean; growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean; wontTake?: string[] }
 
 class FakePage implements ApplyPage {
   values = new Map<string, string>();
@@ -38,8 +38,10 @@ class FakePage implements ApplyPage {
   async fill(items: FillItem[]) {
     this.fills.push(items);
     // A site whose upload box ignores the file (the browser says it's attached, their form disagrees).
-    for (const i of items) if (!(i.file && this.spec.fileDoesNotStick)) this.values.set(i.key, i.file ? `file:${i.file.name}:${i.file.bytes.length}` : String(i.value));
-    return items.map((i) => ({ key: i.key, status: "filled" as const }));
+    // A question whose answer the browser couldn't get to show in their form (GitLab's drop-downs, 2026-11-19).
+    const wont = new Set(this.spec.wontTake ?? []);
+    for (const i of items) if (!(i.file && this.spec.fileDoesNotStick) && !wont.has(i.key)) this.values.set(i.key, i.file ? `file:${i.file.name}:${i.file.bytes.length}` : String(i.value));
+    return items.map((i) => ({ key: i.key, status: wont.has(i.key) ? "failed" as const : "filled" as const }));
   }
   async filledHash() { return createHash("sha256").update(JSON.stringify([...this.values].sort())).digest("hex"); }
   async submit() { this.clicks++; return true; }
@@ -338,6 +340,66 @@ describe("Approve every send", () => {
     expect(s).toMatchObject({ status: "waiting", waitingFor: "approve_send" });
     expect(s.step).toMatch(/Their form is filled in\. Approve sending it/);
     expect(s.steps.map((x) => x.text).join("\n")).not.toMatch(/More questions appeared/);
+    await saveApplyMode(pool, cfg, yong, "hands_free");
+  });
+});
+
+describe("questions an answer didn't go into (GitLab, 2026-11-19)", () => {
+  const ASK: FormField[] = [...BASE,
+    { key: "#question_1", label: "Will you now or in the future require sponsorship for a visa to remain in your current location?*", type: "select", options: ["Yes", "No"], required: true },
+    { key: "#question_2", label: "Have you previously worked at or consulted for GitLab?*", type: "select", options: ["Yes", "No"], required: true },
+    { key: "#question_3", label: "Are you subject to any employment agreements and/or post-employment restrictions?*", type: "select", options: ["Yes", "No"], required: true },
+    { key: "#question_4", label: "What is your current country of residence?*", type: "text", required: true },
+    { key: "#question_5", label: "Preferred name?*", type: "text", required: true }];
+
+  it("names every question on the card, asks for exactly those on the page, and carries on after Save and continue", async () => {
+    await saveApplyMode(pool, cfg, yong, "approve_each");
+    await requestLink(pool, yong, { url: "https://jobs.example.test/GitlabCo", title: "Operations Analyst", employer: "Gitlab Co", location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
+    await drain();
+    const job = (await listMatches(pool, yong, { status: "all" })).rows.find((r: { employer_canonical: string }) => r.employer_canonical === "Gitlab Co").public_ref;
+    await requestTailor(pool, yong, job, ["resume"]);
+    await drain();
+    const ref = await trackJob(pool, yong, job);
+    let wont = ["#question_1", "#question_2", "#question_3", "#question_4"];
+    browser.spec = () => ({ url: GH(29), after: "thanks", wontTake: wont, fields: ASK });
+    for (const [label, answer] of [["sponsorship for a visa", "No"], ["previously worked at or consulted for GitLab", "No"], ["post-employment restrictions", "No"], ["country of residence", "United States"], ["Preferred name", "Yong"]] as const) {
+      await saveAnswer(pool, cfg, yong, { questionKey: `gl_${label.slice(0, 12)}`, patterns: [label], answer, approve: true });
+    }
+    await approveResume(ref);
+    await requestApply(pool, yong, ref);
+    await runNow();
+    expect(await applyStatus(pool, yong, ref)).toMatchObject({ status: "waiting", waitingFor: "approve_answers" });
+    let p = (await getPacket(pool, cfg, yong, ref))!;
+    await approvePacket(pool, yong, p.id, p.hash, "rk-gl-1");
+    await continueAfterAnswers(pool, yong, ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.status).toBe("failed");
+    // All four, not the first three.
+    expect(s.problem).toMatch(/couldn't put 4 answers.*sponsorship.*GitLab.*restrictions.*country of residence.*Save and continue/);
+    expect([...s.stuckKeys].sort()).toEqual(wont);
+    p = (await getPacket(pool, cfg, yong, ref))!;
+    const byKey = (k: string) => p.fields.find((f) => f.key === k)!;
+    // Leo can't answer Yong's questions.
+    await expect(answerAndContinue(pool, cfg, leo, ref, [{ fieldId: byKey("#question_3").id, text: "No", keep: false }])).rejects.toThrow();
+    wont = [];
+    const done = await answerAndContinue(pool, cfg, yong, ref, [
+      { fieldId: byKey("#question_1").id, text: "No", keep: true }, { fieldId: byKey("#question_2").id, text: "No", keep: true },
+      { fieldId: byKey("#question_3").id, text: "Yes", keep: false }, { fieldId: byKey("#question_4").id, text: "United States of America", keep: true }]);
+    expect(done).toEqual({ approved: true });
+    p = (await getPacket(pool, cfg, yong, ref))!;
+    expect(p.state).toBe("approved_to_apply");
+    expect(p.fields.find((f) => f.key === "#question_3")).toMatchObject({ answer: "Yes", source: "applicant_typed" });
+    await requestApply(pool, yong, ref);
+    const clicks = browser.clicks;
+    await runNow();
+    // Filled, and still waits for the send's own approval: Save and continue never approves sending.
+    expect(await applyStatus(pool, yong, ref)).toMatchObject({ status: "waiting", waitingFor: "approve_send", stuckKeys: [] });
+    expect(browser.clicks).toBe(clicks);
+    expect(browser.pages.at(-1)!.values.get("#question_3")).toBe("Yes");
+    expect(browser.pages.at(-1)!.values.get("#question_4")).toBe("United States of America");
+    const audit = (await ownerQuery("SELECT payload_summary AS payload FROM audit_event WHERE action = 'packet.approved' ORDER BY at DESC LIMIT 1")).rows[0];
+    expect(audit.payload.by).toBe("answered_on_application_page");
     await saveApplyMode(pool, cfg, yong, "hands_free");
   });
 });

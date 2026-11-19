@@ -252,6 +252,8 @@ export interface PacketFieldView {
   id: string; label: string; type: string; options: string[] | null; answer: string | null; source: string | null;
   confidence: number; step: StepKind | null; note: string | null; fillStatus: string; willFill: boolean;
   required: boolean; standingKind: StandingKind | null;
+  /** The question's key in the employer's form (as the run's stuck questions name it). */
+  key: string;
 }
 
 export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string) {
@@ -270,7 +272,8 @@ export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session,
       const answer = f.answer_value_enc ? decryptField(dk, "packet_field.answer_value", f.answer_value_enc) : null;
       const v = { step: f.step_kind, answer, confidence: Number(f.confidence ?? 0), source: f.source };
       return { id: f.id, label: f.question_as_shown, type: f.field_type ?? "text", options: f.options, answer, source: f.source, confidence: v.confidence,
-        step: f.step_kind, note: f.note, fillStatus: f.fill_status, willFill: willFill(v), required: !!f.required, standingKind: f.standing_kind ?? null };
+        step: f.step_kind, note: f.note, fillStatus: f.fill_status, willFill: willFill(v), required: !!f.required, standingKind: f.standing_kind ?? null,
+        key: String(f.field_key) };
     });
     const events = (await c.query("SELECT from_state, to_state, reason, actor, created_at FROM packet_state_event WHERE packet_id = $1 ORDER BY created_at, id", [k.id])).rows;
     return {
@@ -288,19 +291,55 @@ export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session,
 
 /** The applicant types or changes an answer. After approval this sends the packet back for review (database-enforced). */
 export async function answerPacketField(pool: pg.Pool, cfg: AppConfig, session: Session, fieldId: string, text: string): Promise<void> {
-  await withApplicant(pool, asApplicant(session), async (c) => {
-    const f = (await c.query("SELECT packet_id, requires_applicant_step, options, question_as_shown, field_type FROM packet_field WHERE id = $1", [fieldId])).rows[0];
-    if (!f) throw new DomainError("TC_NOT_FOUND");
-    if (f.requires_applicant_step) throw new DomainError("TC_APPLICANT_STEP");
-    const t = text.trim().slice(0, 10000);
-    if (f.options && t && !(f.options as string[]).includes(t)) throw new DomainError("TC_BAD_INPUT");
-    const dk = await dataKeyFor(c, cfg, session.applicantId);
-    await c.query(
-      `UPDATE packet_field SET answer_value_enc = $2, source = $3, source_ref_id = NULL, confidence = $4, note = NULL, fill_status = 'pending', updated_at = now() WHERE id = $1`,
-      [fieldId, t ? encryptField(dk, "packet_field.answer_value", t) : null, t ? "applicant_typed" : null, t ? 1 : 0]);
-    await rehash(c, dk, f.packet_id);
-    // Kept in the profile (or as a saved answer) so the next form doesn't ask again (Yong, 2026-11-15).
-    if (t) await keepAnswer(c, dk, session.applicantId, f.question_as_shown, f.field_type ?? "text", t);
+  await withApplicant(pool, asApplicant(session), (c) => setFieldAnswer(c, cfg, session, fieldId, text, true));
+}
+
+async function setFieldAnswer(c: pg.PoolClient, cfg: AppConfig, session: Session, fieldId: string, text: string, keep: boolean): Promise<string> {
+  const f = (await c.query("SELECT packet_id, requires_applicant_step, options, question_as_shown, field_type FROM packet_field WHERE id = $1", [fieldId])).rows[0];
+  if (!f) throw new DomainError("TC_NOT_FOUND");
+  if (f.requires_applicant_step) throw new DomainError("TC_APPLICANT_STEP");
+  const t = text.trim().slice(0, 10000);
+  if (f.options && t && !(f.options as string[]).includes(t)) throw new DomainError("TC_BAD_INPUT");
+  const dk = await dataKeyFor(c, cfg, session.applicantId);
+  await c.query(
+    `UPDATE packet_field SET answer_value_enc = $2, source = $3, source_ref_id = NULL, confidence = $4, note = NULL, fill_status = 'pending', updated_at = now() WHERE id = $1`,
+    [fieldId, t ? encryptField(dk, "packet_field.answer_value", t) : null, t ? "applicant_typed" : null, t ? 1 : 0]);
+  await rehash(c, dk, f.packet_id);
+  // Kept in the profile (or as a saved answer) so the next form doesn't ask again (Yong, 2026-11-15).
+  if (t && keep) await keepAnswer(c, dk, session.applicantId, f.question_as_shown, f.field_type ?? "text", t);
+  return f.packet_id as string;
+}
+
+/**
+ * "Save and continue" on the application page (Yong, 2026-11-19: "i don't have a place to supply my
+ * answer"): the applicant answers the questions the run stopped on, right there. Each answer goes into
+ * this application's answers, and into their saved answers when they ticked "use it again". Answers they
+ * had already approved stay approved: pressing Save and continue is their approval of the new ones, on
+ * this application only. Answers never approved still wait for "Approve these answers". Sending still
+ * needs its own approval, as the setting says.
+ */
+export async function answerAndContinue(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string,
+  answers: Array<{ fieldId: string; text: string; keep: boolean }>): Promise<{ approved: boolean }> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const k = (await c.query(
+      `SELECT k.id, k.state, k.failure_reason FROM application_packet k JOIN application a ON a.id = k.application_id
+        WHERE a.public_ref = $1 AND k.state <> 'abandoned' ORDER BY k.version DESC LIMIT 1 FOR UPDATE OF k`, [appRef])).rows[0];
+    if (!k) throw new DomainError("TC_NOT_FOUND");
+    if (k.state === "submitted" || (k.state === "failed" && k.failure_reason === "outcome_unknown")) throw new DomainError("TC_ALREADY_SUBMITTED_OR_UNKNOWN");
+    const wasApproved = ["approved_to_apply", "filling", "waiting_for_applicant", "ready_to_submit", "failed"].includes(k.state);
+    for (const a of answers) {
+      const packetId = await setFieldAnswer(c, cfg, session, a.fieldId, a.text, a.keep);
+      if (packetId !== k.id) throw new DomainError("TC_NOT_FOUND");
+    }
+    if (!wasApproved) return { approved: false };
+    const now = (await c.query("SELECT state, packet_hash FROM application_packet WHERE id = $1", [k.id])).rows[0];
+    if (now.state === "failed") await c.query("UPDATE application_packet SET state = 'packet_ready_for_review' WHERE id = $1", [k.id]);
+    if (now.state === "failed" || now.state === "packet_ready_for_review") {
+      await c.query("UPDATE application_packet SET approved_hash = packet_hash, state = 'approved_to_apply' WHERE id = $1", [k.id]);
+      await recordAudit(c, "packet.approved", { objectType: "application_packet", objectId: k.id,
+        payload: { application_ref: appRef, packet_hash: now.packet_hash, by: "answered_on_application_page" } });
+    }
+    return { approved: true };
   });
 }
 

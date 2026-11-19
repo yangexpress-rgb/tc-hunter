@@ -123,6 +123,24 @@ export const PAGE_SCRIPT = String.raw`
     return !!el.closest("[data-automation-id^='formField']") && /^search$/i.test(el.placeholder || "");
   }
 
+  /**
+   * The chosen item a site-drawn drop-down (React Select) shows beside its typing box. It sits beside the
+   * box, not inside it: on Greenhouse's job-boards forms the box is wrapped in "select__input-container",
+   * whose name also says "container", so looking only in the nearest "container" never found the choice
+   * and every picked answer read as empty (GitLab, 2026-11-19). Looks outward from the box, a few levels,
+   * stopping before a level that holds another question's box.
+   */
+  var CHOSEN = "[class*='single-value' i], [class*='singleValue' i], [class*='multi-value__label' i]";
+  function listChoice(el) {
+    for (var box = el.parentElement, depth = 0; box && depth < 5; box = box.parentElement, depth++) {
+      var boxes = box.querySelectorAll("input[role=combobox], select, textarea");
+      if (boxes.length > 1) break;
+      var picked = box.querySelectorAll(CHOSEN);
+      if (picked.length) return Array.prototype.map.call(picked, function (x) { return clean(x.textContent); }).filter(Boolean).join(", ");
+    }
+    return "";
+  }
+
   /** The form's questions, in page order. */
   function readForm() {
     var out = [], seen = {};
@@ -170,9 +188,7 @@ export const PAGE_SCRIPT = String.raw`
       }
       else if (role === "combobox") {
         // Site-drawn drop-downs show the chosen value next to the box, not in it.
-        var ctl = el.closest("[class*='control' i], [class*='container' i]");
-        var sv = ctl && ctl.querySelector("[class*='single-value' i], [class*='singleValue' i], [class*='multi-value' i]");
-        f.hasValue = !!clean(el.value) || !!(sv && clean(sv.textContent));
+        f.hasValue = !!clean(el.value) || !!listChoice(el);
       }
       else f.hasValue = !!clean(el.value);
       if (f.label) out.push(f);
@@ -209,11 +225,7 @@ export const PAGE_SCRIPT = String.raw`
       var fb = el.closest("[data-automation-id^='formField']") || el.parentElement;
       return fb ? Array.prototype.map.call(fb.querySelectorAll("[data-automation-id='selectedItem'], [data-automation-id='selectedItemList'] li"), function (x) { return clean(x.textContent); }).join(", ") : "";
     }
-    if (el.getAttribute("role") === "combobox") {
-      var ctl = el.closest("[class*='control' i], [class*='container' i]");
-      var sv = ctl && ctl.querySelector("[class*='single-value' i], [class*='singleValue' i], [class*='multi-value' i]");
-      return (sv && clean(sv.textContent)) || clean(el.value);
-    }
+    if (el.getAttribute("role") === "combobox") return listChoice(el) || clean(el.value);
     return clean(el.value);
   }
 
