@@ -84,6 +84,8 @@ export default async function ApplicationPage(props: Props) {
   // next to a "waiting for your approval" chip, and never good news above a failure (Huron, 2026-11-19).
   const notes = [
     params.moved === "1" && "Moved. You can change it any time.",
+    params.doc_approved === "resume" && "Resume approved. It's ticked off in Your documents below.",
+    params.doc_approved === "letter" && "Cover letter approved. It's ticked off in Your documents below.",
     params.approved === "1" && packetDone && !problem && "Approved. Nothing has been typed or sent yet.",
     params.submitted === "1" && "Recorded as applied. Your receipt is ready below.",
     params.send_approved === "1" && packet?.state === "ready_to_submit" && !problem && "Approved. Go back to their form and choose Send it.",

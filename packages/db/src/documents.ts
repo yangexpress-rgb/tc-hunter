@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, extractText, isStale, renderDocument,
+  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, exportLeakSpots, type ExportLeakSpot, extractText, isStale, renderDocument,
   type Blocked, type DocHeader, type Gap, type LetterProposer, type LetterSource, type ResumeProposer, type ResumeSource,
   type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
@@ -257,6 +257,10 @@ export interface DocumentView {
   versions: Array<{ ref: string; version: number; status: string; approvedAt: Date | null }>;
   profile: TailorProfile;
   usedIn: string[];
+  /** The tracker page for this job's application, when there is one (where review goes back to). */
+  applicationRef: string | null;
+  /** Phrases that would stop the export, where they are (drafts only). */
+  leaks: DocLeak[];
 }
 
 const kindOf = (type: string): DocKind => (type === "cover_letter" ? "letter" : "resume");
@@ -273,15 +277,20 @@ export async function getDocument(pool: pg.Pool, cfg: AppConfig, session: Sessio
     const versions = await c.query("SELECT public_ref, version, status, approved_at FROM document WHERE match_id = $1 AND type = $2 ORDER BY version DESC", [d.match_id, d.type]);
     const used = await c.query(`SELECT a.public_ref FROM application_packet k JOIN application a ON a.id = k.application_id
                 WHERE k.tailored_resume_document_id = $1 OR k.cover_letter_document_id = $1`, [d.id]);
+    const profile = await loadTailorProfile(c, dk);
+    const appRow = (await c.query("SELECT public_ref FROM application WHERE match_id = $1 ORDER BY created_at DESC LIMIT 1", [d.match_id])).rows[0];
+    const employer = cleanEmployerName(d.employer_canonical) || d.employer_canonical;
     return {
       id: d.id, ref: d.public_ref, type: d.type, kind: kindOf(d.type), version: d.version, status: d.status, source: d.source_json, contentHash: d.content_hash,
       diffViewedAt: d.diff_viewed_at, approvedAt: d.approved_at, createdAt: d.created_at, meta: d.generation_meta ?? {},
-      job: { ref: d.job_ref, title: d.title, employer: cleanEmployerName(d.employer_canonical) || d.employer_canonical, matchId: d.match_id, score: d.score },
+      job: { ref: d.job_ref, title: d.title, employer, matchId: d.match_id, score: d.score },
       blocked: blocked.rows.map((b) => ({ id: b.id, text: b.proposed_text, reason: b.reason, terms: b.terms, skillId: b.skill_id, resolvedAt: b.resolved_at })),
       gaps: gaps.rows.map((g) => ({ requirement: g.requirement_text, skill: g.skill_term })),
       versions: versions.rows.map((v) => ({ ref: v.public_ref, version: v.version, status: v.status, approvedAt: v.approved_at })),
-      profile: await loadTailorProfile(c, dk),
+      profile,
       usedIn: [...new Set(used.rows.map((u) => u.public_ref as string))],
+      applicationRef: appRow?.public_ref ?? null,
+      leaks: d.status === "draft" ? await leakSpots(c, d.id, d.source_json as DocSource, profile, employer) : [],
     };
   });
 }
@@ -415,26 +424,46 @@ async function headerFor(c: pg.PoolClient, cfg: AppConfig, applicantId: string):
   };
 }
 
+/** The terms an export must not carry: the job's gap skills, and names held back from this draft and not yet resolved. */
+async function leakTermsFor(c: pg.PoolClient, docId: string): Promise<{ gapSkills: string[]; heldBack: string[] }> {
+  const d = (await c.query("SELECT m.gap_skills FROM document d JOIN match m ON m.id = d.match_id WHERE d.id = $1", [docId])).rows[0];
+  const heldBack = (await c.query("SELECT terms FROM blocked_addition WHERE document_id = $1 AND reason IN ('gap_skill','new_name') AND resolved_at IS NULL", [docId])).rows
+    .flatMap((r) => r.terms as string[]);
+  return { gapSkills: (d?.gap_skills ?? []) as string[], heldBack };
+}
+
+export type DocLeak = ExportLeakSpot & { kind: "gap" | "held_back" };
+
+/** Where a draft would fail the export check, phrase by phrase (shown at the top of the page before Approve). */
+async function leakSpots(c: pg.PoolClient, docId: string, source: DocSource, profile: TailorProfile, employer: string): Promise<DocLeak[]> {
+  const { gapSkills, heldBack } = await leakTermsFor(c, docId);
+  const gap = exportLeakSpots(source, profile, gapSkills, [employer]).map((l) => ({ ...l, kind: "gap" as const }));
+  const held = exportLeakSpots(source, profile, heldBack, [employer]).map((l) => ({ ...l, kind: "held_back" as const }))
+    .filter((l) => !gap.some((g) => g.anchor === l.anchor && g.term.toLowerCase() === l.term.toLowerCase()));
+  return [...gap, ...held];
+}
+
 /** Renders both files and runs the export check over their text (risk 3, layer 5). Throws TC_EXPORT_LEAK on any leak. */
 async function renderChecked(c: pg.PoolClient, cfg: AppConfig, applicantId: string, docId: string, source: DocSource, when: Date) {
   const header = await headerFor(c, cfg, applicantId);
   const dk = await dataKeyFor(c, cfg, applicantId);
   const profile = await loadTailorProfile(c, dk);
-  const d = (await c.query("SELECT m.gap_skills FROM document d JOIN match m ON m.id = d.match_id WHERE d.id = $1", [docId])).rows[0];
-  const blockedTerms = (await c.query("SELECT terms FROM blocked_addition WHERE document_id = $1 AND reason IN ('gap_skill','new_name') AND resolved_at IS NULL", [docId])).rows
-    .flatMap((r) => r.terms as string[]);
+  const { gapSkills, heldBack } = await leakTermsFor(c, docId);
+  const job = (await c.query("SELECT p.employer_canonical FROM document d JOIN job_posting p ON p.id = d.job_posting_id WHERE d.id = $1", [docId])).rows[0];
+  // The employer and title the document is for are its subject, not a claim ("Dear GitLab hiring team").
+  const names = [source.target.employer, source.target.title, job?.employer_canonical ?? "", cleanEmployerName(job?.employer_canonical ?? "")];
   const r = await renderDocument(source, header, when);
   for (const [kind, bytes] of [["pdf", r.pdf], ["docx", r.docx]] as const) {
     const text = (await extractText(kind, bytes)).replace(/\s+/g, " ");
-    const leaks = exportLeaks(text, profile, [...(d?.gap_skills ?? []), ...blockedTerms]);
+    const leaks = exportLeaks(text, profile, [...gapSkills, ...heldBack], names);
     if (leaks.length) throw new DomainError("TC_EXPORT_LEAK");
   }
   return r;
 }
 
 /** Approve (design 5.4): the applicant's own act, after viewing what changed; exports are checked first; the previous approved version is superseded. */
-export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Session, docId: string): Promise<void> {
-  await withApplicant(pool, asApplicant(session), async (c) => {
+export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Session, docId: string): Promise<string | null> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
     const d = (await c.query("SELECT * FROM document WHERE id = $1 FOR UPDATE", [docId])).rows[0];
     if (!d) throw new DomainError("TC_NOT_FOUND");
     if (d.status !== "draft") throw new DomainError("TC_DOCUMENT_IMMUTABLE");
@@ -458,6 +487,8 @@ export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Se
       const a = (await c.query("SELECT id FROM application WHERE match_id = $1 AND stage = 'ready_to_apply'", [d.match_id])).rows[0];
       if (a) await applyAfterApproval(c, a.id);
     }
+    // Where review goes back to: the application's tracker page, when the job has one.
+    return (await c.query("SELECT public_ref FROM application WHERE match_id = $1 ORDER BY created_at DESC LIMIT 1", [d.match_id])).rows[0]?.public_ref ?? null;
   });
 }
 
