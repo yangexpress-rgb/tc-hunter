@@ -79,6 +79,15 @@ describe("the section 4 mapping: every row gives one stage and one status line",
     expect(x.action).toMatchObject({ kind: "apply", label: "Try again" });
   });
 
+  it("Workday: a paused run with a problem outranks review & approve, in red, with Continue", () => {
+    const x = j({ stage: "ready_to_apply", docs: approvedDocs, packet: pk("packet_ready_for_review"),
+      run: { status: "waiting", waitingFor: "answers", problem: "Workday's form wants more on \"My Information\". Add these, then choose Continue." } });
+    expect(x.tone).toBe("problem");
+    expect(x.owner).toBe("applicant");
+    expect(x.status).toMatch(/^Workday's form wants more/);
+    expect(x.action).toMatchObject({ kind: "apply", label: "Continue" });
+  });
+
   it("closed always carries its reason", () => {
     expect(j({ stage: "closed_lost" }).chip).toBe("Closed · Not successful");
     expect(j({ stage: "no_response" }).chip).toBe("Closed · No reply");
