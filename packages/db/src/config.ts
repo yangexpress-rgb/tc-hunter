@@ -1,4 +1,4 @@
-import { ANSWER_MODEL, aiModels, FileSecretStore, type AiProvider, INFER_EFFORT, parseMasterKey, type SecretStore } from "@tc-hunter/domain";
+import { ANSWER_MODEL, aiModels, FileSecretStore, type AiMode, INFER_EFFORT, parseMasterKey, type SecretStore } from "@tc-hunter/domain";
 
 export interface AppConfig {
   databaseUrl: string;
@@ -61,11 +61,13 @@ export function resumeReaderName(env: NodeJS.ProcessEnv = process.env): "claude"
  * Whether application questions are worked out by Claude ("smart answers", Yong 2026-11-17), in
  * plain words for Settings and the worker's startup log. When off, the reason; never silent.
  */
-export function smartAnswersStatus(env: NodeJS.ProcessEnv = process.env, provider: AiProvider = "claude"): { on: boolean; provider: AiProvider; model: string | null; effort: string; problem: string | null } {
-  const off = (problem: string) => ({ on: false, provider, model: null, effort: INFER_EFFORT, problem });
+export function smartAnswersStatus(env: NodeJS.ProcessEnv = process.env, provider: AiMode = "claude"): { on: boolean; provider: AiMode; model: string | null; effort: string; problem: string | null; noAi: boolean } {
+  const off = (problem: string) => ({ on: false, provider, model: null, effort: INFER_EFFORT, problem, noAi: provider === "none" });
+  // No AI mode (Yong, 2026-11-19): the applicant's choice, shown as "Smart answers: off — No AI mode".
+  if (provider === "none") return off("No AI mode: only your saved answers and information are used.");
   if (provider === "claude" && !env.ANTHROPIC_API_KEY) return off("No Anthropic API key is set on the server (ANTHROPIC_API_KEY on Railway), so questions the rules can't settle are left for you.");
   if (env.TC_RESUME_READER === "rules") return off("Claude is turned off on the server (TC_RESUME_READER=rules), so questions the rules can't settle are left for you.");
   if (env.TC_ANSWER_INFER === "off") return off("Smart answers are turned off on the server (TC_ANSWER_INFER=off), so questions the rules can't settle are left for you.");
   if (env.TC_APPLY_BROWSER === "off") return off("TC Hunter's own browser is turned off on the server (TC_APPLY_BROWSER=off), so it doesn't fill in forms.");
-  return { on: true, provider, model: provider === "claude" ? ANSWER_MODEL : aiModels(env).openai.judgment, effort: INFER_EFFORT, problem: null };
+  return { on: true, provider, model: provider === "claude" ? ANSWER_MODEL : aiModels(env).openai.judgment, effort: INFER_EFFORT, problem: null, noAi: false };
 }

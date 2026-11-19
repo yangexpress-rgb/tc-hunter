@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listApplications, listDocuments, listEmailSignals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
-import { t } from "@tc-hunter/domain";
+import { READ_WITHOUT_AI, readWithoutAi, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -172,7 +172,8 @@ export default async function JobPage(props: Props) {
         </Details>
       ) : null}
 
-      <Details summary="What the job asks for">
+      <Details summary={readWithoutAi(m.posting_parser) ? "What the job asks for (read without AI)" : "What the job asks for"}>
+        {readWithoutAi(m.posting_parser) ? <p className="muted small">{READ_WITHOUT_AI}</p> : null}
         {req.must_have?.length ? <><h3>Required</h3><ul>{req.must_have.map((x) => <li key={x}>{x}</li>)}</ul></> : null}
         {req.nice_to_have?.length ? <><h3>Nice to have</h3><ul>{req.nice_to_have.map((x) => <li key={x}>{x}</li>)}</ul></> : null}
         {req.years ? <p>Experience asked for: {req.years}+ years</p> : null}

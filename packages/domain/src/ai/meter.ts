@@ -40,6 +40,17 @@ export const JUDGMENT_MODEL = "claude-opus-5-5";
 export type AiProvider = "claude" | "openai";
 export const AI_PROVIDERS: readonly AiProvider[] = ["claude", "openai"];
 export const AI_PROVIDER_LABEL: Record<AiProvider, string> = { claude: "Claude", openai: "OpenAI" };
+/**
+ * The AI setting's three choices (Yong, 2026-11-19): Claude, OpenAI, or No AI. In No AI mode the app
+ * makes no AI call at all and completes applications from the applicant's own saved information.
+ */
+export type AiMode = AiProvider | "none";
+export const AI_MODES: readonly AiMode[] = ["claude", "openai", "none"];
+export const AI_MODE_LABEL: Record<AiMode, string> = { ...AI_PROVIDER_LABEL, none: "No AI" };
+/** Layer 1: the one plain line under "No AI" in Settings. */
+export const NO_AI_LINE = "Uses only your saved answers and information. Nothing is read or written by AI, and nothing is charged.";
+/** The packet review's line for an application answered in No AI mode. */
+export const NO_AI_PACKET_LINE = "These answers came only from your saved information. Nothing was written or checked by AI.";
 /** Which provider a model belongs to, from its name. */
 export const providerOf = (model: string): AiProvider => (/^claude/.test(model) ? "claude" : "openai");
 
@@ -143,11 +154,11 @@ const holder = globalThis as unknown as { __tcUsageSink?: UsageSink | null };
 /** Where usage goes (the worker and web app set this once at start: database row plus log line). */
 export function setUsageSink(s: UsageSink | null) { holder.__tcUsageSink = s; }
 
-/** A run's tag, whether it is a quality test, and the AI provider it is pinned to (never mixed inside one run). */
-interface Scope { run?: string; test?: boolean; provider?: AiProvider }
+/** A run's tag, whether it is a quality test, and the AI mode it is pinned to (never mixed inside one run). */
+interface Scope { run?: string; test?: boolean; provider?: AiMode }
 const scope = new AsyncLocalStorage<Scope>();
-/** The provider the current run is pinned to, if any. */
-export const scopedProvider = (): AiProvider | undefined => scope.getStore()?.provider;
+/** The AI mode (a provider, or "none") the current run is pinned to, if any. */
+export const scopedProvider = (): AiMode | undefined => scope.getStore()?.provider;
 /** Runs `fn` with every call inside it tagged with the run it belongs to (and whether it is a quality test). */
 export function withUsageScope<T>(s: Scope, fn: () => Promise<T>): Promise<T> {
   return scope.run({ ...scope.getStore(), ...s }, fn);

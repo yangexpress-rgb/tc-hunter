@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, answerAndContinue, giveUpHandover, handBackHandover, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
+  acceptCalibration, acceptEmailSignal, answerAndContinue, storyText, giveUpHandover, handBackHandover, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
   resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
@@ -97,7 +97,10 @@ export async function packetAnswerAction(form: FormData) {
   const { pool, cfg } = app();
   await act(form, async () => {
     // The answer is also kept in the profile (or as a saved answer), so the next form doesn't ask again.
-    await answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), String(form.get("answer") ?? ""));
+    // "Use this story": one of their approved stories, word for word (Yong, 2026-11-19).
+    const story = String(form.get("story") ?? "");
+    const text = story ? await storyText(pool, cfg, s, story) : String(form.get("answer") ?? "");
+    await answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), text);
     await continueIfAnswered(pool, s, ref);
   }, `/applications/${ref}#packet`);
 }
@@ -118,7 +121,10 @@ export async function answerHereAction(form: FormData) {
     let workAuth = false;
     for (const id of form.getAll("field").map(String).slice(0, 100)) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
-      const text = String(form.get(`answer_${id}`) ?? "").trim();
+      // A story picked for a written answer is used word for word when the box is left empty.
+      const story = String(form.get(`story_${id}`) ?? "");
+      const typed = String(form.get(`answer_${id}`) ?? "").trim();
+      const text = typed || (story ? (await storyText(pool, cfg, s, story)).trim() : "");
       if (!text) throw Object.assign(new Error("TC_ANSWER_MISSING"), { code: "TC_ANSWER_MISSING" });
       if (form.get(`wa_${id}`)) { await saveWorkAuthAnswer(pool, cfg, s, String(form.get(`q_${id}`) ?? ""), text); workAuth = true; continue; }
       answers.push({ fieldId: id, text, keep: form.get(`keep_${id}`) === "1" });

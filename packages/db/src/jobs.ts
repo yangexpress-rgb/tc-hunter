@@ -5,7 +5,8 @@ import {
   normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, bestGoalFit, candidateFit, FIT_VERSION, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, retryWaitMs, titleIsRelated, outsideCountries, scanCountries, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, portalFor, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
-  readRequirementsText, withUsageScope, AI_PROVIDERS, currentAiProvider, scopedProvider, type AiProvider, type BatchPosting, type Requirements, type RequirementsBatcher,
+  readRequirementsText, withUsageScope, AI_MODES, currentAiProvider, scopedProvider, type AiMode, type BatchPosting, type Requirements, type RequirementsBatcher,
+  RulesRequirementsReader, MasterResumeProposer, SavedLetterProposer, NamedCompaniesOnly,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { runTailor, type TailorDeps } from "./documents";
@@ -804,15 +805,35 @@ const SEARCH_HOME: Record<SearchSiteId, string> = {
 /** What the worker did, for its log (no personal data): false when there was nothing to do. */
 export type WorkDone = false | { kind: string; ok: boolean; ms: number; attempt: number; result?: Record<string, unknown>; error?: string };
 
-/** The AI provider a piece of work runs on: the one it was first taken on, or the setting's now (then kept on the item). */
-async function workProvider(pool: pg.Pool, ctx: RequestContext, item: ClaimedWork): Promise<AiProvider> {
+/** The AI mode a piece of work runs on: the one it was first taken on, or the setting's now (then kept on the item). */
+async function workProvider(pool: pg.Pool, ctx: RequestContext, item: ClaimedWork): Promise<AiMode> {
   const kept = item.payload?.ai_provider;
-  if (AI_PROVIDERS.includes(kept)) return kept as AiProvider;
+  if (AI_MODES.includes(kept)) return kept as AiMode;
   const now = await currentAiProvider();
   try {
     await withApplicant(pool, ctx, (c) => c.query("UPDATE work_item SET payload = coalesce(payload, '{}'::jsonb) || jsonb_build_object('ai_provider', $2::text) WHERE id = $1", [item.id, now]));
   } catch { /* the run still uses it; only a retry would look again */ }
   return now;
+}
+
+/**
+ * The work's helpers in No AI mode (Yong, 2026-11-19), each AI step swapped for its designed non-AI
+ * path: requirements by the rule reader (stored as read without AI) and never sent in a batch; the
+ * master resume as it is and the applicant's saved letter (no generation, no proofread); companies
+ * only as the applicant names them (no suggestions, no careers lookup); job-alert emails read by the
+ * rules. A resume upload is not read (runDigest says so). The AI client also refuses every call in
+ * this mode, so nothing can fall back to AI silently.
+ */
+export function noAiDeps(deps: WorkDeps): WorkDeps {
+  const rules = new RulesRequirementsReader();
+  return {
+    ...deps,
+    reader: rules,
+    batch: undefined,
+    tailor: deps.tailor && { ...deps.tailor, resume: new MasterResumeProposer(), letter: new SavedLetterProposer(), proofread: undefined },
+    email: deps.email && { ...deps.email, postings: deps.email.postings && rules },
+    discover: deps.discover && { ...deps.discover, proposer: new NamedCompaniesOnly(), careers: undefined },
+  };
 }
 
 export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDone> {
@@ -828,6 +849,9 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
     // One piece of work runs on one AI provider (Yong, 2026-11-18): the one the setting named when it was
     // first taken, kept on the item so a retry, or a search's batch collected later, stays on it.
     const provider = await workProvider(pool, ctx, item);
+    // No AI mode (Yong, 2026-11-19): every AI step gets its non-AI path for this whole piece of work.
+    // An application settles its own mode in runApply (it keeps the one its run started on).
+    if (provider === "none" && item.kind !== "apply") deps = noAiDeps(deps);
     // Every AI call made for this item is tagged with it, so one application's or search's cost can be read back.
     const result = await withUsageScope({ run: `${item.kind}:${item.id}`, provider }, async () => item.kind === "scan"
       ? await runScan(pool, ctx, deps, { discover: p.discover === true, fresh: p.fresh === true, only: ids(p.only), freshIds: ids(p.fresh_ids), scheduled: p.scheduled === true })

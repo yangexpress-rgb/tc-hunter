@@ -7,6 +7,14 @@ import type { Requirements, RequirementsReader } from "./types";
  * work-authorisation lines from them. Deterministic, so scores are reproducible.
  */
 export const RULES_REQUIREMENTS_VERSION = "req-rules-1";
+/**
+ * Whether a stored reading (job_posting.parser_version) was made by the rule reader, without AI: in No
+ * AI mode, or when AI isn't set up (Yong, 2026-11-19). Shown on the job, so the applicant knows its
+ * must-haves and gaps are the rougher rule reading.
+ */
+export const readWithoutAi = (parserVersion: string | null | undefined): boolean => (parserVersion ?? "").startsWith("req-rules");
+/** Layer 1: the label on a job whose requirements were read without AI. */
+export const READ_WITHOUT_AI = "Read without AI: the requirements were picked out by rules, so the must-haves and gaps may be rougher.";
 
 const MUST_HEAD = /^(#+\s*)?(requirements|required|qualifications|minimum qualifications|basic qualifications|required qualifications|required skills|must[- ]haves?|what you('ll)? (need|bring)|what we('re)? looking for|you have|you bring|about you|who you are|skills and experience|experience required)\b/i;
 const NICE_HEAD = /^(#+\s*)?(nice[- ]to[- ]haves?|preferred( qualifications| skills)?|bonus( points)?|desired|pluses|good to have|it'?s a plus|extra credit|additional qualifications)\b/i;

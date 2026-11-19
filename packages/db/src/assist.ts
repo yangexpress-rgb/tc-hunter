@@ -1,14 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
 import {
-  ADAPTERS, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, looksConfirmed, packetHash, proposeFields, receiptPdf, willFill,
-  type Ats, type FormField, type PacketProfile, type ProposedField, type StandingKind, type StepKind,
+  ADAPTERS, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, isEssayQuestion, looksConfirmed, packetHash, proposeFields, receiptPdf, willFill,
+  type AiMode, type Ats, type FormField, type PacketProfile, type ProposedField, type StandingKind, type StepKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import type { AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
-import { exportDocument } from "./documents";
+import { approvedStories, exportDocument } from "./documents";
 import { approveSubmission, consumeSubmissionKey, DomainError, markOutcomeUnknown, recordSubmitted } from "./packets";
 import { once } from "./requestKey";
 import { asApplicant, dataKeyFor } from "./profile";
@@ -254,6 +254,8 @@ export interface PacketFieldView {
   required: boolean; standingKind: StandingKind | null;
   /** The question's key in the employer's form (as the run's stuck questions name it). */
   key: string;
+  /** A long written answer ("Why do you want to work here?"): offered the applicant's stories, word for word. */
+  essay: boolean;
 }
 
 export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string) {
@@ -273,19 +275,34 @@ export async function getPacket(pool: pg.Pool, cfg: AppConfig, session: Session,
       const v = { step: f.step_kind, answer, confidence: Number(f.confidence ?? 0), source: f.source };
       return { id: f.id, label: f.question_as_shown, type: f.field_type ?? "text", options: f.options, answer, source: f.source, confidence: v.confidence,
         step: f.step_kind, note: f.note, fillStatus: f.fill_status, willFill: willFill(v), required: !!f.required, standingKind: f.standing_kind ?? null,
-        key: String(f.field_key) };
+        key: String(f.field_key), essay: f.field_type === "textarea" && isEssayQuestion({ label: f.question_as_shown, type: "textarea", options: f.options ?? undefined }) };
     });
+    // The AI mode the application's run is on (No AI: the review says its answers are only the applicant's own).
+    const aiMode = ((await c.query("SELECT ai_provider FROM apply_run WHERE application_id = $1 AND ai_provider IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+      [k.application_id])).rows[0]?.ai_provider ?? null) as AiMode | null;
+    // Their stories, only when a written answer still needs them.
+    const stories = fields.some((f) => f.essay && !f.willFill && !f.step) ? await approvedStories(c, dk) : [];
     const events = (await c.query("SELECT from_state, to_state, reason, actor, created_at FROM packet_state_event WHERE packet_id = $1 ORDER BY created_at, id", [k.id])).rows;
     return {
       id: k.id as string, appRef: k.app_ref as string, version: k.version as number, state: k.state as string, waitingReason: k.waiting_reason as string | null,
       failureReason: k.failure_reason as string | null, hash: k.packet_hash as string, approvedAt: k.approved_at as Date | null, submittedAt: k.submitted_at as Date | null,
       confirmationRef: k.confirmation_ref as string | null, formHost: k.form_host as string | null, title: k.title as string, employer: k.employer_canonical as string,
       resume: `${k.r_ref} v${k.r_v}`, resumeRef: k.r_ref as string, letter: k.l_ref ? `${k.l_ref} v${k.l_v}` : null, letterRef: k.l_ref as string | null,
-      receiptRef: k.receipt_ref as string | null, fields, events,
+      receiptRef: k.receipt_ref as string | null, fields, events, aiMode, noAi: aiMode === "none", stories,
       ats: k.ats as Ats | null, filledHash: k.filled_hash as string | null, submitApproved: !!k.submit_approved_hash && !String(k.submit_approved_hash).startsWith("assisted:"),
       submitStarted: !!k.submission_key_used_at, outcomeUnknown: k.state === "failed" && k.failure_reason === "outcome_unknown",
       guided: guidedCheck(k.ats, fields.map((f) => ({ key: "", label: f.label, step: f.step, answer: f.answer, confidence: f.confidence, source: f.source as never }))),
     };
+  });
+}
+
+/** One of the applicant's approved stories, word for word, to use as a written answer (the story picker). */
+export async function storyText(pool: pg.Pool, cfg: AppConfig, session: Session, storyId: string): Promise<string> {
+  if (!/^[0-9a-f-]{36}$/i.test(storyId)) throw new DomainError("TC_NOT_FOUND");
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const s = (await approvedStories(c, await dataKeyFor(c, cfg, session.applicantId))).find((x) => x.id === storyId);
+    if (!s) throw new DomainError("TC_NOT_FOUND");
+    return s.text;
   });
 }
 

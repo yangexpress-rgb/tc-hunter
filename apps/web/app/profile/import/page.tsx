@@ -1,5 +1,5 @@
 import { getProfile, getReaderPrompt, listResumeFiles, resumeReaderName } from "@tc-hunter/db";
-import { MAX_READER_PROMPT, READER_APP_RULES, READER_PARTS, t } from "@tc-hunter/domain";
+import { aiIsOff, MAX_READER_PROMPT, READER_APP_RULES, READER_PARTS, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -18,6 +18,7 @@ const LINKEDIN_RESULT: Record<string, string> = {
   refused: "Link saved. LinkedIn turned the request away, so we couldn't read your profile. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
   not_found: "Link saved, but LinkedIn says there's no profile at that address. Check the link.",
   empty: "Link saved. LinkedIn sent back almost nothing to read. To bring it in anyway, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
+  no_ai: "Link saved. No AI mode is on, so your LinkedIn profile isn't read automatically. Add your roles, skills and education by hand on your profile instead.",
   unreachable: "Link saved. We couldn't read your profile from LinkedIn: this app isn't set up to open LinkedIn pages, and LinkedIn shows apps a sign-in page anyway. To bring it in, open your profile on LinkedIn, choose More, then Save to PDF, and upload that file in the box above.",
 };
 
@@ -34,6 +35,7 @@ export default async function ImportPage(props: PageProps) {
   const [{ saved, error, params }, files, profile, prompt] = await Promise.all([flashOf(props), listResumeFiles(pool, session), getProfile(pool, cfg, session), getReaderPrompt(pool, session)]);
   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: prompt.timeZone }) : "");
   const li = typeof params.li === "string" ? params.li : "";
+  const noAi = await aiIsOff();
   const older = profile.imports.filter((b) => !b.resume_file_id);
   const busy = files.some((f) => f.latest && !["ready", "failed", "replaced"].includes(f.latest.status) && !f.latest.stuck);
   return (
@@ -47,6 +49,8 @@ export default async function ImportPage(props: PageProps) {
       <section className="card">
         <form action={importAction} className="stack">
           <h2>Your resume</h2>
+          {/* No AI mode (Yong, 2026-11-19): said before they upload, with the manual form one tap away. */}
+          {noAi ? <p className="warn">No AI mode is on, so a resume can&apos;t be read automatically. <a href="/profile#experience">Add your roles, skills and education by hand</a> instead. A LinkedIn data download (.zip) still works.</p> : null}
           <label>Your file<input type="file" name="file" accept=".pdf,.docx,.txt,.md,.zip" required /></label>
           <button>Save and read my file</button>
         </form>

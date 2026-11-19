@@ -1,5 +1,5 @@
 import { AI_PROVIDER_REFUSALS, aiProviderView, getApplySettings, getProfile, hasFreshStepUp, listDevices, smartAnswersStatus, type AiProviderRefusal } from "@tc-hunter/db";
-import { AI_PROVIDER_LABEL, AI_PROVIDERS, STANDING_ANSWERS, t, type ApplyMode } from "@tc-hunter/domain";
+import { AI_MODE_LABEL, AI_MODES, NO_AI_LINE, STANDING_ANSWERS, t, type ApplyMode } from "@tc-hunter/domain";
 import { headers } from "next/headers";
 import { Details, Status } from "@/components/Layers";
 import { app, requireSession, vault } from "@/lib/server";
@@ -32,6 +32,7 @@ export default async function ApplyingSettingsPage(props: PageProps) {
   const aiDone: Record<string, string> = {
     switched_claude: "Switched to Claude. New work uses it from now on; anything already running finishes on the provider it started with.",
     switched_openai: "Switched to OpenAI. New work uses it from now on; anything already running finishes on the provider it started with.",
+    switched_none: "Switched to No AI. New work uses only your saved answers and information from now on; anything already running finishes on the provider it started with.",
     key_saved: "OpenAI key saved. OpenAI checked it and it works.",
     key_removed: "OpenAI key removed.",
   };
@@ -48,16 +49,17 @@ export default async function ApplyingSettingsPage(props: PageProps) {
       <SettingsHeader title="Applying for you" params={params} saved={saved} error={error} />
       <section className="card" id="ai-provider">
         <h2>AI provider</h2>
-        <p className="muted">Every AI task in TC Hunter — reading jobs, answering questions, writing documents — uses the provider you pick here.</p>
+        <p className="muted">Every AI task in TC Hunter — reading jobs, answering questions, writing documents — uses the provider you pick here. Or pick No AI, and TC Hunter works from your saved information only.</p>
         {aiNote && aiDone[aiNote] ? <Status>{aiDone[aiNote]}</Status> : null}
         {aiRefused ? <p className="error">{aiRefused}</p> : null}
         <form action={aiProviderAction} className="stack">
           <fieldset>
-            <legend>AI provider: {AI_PROVIDER_LABEL[ai.provider]}</legend>
-            {AI_PROVIDERS.map((p) => (
+            <legend>AI provider: {AI_MODE_LABEL[ai.provider]}</legend>
+            {AI_MODES.map((p) => (
               <label key={p} className="choice">
-                <input type="radio" name="provider" value={p} defaultChecked={ai.provider === p} disabled={!fresh} /> <strong>{AI_PROVIDER_LABEL[p]}</strong>{" "}
-                {ai.connected[p] ? <span className="ok small">Connected</span> : <span className="error small">Not connected</span>}
+                <input type="radio" name="provider" value={p} defaultChecked={ai.provider === p} disabled={!fresh} /> <strong>{AI_MODE_LABEL[p]}</strong>{" "}
+                {p === "none" ? <><br /><span className="muted small">{NO_AI_LINE}</span></>
+                  : ai.connected[p] ? <span className="ok small">Connected</span> : <span className="error small">Not connected</span>}
               </label>
             ))}
           </fieldset>
@@ -99,11 +101,14 @@ export default async function ApplyingSettingsPage(props: PageProps) {
         {params.apply === "standing_off" ? <Status>Turned off. TC Hunter will stop and ask you instead.</Status> : null}
         <div className="smart-answers" id="smart-answers" role="status">
           {smart.on ? (
-            <p><strong>Smart answers: on · {AI_PROVIDER_LABEL[smart.provider]} · {smart.model}</strong> <span className="muted">· effort {smart.effort} · every answer checked against your profile</span></p>
+            <p><strong>Smart answers: on · {AI_MODE_LABEL[smart.provider]} · {smart.model}</strong> <span className="muted">· effort {smart.effort} · every answer checked against your profile</span></p>
+          ) : smart.noAi ? (
+            <p><strong>Smart answers: off — No AI mode</strong> <span className="muted">· questions your saved answers don&apos;t cover come to you, and what you answer is saved for next time</span></p>
           ) : (
             <p className="error"><strong>Smart answers: off.</strong> {smart.problem} Applications still run, but only on answers the rules are sure of.</p>
           )}
-          <p className="muted small">Questions your profile doesn&apos;t settle by itself are worked out from your goals, roles and what you did in them, skills, education, saved answers, stories and resumes (never your contact details). Each answer must quote the part of your profile it rests on; anything it can&apos;t support is left for you. Long written answers are drafted for you to read and approve.</p>
+          {smart.noAi ? <p className="muted small">In No AI mode, answers come only from your profile, your saved answers and your standing answers. A question none of them covers is never guessed: TC Hunter asks you, on the application, and you can save your answer so it&apos;s used next time. Written answers are yours to write, or you can use one of your stories word for word.</p> : null}
+          {smart.noAi ? null : <p className="muted small">Questions your profile doesn&apos;t settle by itself are worked out from your goals, roles and what you did in them, skills, education, saved answers, stories and resumes (never your contact details). Each answer must quote the part of your profile it rests on; anything it can&apos;t support is left for you. Long written answers are drafted for you to read and approve.</p>}
         </div>
         <p>TC Hunter has its own browser on the server. It opens the employer&apos;s form, fills it in from your profile, attaches your approved resume and cover letter, and presses Submit. Each application page shows what it did, step by step, with pictures of the employer&apos;s page.</p>
         <form action={applyModeAction} className="stack">

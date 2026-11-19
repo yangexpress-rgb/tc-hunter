@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { OpenAiMessages } from "./openai";
-import { aiModels, scopedProvider, withUsageScope, type AiProvider, type AiTier } from "./meter";
+import { aiModels, scopedProvider, withUsageScope, type AiMode, type AiProvider, type AiTier } from "./meter";
 
 /**
  * One setting switches every AI task between Claude and OpenAI (Yong, 2026-11-18). Every call site
@@ -12,8 +12,8 @@ import { aiModels, scopedProvider, withUsageScope, type AiProvider, type AiTier 
 
 /** Where the setting and the OpenAI key come from (the worker and the web app set this once at start). */
 export interface AiProviderSource {
-  /** The provider the setting names now. */
-  provider(): Promise<AiProvider>;
+  /** The provider the setting names now, or "none" (No AI mode). */
+  provider(): Promise<AiMode>;
   /** The OpenAI key from the vault, or null when none is saved. Never logged. */
   openaiKey(): Promise<string | null>;
 }
@@ -21,26 +21,42 @@ export interface AiProviderSource {
 export type AiEventLog = (event: "ai.refused" | "ai.failed", data: Record<string, unknown>) => void;
 
 // Kept on globalThis: a bundler may load this module more than once in one process.
-const holder = globalThis as unknown as { __tcAiSource?: AiProviderSource | null; __tcAiLast?: AiProvider; __tcAiLog?: AiEventLog | null };
+const holder = globalThis as unknown as { __tcAiSource?: AiProviderSource | null; __tcAiLast?: AiMode; __tcAiLog?: AiEventLog | null };
 export function setAiProviderSource(s: AiProviderSource | null) { holder.__tcAiSource = s; }
 export function setAiEventLog(l: AiEventLog | null) { holder.__tcAiLog = l; }
 export const aiEvent: AiEventLog = (e, d) => { try { holder.__tcAiLog?.(e, d); } catch { /* logging never stops the work */ } };
 
-/** The provider the setting names now (Claude when nothing is set up, as before the switch existed). */
-export async function currentAiProvider(): Promise<AiProvider> {
-  let p: AiProvider = "claude";
+/** The provider the setting names now, or "none" (Claude when nothing is set up, as before the switch existed). */
+export async function currentAiProvider(): Promise<AiMode> {
+  let p: AiMode = "claude";
   try { p = (await holder.__tcAiSource?.provider()) ?? "claude"; } catch { p = holder.__tcAiLast ?? "claude"; }
   holder.__tcAiLast = p;
   return p;
 }
 
-/** The provider a call made now uses: the run's, when it is pinned; otherwise the setting's. */
-export async function activeAiProvider(): Promise<AiProvider> {
+/** The provider a call made now uses: the run's, when it is pinned; otherwise the setting's ("none" in No AI mode). */
+export async function activeAiProvider(): Promise<AiMode> {
   return scopedProvider() ?? currentAiProvider();
 }
 
-/** Runs `fn` with every AI call inside it on `provider`, whatever the setting says meanwhile. */
-export function withAiProvider<T>(provider: AiProvider, fn: () => Promise<T>): Promise<T> {
+/** True when work started now (or the run in scope) is in No AI mode. */
+export async function aiIsOff(): Promise<boolean> {
+  return (await activeAiProvider()) === "none";
+}
+
+/**
+ * The typed "AI is off" result (Yong, 2026-11-19). In No AI mode the client below refuses every call
+ * before anything leaves the server; each call site has its own non-AI path, and this is the backstop
+ * that makes a silent fall back to AI impossible.
+ */
+export class AiOffError extends Error {
+  readonly code = "ai_off" as const;
+  constructor() { super("AI is off (No AI mode), so TC Hunter did not use AI for this step."); }
+}
+export const isAiOff = (e: unknown): e is AiOffError => e instanceof AiOffError || (e as { code?: string } | null)?.code === "ai_off";
+
+/** Runs `fn` with every AI call inside it on `provider` (or in No AI mode), whatever the setting says meanwhile. */
+export function withAiProvider<T>(provider: AiMode, fn: () => Promise<T>): Promise<T> {
   return withUsageScope({ provider }, fn);
 }
 
@@ -93,7 +109,13 @@ const batchProvider = (id: string): AiProvider => (id.startsWith("batch_") ? "op
  * that names an OpenAI model itself (the evals) gets that one.
  */
 export function aiClient(tier: AiTier): Anthropic {
-  const route = async () => ((await activeAiProvider()) === "openai" ? { kind: "openai" as const, c: await openai() } : { kind: "claude" as const, c: claude() });
+  // No AI mode: refused here, before any client is made or anything is sent (Yong, 2026-11-19).
+  const refuseIfOff = async () => { if ((await activeAiProvider()) === "none") throw new AiOffError(); };
+  const route = async () => {
+    const p = await activeAiProvider();
+    if (p === "none") throw new AiOffError();
+    return p === "openai" ? { kind: "openai" as const, c: await openai() } : { kind: "claude" as const, c: claude() };
+  };
   const messages = {
     parse: async (params: Record<string, unknown>, opts?: unknown) => {
       const r = await route();
@@ -106,9 +128,9 @@ export function aiClient(tier: AiTier): Anthropic {
         const r = await route();
         return r.kind === "openai" ? r.c.batchCreate(params.requests, tier) : r.c.beta.messages.batches.create(params as never);
       },
-      retrieve: async (id: string) => (batchProvider(id) === "openai" ? (await openai()).batchRetrieve(id) : claude().beta.messages.batches.retrieve(id)),
-      results: async (id: string) => (batchProvider(id) === "openai" ? (await openai()).batchResults(id) : claude().beta.messages.batches.results(id)),
-      cancel: async (id: string) => (batchProvider(id) === "openai" ? (await openai()).batchCancel(id) : claude().beta.messages.batches.cancel(id)),
+      retrieve: async (id: string) => (await refuseIfOff(), batchProvider(id) === "openai" ? (await openai()).batchRetrieve(id) : claude().beta.messages.batches.retrieve(id)),
+      results: async (id: string) => (await refuseIfOff(), batchProvider(id) === "openai" ? (await openai()).batchResults(id) : claude().beta.messages.batches.results(id)),
+      cancel: async (id: string) => (await refuseIfOff(), batchProvider(id) === "openai" ? (await openai()).batchCancel(id) : claude().beta.messages.batches.cancel(id)),
     },
   };
   return { beta: { messages }, messages } as unknown as Anthropic;

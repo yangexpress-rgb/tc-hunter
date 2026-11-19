@@ -15,13 +15,16 @@ async function go(fn: () => Promise<void>, ok: string, card: "ai-provider" | "op
   redirect(target);
 }
 
-/** Switches every AI task to Claude or OpenAI. Refused when that provider has no key. Needs a fresh "confirm it's you". */
+/**
+ * Switches every AI task to Claude or OpenAI, or turns AI off (No AI, Yong 2026-11-19). Refused when that
+ * provider has no key; No AI needs none. Needs a fresh "confirm it's you".
+ */
 export async function aiProviderAction(form: FormData): Promise<void> {
   const s = await requireSession();
   const { pool, cfg } = app();
   if (!hasFreshStepUp(s, cfg)) redirect("/settings/applying#confirm");
   const provider = String(form.get("provider") ?? "");
-  await go(() => setAiProvider(pool, vault(), s, provider), `switched_${provider === "openai" ? "openai" : "claude"}`);
+  await go(() => setAiProvider(pool, vault(), s, provider), `switched_${provider === "openai" ? "openai" : provider === "none" ? "none" : "claude"}`);
 }
 
 /**

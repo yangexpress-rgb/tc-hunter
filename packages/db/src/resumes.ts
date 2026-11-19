@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   decryptField, detectKind, extractText, mappedText, MAX_RESUME_BYTES, open, parseLinkedInExport, planCounts, planDigest,
   publicSections, readResume, readerText, sectionHints, mergeSections, findProfileDuplicates, type ProfileDuplicate, seal, splitSections, type DigestPlan, type InputSection, type ParsedResume, type ProfileSnapshot,
-  type ResumeFileKind, type ResumeParser, unplacedLines, stripContactDetails, contactBlockEnd, READER_PROMPT, MAX_READER_PROMPT, withLegacyNotes,
+  type ResumeFileKind, type ResumeParser, unplacedLines, stripContactDetails, contactBlockEnd, READER_PROMPT, MAX_READER_PROMPT, withLegacyNotes, aiIsOff,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
@@ -253,6 +253,9 @@ export interface DigestDeps {
 
 class DigestFailure extends Error {}
 
+/** What a resume upload says in No AI mode (Yong, 2026-11-19). */
+export const NO_AI_RESUME = "No AI mode is on, so your resume can't be read automatically. Add your roles, skills and education by hand on your profile instead (Me › Experience). A LinkedIn data download (.zip) still works: LinkedIn sorts it itself.";
+
 const SOURCE = { resume: "import_resume", linkedin: "import_linkedin" } as const;
 const conf = (n: number | undefined) => (n === undefined ? null : Math.round(Math.max(0, Math.min(1, n)) * 100) / 100);
 const short = (s: string, n = 160) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -299,6 +302,8 @@ export async function runDigest(pool: pg.Pool, ctx: { userAccountId: string; app
       parsed = await readResume(sourceText, { name: li.parser, parse: async () => li });
       readerName = li.parser;
     } else {
+      // No AI mode (Yong, 2026-11-19): a resume isn't read automatically, and isn't kept waiting for AI later.
+      if (await aiIsOff()) throw new DigestFailure(NO_AI_RESUME);
       let text: string;
       try { text = await extractText(file.fileKind, file.bytes); } catch { text = ""; }
       if (text.trim().length < 40) {

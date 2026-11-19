@@ -59,6 +59,37 @@ export class RulesLetterProposer implements LetterProposer {
   }
 }
 
+/**
+ * No AI mode (Yong, 2026-11-19): the master resume as it is. Nothing is reworded, reordered or
+ * picked for the job; the applicant selects and reorders bullets by hand in the studio. Diff & Gaps
+ * and the honesty check still run on it.
+ */
+export class MasterResumeProposer implements ResumeProposer {
+  readonly version = "tailor-none-1";
+  async propose(_profile: TailorProfile, _posting: TailorPosting, opts: ProposeOptions = {}) {
+    return { proposal: { lines: [], skill_ids: [], asIs: true } as ResumeProposal, meta: { proposer: this.version, ...(opts.feedback ? { feedback_applied: false } : {}) } };
+  }
+}
+
+/** The saved answer that holds the applicant's own cover letter (used as written in No AI mode). */
+export const SAVED_LETTER_KEY = "cover_letter";
+
+/**
+ * No AI mode (Yong, 2026-11-19): no letter is generated. The letter is the applicant's saved letter
+ * text, word for word (they can edit it in the studio), or none at all: the application then goes
+ * without one where the employer allows, or asks the applicant on the form.
+ */
+export class SavedLetterProposer implements LetterProposer {
+  readonly version = "letter-none-1";
+  async propose(profile: TailorProfile, _posting: TailorPosting, opts: ProposeOptions = {}) {
+    const saved = profile.answers.find((a) => a.approved && a.key === SAVED_LETTER_KEY && a.text.trim());
+    const paragraphs: LetterProposal["paragraphs"] = saved
+      ? saved.text.split(/\n\s*\n/).map((t) => t.trim()).filter(Boolean).map((text) => ({ fact_ids: [saved.id], role: "motivation" as const, text }))
+      : [];
+    return { proposal: { paragraphs }, meta: { proposer: this.version, ...(saved ? {} : { skipped: "no_saved_letter" }), ...(opts.feedback ? { feedback_applied: false } : {}) } };
+  }
+}
+
 const MODEL = "claude-opus-5-5";
 const PROMPT_VERSION = "tailor-claude-4";
 

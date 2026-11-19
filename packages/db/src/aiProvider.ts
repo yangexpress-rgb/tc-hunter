@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { AI_PROVIDERS, AI_PROVIDER_LABEL, SecretValue, aiModels, type AiProvider, type AiProviderSource, type SecretStore } from "@tc-hunter/domain";
+import { AI_MODES, AI_PROVIDER_LABEL, SecretValue, aiModels, type AiMode, type AiProvider, type AiProviderSource, type SecretStore } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import { withApplicant } from "./context";
@@ -15,7 +15,8 @@ import { withApplicant } from "./context";
 export const HOUSEHOLD_VAULT_ID = "00000000-0000-0000-0000-000000000000";
 
 export interface AiProviderView {
-  provider: AiProvider;
+  /** Claude, OpenAI, or "none" (No AI mode, Yong 2026-11-19). */
+  provider: AiMode;
   connected: Record<AiProvider, boolean>;
   /** The model each provider uses for judgment and for extraction. */
   models: ReturnType<typeof aiModels>;
@@ -23,7 +24,7 @@ export interface AiProviderView {
   canSaveKey: boolean;
 }
 
-type Row = { provider: AiProvider; openai_key_ref: string | null };
+type Row = { provider: AiMode; openai_key_ref: string | null };
 const readRow = async (pool: pg.Pool): Promise<Row> =>
   (await pool.query("SELECT provider, openai_key_ref FROM ai_provider_setting WHERE id")).rows[0] ?? { provider: "claude", openai_key_ref: null };
 
@@ -39,7 +40,7 @@ export async function aiProviderView(pool: pg.Pool, vault: SecretStore | undefin
 
 /** Why a change was refused, in plain words (shown in red next to the setting). */
 export const AI_PROVIDER_REFUSALS = {
-  pick: "Pick Claude or OpenAI.",
+  pick: "Pick Claude, OpenAI or No AI.",
   need_openai_key: "Add your OpenAI key first.",
   need_anthropic_key: "Add your Anthropic key first (ANTHROPIC_API_KEY on Railway).",
   no_vault: "The server's vault isn't set up (TC_VAULT_DIR), so a key can't be kept safely here.",
@@ -56,11 +57,12 @@ export class AiProviderRefused extends Error {
 /**
  * Switches the provider. Refused at the setting itself when that provider has no key, so a missing key
  * is never found out in the middle of a run. Work already running finishes on the provider it began with.
+ * No AI (Yong, 2026-11-19) is never refused: it needs no key, even on a fresh install with none at all.
  */
 export async function setAiProvider(pool: pg.Pool, vault: SecretStore | undefined, session: Session, provider: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  if (!AI_PROVIDERS.includes(provider as AiProvider)) throw new AiProviderRefused("pick");
-  const view = await aiProviderView(pool, vault, env);
-  if (!view.connected[provider as AiProvider]) {
+  if (!AI_MODES.includes(provider as AiMode)) throw new AiProviderRefused("pick");
+  const view = provider === "none" ? null : await aiProviderView(pool, vault, env);
+  if (view && !view.connected[provider as AiProvider]) {
     throw new AiProviderRefused(provider === "openai" ? "need_openai_key" : "need_anthropic_key");
   }
   await withApplicant(pool, { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" }, async (c) => {

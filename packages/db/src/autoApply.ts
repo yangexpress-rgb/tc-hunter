@@ -8,7 +8,7 @@ import {
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
-  AI_PROVIDERS, currentAiProvider, scopedProvider, withAiProvider, type AiProvider,
+  AI_MODES, currentAiProvider, scopedProvider, withAiProvider, type AiMode,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { hasFreshStepUp, type Session } from "./auth";
@@ -315,7 +315,7 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   });
   if (!gathered) return { answers: out, problems };
   if (!gathered.evidence) {
-    problems.push(`Smart answers are off, so ${gathered.open.length === 1 ? "1 question was" : `${gathered.open.length} questions were`} left for you. ${smartAnswersStatus().problem ?? ""}`.trim());
+    problems.push(`Smart answers are off, so ${gathered.open.length === 1 ? "1 question was" : `${gathered.open.length} questions were`} left for you. ${offReason()}`.trim());
     return { answers: out, problems };
   }
   const ask: InferQuestion[] = [];
@@ -354,7 +354,7 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
     education: facts.education.length, with_degree: facts.education.filter((e) => e.degree?.trim()).length, saved: facts.saved.length, stories: facts.stories.length,
     resume: facts.resumeText?.length ?? 0, master_resume: facts.masterResumeText?.length ?? 0, start_saved: !!startSaid, start_read: !!start,
     essays: essays.length, from_education: gathered.open.length - ask.length - essays.length });
-  if (ask.length && !deps.inferrer) problems.push(`Smart answers are off, so ${ask.length === 1 ? "1 question was" : `${ask.length} questions were`} left for you. ${smartAnswersStatus().problem ?? ""}`.trim());
+  if (ask.length && !deps.inferrer) problems.push(`Smart answers are off, so ${ask.length === 1 ? "1 question was" : `${ask.length} questions were`} left for you. ${offReason()}`.trim());
   else if (ask.length) {
     const got = await deps.inferrer!.infer(ask, facts).catch((e): InferOutcome => ({ answers: [], problems: [`Smart answers failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`] }));
     problems.push(...got.problems);
@@ -389,6 +389,11 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   }
   return { answers: out, problems };
 }
+
+/** Why answers weren't worked out, in plain words: No AI mode, or the server's own setting. */
+const offReason = () => (scopedProvider() === "none"
+  ? "No AI mode is on, so only your saved answers and information were used. Answer them and save them, and they're used next time."
+  : smartAnswersStatus().problem ?? "");
 
 /** The job site a link belongs to, in words ("LinkedIn"). */
 function siteName(url: string): string {
@@ -669,9 +674,12 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
       WHERE r.ai_provider IS NOT NULL AND (
             r.id = (SELECT run_id FROM apply_handover WHERE id = $2::uuid AND application_id = $1)
          OR r.id = (SELECT id FROM apply_run WHERE application_id = $1 AND status = 'queued' ORDER BY created_at DESC LIMIT 1))
-      LIMIT 1`, [payload.application_id ?? null, payload.handover ?? null])).rows[0]?.ai_provider as AiProvider | undefined);
-  const provider = kept && AI_PROVIDERS.includes(kept) ? kept : scopedProvider() ?? await currentAiProvider();
-  return withAiProvider(provider, () => runApplyOn(pool, ctx, payload, deps));
+      LIMIT 1`, [payload.application_id ?? null, payload.handover ?? null])).rows[0]?.ai_provider as AiMode | undefined);
+  const provider = kept && AI_MODES.includes(kept) ? kept : scopedProvider() ?? await currentAiProvider();
+  // No AI mode (Yong, 2026-11-19): no answers worked out, no drafts, no careers lookup. Questions with no
+  // saved source go to the applicant; written answers are theirs (or one of their stories).
+  const run = provider === "none" ? { ...deps, inferrer: undefined, drafter: undefined, careers: undefined } : deps;
+  return withAiProvider(provider, () => runApplyOn(pool, ctx, payload, run));
 }
 
 async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string; requeueIn?: number }> {
@@ -1022,7 +1030,8 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
   // Never silent (Yong, 2026-11-17): when smart answers are off or fail, the run says so in red.
   for (const p of [...new Set(worked.problems)]) {
     applyLog.warn("apply.infer_problem", { run: run.id, problem: p.slice(0, 300) });
-    await run.note(p.slice(0, 400), true);
+    // No AI mode is the applicant's own choice, not a fault: said plainly, not in red.
+    await run.note(p.slice(0, 400), scopedProvider() !== "none");
   }
   const inferred = worked.answers;
   const result = await withApplicant(pool, auto, async (c) => {

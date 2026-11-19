@@ -20,6 +20,33 @@ reading a resume, finding its About) uses the provider picked there.
   audited. Settings shows each provider as Connected / Not connected.
 - Changing the provider or the key needs a fresh "confirm it's you".
 
+## No AI (Yong, 2026-11-19)
+
+The setting has a third choice: **No AI** — "Uses only your saved answers and information. Nothing is
+read or written by AI, and nothing is charged." It needs no key (it works on a fresh install with none)
+and follows the same pinning rule: a run keeps the mode it started with (`none` on the work item and on
+`apply_run.ai_provider`). Settings shows "Smart answers: off — No AI mode".
+
+The invariant is enforced at `aiClient`: in No AI mode every call (parse, stream, batch create,
+retrieve, results, cancel) is refused before any client is made, with `AiOffError` (`code: "ai_off"`).
+Each call site gets its designed non-AI path first (`noAiDeps` in `packages/db/src/jobs.ts`, and
+`runApply` for applications), so the refusal is only the backstop that rules out a silent fall back.
+
+| AI step | In No AI mode |
+|---|---|
+| Requirements reader (scans, pasted links, job-alert emails) | Rule reader; stored as `req-rules-1`, and the job page says "read without AI". No batch. |
+| Answer inferrer and its check | Off. Packet from profile facts, saved answers, standing answers and documents only; anything else is "Needs you" (packet review, or the answer box on the application page), with "use this answer on future applications too". |
+| Essay drafter | Off. The applicant writes it, or picks one of their approved stories word for word (story picker), or leaves it. |
+| Resume tailor and proofread | Off. The master resume as it is (`tailor-none-1`: profile order, every line and skill, the About word for word); hand selection and reordering in the studio stay. Diff & Gaps and the honesty check still run. |
+| Cover letter | Off. The saved answer "Your cover letter" word for word (`letter-none-1`), or no letter. |
+| About finder | Off. The saved About is used as it is; "Copy from my resume" uses the rules only. |
+| Resume reader | Off. Upload says it can't be read automatically in this mode and points to the manual profile form; nothing is queued for AI later. A LinkedIn data download (.zip) still comes in (LinkedIn sorts it). |
+| Company suggestions and careers lookup | Off. Companies are added by hand (name and careers link); board resolution from the link and "Can't be read directly" are unchanged. |
+
+Proof: `packages/db/test/no-ai.test.ts` wires every AI helper the worker uses, replaces both providers'
+clients with call-counting traps, and checks a No AI scan and a fixture application end to end make
+zero calls and zero `ai_usage` rows.
+
 ## Models (one table: `aiModels()` in `packages/domain/src/ai/meter.ts`, next to `AI_PRICES`)
 
 | Tier | Claude | OpenAI |

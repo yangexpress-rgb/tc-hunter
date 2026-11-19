@@ -211,6 +211,7 @@ export const L1 = {
 
   // Errors (every error code maps to one of these)
   "error.generic": "Something went wrong on our side. Your information is safe. Please try again.",
+  "error.no_ai_resume": "No AI mode is on, so your resume can't be read automatically. Add your roles, skills and education by hand on your profile (Me › Experience) instead.",
   "error.no_about_in_resume": "We couldn't find a summary in your uploaded resume. Write your About here instead, or upload a resume that has one.",
   "error.unknown_country": "We don't recognise one of the countries. Write each country's full name, e.g. United States, Canada.",
   "error.not_found": "We couldn't find that. It may have been removed.",
@@ -343,6 +344,7 @@ export const ERROR_MESSAGES: Record<string, L1Key> = {
   TC_TOO_MANY_TRIES: "signin.locked",
   TC_SOURCE_NOT_SUPPORTED: "error.source",
   TC_NO_ABOUT_IN_RESUME: "error.no_about_in_resume",
+  TC_NO_AI_RESUME: "error.no_ai_resume",
   TC_UNKNOWN_COUNTRY: "error.unknown_country",
 };
 

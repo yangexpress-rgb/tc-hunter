@@ -63,6 +63,11 @@ export interface ResumeProposal {
   aliases?: AliasProposal[];
   /** Roles, lines or skills (by id) to leave out, when the applicant's feedback asks for it. Leaving out is always safe. */
   leave_out?: string[];
+  /**
+   * No AI mode (Yong, 2026-11-19): the master resume as it is. Profile order, every line and skill, the
+   * applicant's About word for word; the applicant selects and reorders by hand in the studio.
+   */
+  asIs?: boolean;
 }
 /** The writer's reading of the job, shown to the applicant as notes (never printed in the letter). */
 export interface LetterAnalysis {
@@ -72,7 +77,7 @@ export interface LetterAnalysis {
 }
 export interface LetterProposal { paragraphs: ProposedLine[]; analysis?: LetterAnalysis }
 
-export interface GenerationMeta { proposer: string; model?: string; prompt_version?: string; /** False when feedback was given but this proposer can't follow free text. */ feedback_applied?: boolean }
+export interface GenerationMeta { proposer: string; model?: string; prompt_version?: string; /** False when feedback was given but this proposer can't follow free text. */ feedback_applied?: boolean; /** Why no document was made (No AI mode with no saved letter). */ skipped?: string }
 
 /** The applicant's feedback on the last version (Yong, 2026-11-15: "Revise with feedback"), and that version's text. */
 export interface ProposeOptions { feedback?: string; previous?: string }
