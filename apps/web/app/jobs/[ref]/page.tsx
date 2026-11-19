@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { getMatchByRef, getPreferences, listApplications, listDocuments, tailorReadiness, tailorWork } from "@tc-hunter/db";
-import { STAGE_LABEL, t, type ApplicationStage } from "@tc-hunter/domain";
+import { applyStatuses, getMatchByRef, getPreferences, journeyFacts, listApplications, listDocuments, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
+import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -10,6 +10,7 @@ import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { tailorAction } from "@/app/documents/actions";
 import { trackAction } from "@/app/applications/actions";
+import { journeyFor, StatusBlock, type RunLine } from "@/components/applications/Journey";
 
 type FitPart = { key: string; label: string; weight: number; points: number; detail: string[] };
 
@@ -35,6 +36,14 @@ export default async function JobPage(props: Props) {
   const [docs, work, prefs, apps, ready] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session)]);
   const lastResult = (work?.status === "done" ? work.result ?? {} : {}) as { empty?: boolean };
   const tracked = apps.find((a) => a.job_ref === m.public_ref);
+  // A tracked job shows the same status block as its application, so its next step (e.g. "Apply for me now")
+  // is a button right here, not only a link to the application (Yong, 2026-11-19).
+  let journey = null;
+  if (tracked) {
+    const [facts, runs, sum] = await Promise.all([journeyFacts(pool, session, tracked.public_ref), applyStatuses(pool, session), trackerSummary(pool, session)]);
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: sum.timeZone }).format(new Date());
+    journey = journeyFor(tracked, facts[tracked.public_ref], { today, timeZone: sum.timeZone }, { run: runs[tracked.public_ref] as RunLine | undefined });
+  }
   const preparing = work && (work.status === "queued" || work.status === "running");
   const minScore = prefs?.min_score_to_tailor ?? null;
   const back = `/jobs/${m.public_ref}`;
@@ -69,8 +78,10 @@ export default async function JobPage(props: Props) {
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
       <FeedbackButtons matchId={m.id} status={status} back={back} />
       {preparing ? <meta httpEquiv="refresh" content="4" /> : null}
-      {tracked ? (
-        <p className="tracked">You're tracking this job: <a href={`/applications/${tracked.public_ref}`}>{STAGE_LABEL[tracked.stage as ApplicationStage]}</a></p>
+      {tracked && journey ? (
+        <StatusBlock j={journey} appRef={tracked.public_ref} back={`/applications/${tracked.public_ref}`} card>
+          <p className="small sb-note"><a href={`/applications/${tracked.public_ref}`}>Open the application</a></p>
+        </StatusBlock>
       ) : (
         <form action={trackAction} className="inline-actions">
           <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
