@@ -52,6 +52,13 @@ beforeAll(async () => {
       'document.addEventListener("keydown", function (e) { if (e.key === "Escape") lb.innerHTML = ""; });</script>');
     // Workday's slow parts (Premier, 2026-11-17): a list that shows only "Select One" for a moment after opening,
     // and a Review page whose Submit button is drawn after its heading.
+    // A list that takes 3 seconds to show its choices, under a cookie notice (Workday's own careers site, 2026-11-19).
+    if (url.startsWith("/later")) return html('<div data-automation-id="formField-src"><label>How Did You Hear About Us?*</label><button type="button" aria-haspopup="listbox" id="src">Select One</button></div>' +
+      '<ul id="lb" role="listbox"></ul>' +
+      '<script>document.getElementById("src").addEventListener("click", function () { var lb = document.getElementById("lb");' +
+      'lb.innerHTML = "<li role=option>Select One</li>"; setTimeout(function () { lb.innerHTML = "<li role=option>Job Board</li><li role=option>Referral</li>";' +
+      ' lb.querySelectorAll("li").forEach(function (li) { li.addEventListener("click", function () { document.getElementById("src").textContent = li.textContent; lb.innerHTML = ""; }); }); }, 3000); });' +
+      'document.addEventListener("keydown", function (e) { if (e.key === "Escape") document.getElementById("lb").innerHTML = ""; });</script>');
     if (url.startsWith("/slow")) return html('<div data-automation-id="formField-deg"><label>Degree*</label><button type="button" aria-haspopup="listbox" id="deg">Select One</button></div>' +
       '<ul id="lb" role="listbox"></ul><div id="foot"></div>' +
       '<script>document.getElementById("deg").addEventListener("click", function () { var lb = document.getElementById("lb");' +
@@ -280,6 +287,16 @@ describe.skipIf(!available)("checking each answer took, and trying another way w
       const form = await page.readForm();
       expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["radio:auth", "#sp", "#late"]);
       expect(await page.flagged?.()).toEqual(["#flag"]);
+    } finally { await page.close(); }
+  });
+});
+
+describe.skipIf(!available)("a list whose choices take seconds to appear (Workday's own site, 2026-11-19)", () => {
+  it("waits for the real choices instead of giving up on \"Select One\"", async () => {
+    const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/later`);
+    try {
+      expect((await page.fill([{ key: "#src", type: "select", value: "Job Board" }])).map((r) => r.status)).toEqual(["filled"]);
+      expect((await page.readForm()).fields.find((f) => f.key === "#src")?.hasValue).toBe(true);
     } finally { await page.close(); }
   });
 });
