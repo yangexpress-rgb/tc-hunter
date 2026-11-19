@@ -9,6 +9,9 @@ What changes compared with the home server:
 
 - **It's on the public internet.** Anyone can reach the sign-in page, so every account
   must turn on two-step sign-in (an authenticator app) before it can do anything.
+  Setting `REQUIRE_MFA=false` makes it optional: each person can then turn it off in
+  Settings › Sign-in and security after confirming it's them (Yong chose this on
+  2026-11-18, until a paid text-message service is added).
   Sign-up needs a code you choose, and closes once Yong and Leo have accounts.
   Wrong passwords or codes pause the account for 15 minutes after 10 tries.
 - **Your data lives on Railway**: the database, and the vault (employer-site passwords
@@ -188,7 +191,7 @@ the database's public address from Railway and a one-off copy of the vault onto 
 
 ## What stays protected
 
-- Two-step sign-in is required for every account, including before a device is remembered;
+- Two-step sign-in is required for every account (unless `REQUIRE_MFA=false`), including before a device is remembered;
   a remembered device stays signed in for at most 30 days and can be signed out from any
   other device; each code works once; a sign-in gets 5
   tries at the code; 10 wrong tries pause the account for 15 minutes; one address can make

@@ -162,6 +162,10 @@ export const L1 = {
   "settings.mfa.codes_remake": "Make new recovery codes",
   "settings.mfa.move_cta": "Move to a new phone",
   "settings.mfa.moved": "Your new phone is set up. Codes from the old one no longer work.",
+  "error.mfa_required": "Two-step sign-in is required on this TC Hunter, so it can't be turned off.",
+  "settings.mfa.turn_off": "Turn off two-step sign-in",
+  "settings.mfa.turn_off_intro": "You'll sign in with your password only. Your authenticator key and recovery codes are deleted, so turning it back on means setting up the app again.",
+  "settings.mfa.turned_off": "Two-step sign-in is off. You'll sign in with your password only.",
   "settings.advanced": "Advanced",
   "settings.privacy": "Only you can see your information. Nobody else on this server, including other family members, can open it.",
 
@@ -333,6 +337,7 @@ export const ERROR_MESSAGES: Record<string, L1Key> = {
   TC_ERASE_CONFIRM_MISMATCH: "error.erase_confirm",
   TC_BAD_INPUT: "error.fields",
   TC_STEP_UP_FAILED: "settings.confirm.failed",
+  TC_MFA_REQUIRED: "error.mfa_required",
   TC_TOO_MANY_TRIES: "signin.locked",
   TC_SOURCE_NOT_SUPPORTED: "error.source",
   TC_NO_ABOUT_IN_RESUME: "error.no_about_in_resume",

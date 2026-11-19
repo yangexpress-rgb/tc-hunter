@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import QRCode from "qrcode";
-import { beginMfaSetup, confirmMfaSetup, remakeRecoveryCodes, signOut, signOutElsewhere } from "@tc-hunter/db";
+import { beginMfaSetup, confirmMfaSetup, disableMfa, remakeRecoveryCodes, signOut, signOutElsewhere } from "@tc-hunter/db";
 import { errorCode, otpauthUri, t } from "@tc-hunter/domain";
 import { app, clearSessionCookie, requireSession, requireSessionForSetup, sessionToken } from "@/lib/server";
 
@@ -34,6 +34,18 @@ export async function remakeCodesAction(): Promise<CodesState> {
   } catch (e) {
     return { error: errorCode(e) ?? "TC_UNKNOWN" };
   }
+}
+
+/** Turns two-step sign-in off, when the app doesn't require it. Needs a fresh "Confirm it's you". */
+export async function turnOffMfaAction(): Promise<void> {
+  const session = await requireSession();
+  const { pool, cfg } = app();
+  try {
+    await disableMfa(pool, cfg, session);
+  } catch (e) {
+    redirect(`/settings?e=${errorCode(e) ?? "TC_UNKNOWN"}#security`);
+  }
+  redirect("/settings?mfa=off#security");
 }
 
 export async function signOutAction(): Promise<void> {

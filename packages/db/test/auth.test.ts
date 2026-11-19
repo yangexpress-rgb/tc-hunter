@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type pg from "pg";
 import { totpAt } from "@tc-hunter/domain";
 import {
-  beginMfaSetup, CODE_TRIES, confirmMfaSetup, getSession, hasFreshStepUp, loadConfig, LOCK_AFTER, mustSetUpMfa, pendingSignIn,
+  beginMfaSetup, CODE_TRIES, confirmMfaSetup, disableMfa, getSession, hasFreshStepUp, loadConfig, LOCK_AFTER, mustSetUpMfa, pendingSignIn,
   listSignedInDevices, recoveryCodesLeft, remakeRecoveryCodes, sessionCookieUntil, signIn, signOut, signOutElsewhere, signUp, stepUp,
   verifySignInCode,
 } from "../src";
@@ -121,6 +121,21 @@ describe("sign-in on a public host", () => {
     expect(await verifySignInCode(pool, cfg, token, totpAt(secret, Date.now() + 30_000))).toBe(true);
     return token;
   }
+
+  it("two-step sign-in can be turned off only when not required, after a fresh check", async () => {
+    const a = await withMfa("Optout");
+    const loose = { ...cfg, requireMfa: false };
+    await expect(disableMfa(pool, cfg, a.session)).rejects.toThrow("TC_MFA_REQUIRED");
+    const stale = { ...a.session, reauthAt: new Date(0) };
+    await expect(disableMfa(pool, loose, stale)).rejects.toThrow("TC_STEP_UP_REQUIRED");
+    await disableMfa(pool, loose, { ...a.session, reauthAt: new Date() });
+    const row = (await ownerQuery("SELECT mfa_enabled, mfa_secret_enc FROM user_account WHERE email = $1", [a.email])).rows[0];
+    expect(row).toEqual({ mfa_enabled: false, mfa_secret_enc: null });
+    expect(Number((await ownerQuery("SELECT count(*) AS n FROM mfa_recovery_code r JOIN user_account u ON u.id = r.user_account_id WHERE u.email = $1", [a.email])).rows[0].n)).toBe(0);
+    // Signing in now needs the password only.
+    const r = await signIn(pool, loose, a.email, PW);
+    expect(r.status).toBe("ok");
+  });
 
   it("sign-up needs the household code when one is set", async () => {
     const c = { ...cfg, signupCode: "family-only-7731" };
