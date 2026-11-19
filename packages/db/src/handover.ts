@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  createLogger, HANDOVER_PROBLEM, HANDOVER_REMIND_MS, isNoFetchHost, looksConfirmed, stepCleared, whenWords, WORKDAY,
+  createLogger, HANDOVER_PROBLEM, HANDOVER_REMIND_MS, isNoFetchHost, looksConfirmed, multiStepConfirmed, stepCleared, whenWords,
   type Ats, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -222,7 +222,7 @@ async function tickOne(pool: pg.Pool, held: HeldSessions, s: HeldSession, now: n
   // Has the page moved past the step? Read only.
   const pageNow = await s.page.now().catch(() => null);
   if (!pageNow) return;
-  const thanks = s.ats === "workday" ? WORKDAY.confirmed.test(pageNow.text) : looksConfirmed(s.ats as Ats, pageNow.url, pageNow.text);
+  const thanks = s.ats === "workday" || s.ats === "avature" ? multiStepConfirmed(s.ats, pageNow.text) : looksConfirmed(s.ats as Ats, pageNow.url, pageNow.text);
   // Before Submit: the step is gone. After Submit: only their thank-you page counts (the applicant may still need to press Submit there).
   const past = thanks || (s.phase === "before_submit" && stepCleared(s.step, pageNow));
   const n = past ? (clearedTicks.get(s.handoverId) ?? 0) + 1 : 0;

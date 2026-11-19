@@ -906,3 +906,55 @@ describe("jobs found on Adzuna and other job-gathering sites (Yong, 2026-11-19)"
     expect(s.problem).toMatch(/came from Adzuna, which only lists jobs from other sites.*couldn't find Nowhere Gatherer's careers site/);
   });
 });
+
+describe("an Avature careers site, like Siemens' (Yong, 2026-11-19)", () => {
+  const host = "jobs.siemens-av.example";
+  const jobUrl = `https://${host}/en_US/externaljobs/JobDetail/529223`;
+  class FakeAvature extends FakeWorkday {
+    readonly system = "avature" as const;
+    constructor(store: { account: FakeWorkday["account"] }) { super(store, jobUrl); }
+    override async createAccount(email: string, password: string) { this.store.account = this.account = { email, password, verified: true }; return "created" as const; }
+    override async page() {
+      const pages = [
+        { title: "Profile information", fields: [{ key: "#42327", label: "First Name *", type: "text", required: true }, { key: "#42329", label: "Phone Number", type: "tel" }] },
+        { title: "Global questions", fields: [{ key: "#file_42348", label: "CV / Resume *", type: "file", required: true }] },
+      ] as Array<{ title: string; fields: FormField[] }>;
+      if (this.step >= pages.length) return { title: "Global questions", review: true, form: { url: this.url(), fields: [], captcha: false, humanCheck: false } };
+      return { title: pages[this.step]!.title, review: false, form: { url: this.url(), fields: pages[this.step]!.fields, captcha: false, humanCheck: false } };
+    }
+    override async now() {
+      return this.clicks ? { url: this.url(), text: "Thank you for applying! We have received your application.", errors: [], humanCheck: false } : { url: this.url(), text: "Global questions", errors: [], humanCheck: false };
+    }
+  }
+
+  it("makes the account with the standing answer, fills each step and sends once, on the employer's own site", async () => {
+    const store: { account: FakeWorkday["account"] } = { account: null };
+    let made: FakeAvature | null = null;
+    const opened: string[] = [];
+    applyDeps = { ...applyDeps, browser: {
+      async open(url: string) { opened.push(url); throw new Error("not the Avature path"); },
+      async openAvature(url: string) { opened.push(url); return (made = new FakeAvature(store)); },
+    } };
+    await saveApplyMode(pool, cfg, yong, "hands_free");
+    await setStandingAnswer(pool, cfg, yong, "site_account", "I agree").catch(() => {});
+    await requestLink(pool, yong, { url: jobUrl, title: "Digital Transformation Expert", employer: "Siemens Av", location: "Remote", text: "Lead change.\n\nRequirements:\n- SQL\n- Excel" });
+    await drain();
+    const job = (await listMatches(pool, yong, { status: "all" })).rows.find((r: { employer_canonical: string }) => r.employer_canonical === "Siemens Av").public_ref;
+    await requestTailor(pool, yong, job, ["resume"]);
+    await drain();
+    const ref = await trackJob(pool, yong, job);
+    await approveResume(ref);
+    await runNow();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.status).toBe("sent");
+    expect(opened.filter((u) => u.includes(host))).toEqual([jobUrl]);
+    expect(s.steps.map((x) => x.text).join(" | ")).toMatch(/Creating your account on Siemens Av's careers site.*Application step 1: Profile information.*Application step 2: Global questions.*Pressing Submit/);
+    expect(made!.clicks).toBe(1);
+    const acct = (await ownerQuery("SELECT * FROM site_account WHERE site_host = $1", [host])).rows[0];
+    expect(acct).toMatchObject({ created_by: "automation" });
+    expect(JSON.stringify(acct)).not.toContain(store.account!.password);
+    const p = (await getPacket(pool, cfg, yong, ref))!;
+    expect(p.state).toBe("submitted");
+    expect(p.fields.map((f: { label: string }) => f.label)).toEqual(["First Name *", "Phone Number", "CV / Resume *"]);
+  });
+});

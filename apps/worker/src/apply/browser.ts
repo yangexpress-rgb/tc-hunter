@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright-core";
 import { AGREE_CHOICE, NO_FETCH_HOSTS, createLogger, matchChoice, sameAnswer, searchTermsFor,
-  formUrlFor, humanCheckIn, type LiveInput, type LiveView, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type PageForm, type PageNow, type WorkdayPage,
+  formUrlFor, humanCheckIn, type LiveInput, type LiveView, type ApplyBrowser, type ApplyPage, type Ats, type FillItem, type FillResult, type FormField, type PageForm, type PageNow, type WorkdayPage,
 } from "@tc-hunter/domain";
 import { PAGE_SCRIPT } from "./pageScript";
 
@@ -60,6 +60,19 @@ export class ServerBrowser implements ApplyBrowser {
       await page.goto(url, { waitUntil: "domcontentloaded", timeout: this.opts.timeoutMs ?? 45_000 });
       await settle(page);
       return new PwPage(browser, page);
+    } catch (e) {
+      await browser.close().catch(() => {});
+      throw e;
+    }
+  }
+
+  async openAvature(url: string): Promise<WorkdayPage> {
+    const { browser, ctx } = await this.context();
+    try {
+      const page = await ctx.newPage();
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: this.opts.timeoutMs ?? 45_000 });
+      await settle(page);
+      return new AvaturePw(browser, page);
     } catch (e) {
       await browser.close().catch(() => {});
       throw e;
@@ -874,5 +887,233 @@ class WorkdayPw extends PwPage implements WorkdayPage {
   async filledHash(): Promise<string> {
     const t = await this.pg.locator("main, [role=main], body").first().innerText().catch(() => "");
     return createHash("sha256").update(t.replace(/\s+/g, " ").trim()).digest("hex");
+  }
+}
+
+/**
+ * An Avature careers site (Siemens' jobs.siemens.com, Yong 2026-11-19), driven the way Workday is:
+ * the job page's Apply, then "Already registered?" sign-in or a new account, then the application
+ * over several steps ("Profile information", "Global questions", "Country questions"), each with its
+ * Continue button. The new account's password goes into the profile step's own password boxes, so
+ * the account is made when that step is saved. The last step's button sends the application: it is
+ * never pressed here, only by the one Submit press after the applicant's approval.
+ */
+class AvaturePw extends PwPage implements WorkdayPage {
+  readonly system = "avature" as const;
+  /** The new account's details, typed into the profile step's boxes. */
+  private account: { email: string; password: string } | null = null;
+  /** The last step was reached: its button sends, so it's the Review point. */
+  private atLast = false;
+
+  private async text() { return this.pg.evaluate(() => document.body?.innerText ?? "").catch(() => ""); }
+  private async visible(sel: string) { return this.pg.locator(sel).filter({ visible: true }).count().then((n) => n > 0).catch(() => false); }
+  private saveButton() { return this.pg.locator("button[name=save], button[id$='-save']").filter({ visible: true }).first(); }
+
+  /** Their cookie notice covers the page: decline what isn't needed. */
+  private async cookies() {
+    const no = this.pg.getByRole("button", { name: /^\s*(reject( all)?( cookies)?|decline( all)?|only (necessary|essential))\s*$/i }).filter({ visible: true }).first();
+    if (await no.count().catch(() => 0)) { await no.click({ timeout: 3000 }).catch(() => {}); await this.pg.waitForTimeout(500); }
+  }
+  private async closedPage(): Promise<boolean> {
+    if (/\/Error(\/|$|\?)/.test(new URL(this.pg.url()).pathname)) return true;
+    return /page not found|this (job|position) is no longer (available|open)|no longer accepting applications|job (has been )?closed/i.test((await this.text()).slice(0, 3000));
+  }
+  private async onSignIn() { return (await this.visible("input[name=username]")) && (await this.visible("input[name=password]")); }
+  private async inForm() { return (await this.saveButton().count().catch(() => 0)) > 0; }
+
+  private async where(): Promise<"sign_in" | "form" | "human_check" | "closed" | null> {
+    await this.helpers().catch(() => {});
+    if (await this.closedPage()) return "closed";
+    if (await this.pg.evaluate(() => (window as any).__tcApply?.captchaVisible() ?? false).catch(() => false)) return "human_check";
+    if (await this.onSignIn()) return "sign_in";
+    if (await this.inForm()) return "form";
+    return null;
+  }
+
+  async start(): Promise<"sign_in" | "form" | "human_check" | "closed"> {
+    await this.cookies();
+    let at = await this.where();
+    if (at) return at;
+    // The job page: its Apply link leads to "Already registered?" / create an account.
+    const apply = this.pg.locator("a[href*='ApplicationMethods'], a[href*='ApplicationForm']").filter({ visible: true }).first();
+    const href = await apply.getAttribute("href").catch(() => null);
+    if (href) {
+      await this.pg.goto(new URL(href, this.pg.url()).href, { waitUntil: "domcontentloaded" });
+    } else {
+      const b = this.pg.getByRole("link", { name: /^\s*apply( now)?\s*$/i }).or(this.pg.getByRole("button", { name: /^\s*apply( now)?\s*$/i })).filter({ visible: true }).first();
+      if (!(await b.count().catch(() => 0))) return (await this.closedPage()) ? "closed" : "closed";
+      await b.click({ timeout: 10_000 });
+    }
+    await settle(this.pg);
+    await this.cookies();
+    at = await this.where();
+    return at ?? "closed";
+  }
+  async reopen() { return this.start(); }
+
+  async signIn(email: string, password: string): Promise<"ok" | "wrong" | "unverified" | "human_check" | "site_error"> {
+    // A new account is made by the profile step itself: nothing to sign in to yet.
+    if (this.account) return "ok";
+    if (!(await this.onSignIn())) { const at = await this.start(); if (at === "form") return "ok"; if (at === "human_check") return "human_check"; }
+    await this.pg.locator("input[name=username]").first().fill(email);
+    await this.pg.locator("input[name=password]").first().fill(password);
+    const go = this.pg.locator("button[name=login], #login").filter({ visible: true }).first();
+    await (await go.count() ? go.click({ timeout: 10_000 }) : this.pg.keyboard.press("Enter"));
+    await this.pg.waitForLoadState("domcontentloaded").catch(() => {});
+    await settle(this.pg);
+    const at = await this.where();
+    if (at === "human_check") return "human_check";
+    if (at === "form") return "ok";
+    const t = (await this.text()).slice(0, 4000);
+    if (/not (been )?(activated|verified|confirmed)|verify your (email|account)|activate your account/i.test(t)) return "unverified";
+    if (at === "sign_in") return "wrong";
+    return "site_error";
+  }
+
+  async createAccount(email: string, password: string): Promise<"created" | "verify_email" | "exists" | "human_check" | "no_terms_box" | "failed"> {
+    if (!(await this.inForm())) {
+      const reg = this.pg.locator("a[href*='Register']").filter({ visible: true }).first();
+      const href = await reg.getAttribute("href").catch(() => null);
+      if (!href) return "failed";
+      await this.pg.goto(new URL(href, this.pg.url()).href, { waitUntil: "domcontentloaded" });
+      await settle(this.pg);
+      await this.cookies();
+    }
+    if (await this.pg.evaluate(() => (window as any).__tcApply?.captchaVisible() ?? false).catch(() => false)) return "human_check";
+    if (!(await this.pg.locator("input[type=password]").count())) return "failed";
+    this.account = { email, password };
+    await this.typeAccount();
+    return "created";
+  }
+
+  /** The new account's email and password, in the profile step's own boxes. */
+  private async typeAccount() {
+    if (!this.account) return;
+    const pw = this.pg.locator("input[type=password]").filter({ visible: true });
+    for (let i = 0; i < await pw.count(); i++) await pw.nth(i).fill(this.account.password).catch(() => {});
+    const em = this.pg.locator("input[type=email]").filter({ visible: true }).first();
+    if (await em.count() && !(await em.inputValue().catch(() => ""))) await em.fill(this.account.email).catch(() => {});
+  }
+
+  async openLink(url: string) {
+    await this.pg.goto(url, { waitUntil: "domcontentloaded" }).catch(() => {});
+    await settle(this.pg);
+    return true;
+  }
+
+  /** The step's name from Avature's step bar ("Profile information, step 2 of 4"), else its heading. */
+  private async stepTitle(): Promise<string> {
+    return this.pg.evaluate(`(() => {
+      var c = document.querySelector("[aria-current=step], [aria-current=page] .stepTitle, .is-current, .current, .active");
+      var t = c ? (c.innerText || c.textContent || "") : "";
+      var m = (document.body.innerText || "").match(/([A-Za-z /&-]{3,60}), step \\d+ of \\d+/);
+      if (m) return m[1].trim();
+      if (t && t.trim().length < 60) return t.trim().replace(/\\s+/g, " ");
+      var h = document.querySelector("main h2, main h3, h2");
+      return h ? (h.textContent || "").trim().slice(0, 80) : "";
+    })()`).then((x) => String(x)).catch(() => "");
+  }
+
+  async page(): Promise<{ title: string; review: boolean; form: PageForm }> {
+    const form = await this.readForm();
+    return { title: await this.stepTitle(), review: this.atLast, form };
+  }
+
+  /** Avature's searchable lists (select2): the real list is hidden; its choices load as you open or type. */
+  override async readForm(): Promise<PageForm> {
+    const form = await super.readForm();
+    const extra = await this.pg.evaluate(`(() => {
+      var out = [];
+      document.querySelectorAll("select.select2-hidden-accessible").forEach(function (sel) {
+        var box = sel.nextElementSibling;
+        if (!box || !box.classList.contains("select2")) return;
+        var r = box.getBoundingClientRect(); if (!(r.width > 0 && r.height > 0)) return;
+        if (!sel.id) return;
+        var lab = document.getElementById(sel.id + "-label") || (sel.closest("fieldset, .fieldSpec, [class*=field]") || {}).querySelector && (sel.closest("fieldset, .fieldSpec, [class*=field]")).querySelector("label, legend");
+        var label = lab ? (lab.textContent || "").replace(/\\s+/g, " ").trim() : (sel.getAttribute("aria-label") || "");
+        label = label.replace(/Select an option$/i, "").trim();
+        if (!label) return;
+        var multi = sel.multiple;
+        out.push({ key: "#" + sel.id, label: label, type: "select", multi: multi, required: sel.required || sel.getAttribute("data-required") === "true" || /\\*\\s*$/.test(label),
+          hasValue: multi ? sel.selectedOptions.length > 0 : !!sel.value, options: Array.prototype.filter.call(sel.options, function (o) { return o.value !== ""; }).map(function (o) { return (o.textContent || "").trim(); }) });
+      });
+      return out;
+    })()`).catch(() => []) as Array<FormField & { multi?: boolean; hasValue?: boolean }>;
+    // The hidden list itself, read as an ordinary drop-down without its words or choices, gives way to the searchable one.
+    const lists = new Set(extra.map((f) => f.key));
+    form.fields = form.fields.filter((f) => !lists.has(f.key));
+    for (const f of extra) {
+      if (f.multi && f.hasValue) continue;
+      const { multi: _m, ...field } = f;
+      if (!field.options?.length) field.options = await this.select2Choices(f.key).catch(() => undefined);
+      form.fields.push(field);
+    }
+    return form;
+  }
+
+  private select2Box(key: string) { return this.pg.locator(`[id="${key.slice(1).replace(/"/g, '\\"')}"] + .select2 .select2-selection`).first(); }
+  private async select2Options(): Promise<string[]> {
+    return (await this.pg.locator(".select2-container--open .select2-results__option").allTextContents().catch(() => []))
+      .map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t && !/^(searching|loading|no results|please enter|the results could not be loaded)/i.test(t));
+  }
+  private async select2Choices(key: string): Promise<string[] | undefined> {
+    const box = this.select2Box(key);
+    if (!(await box.count())) return undefined;
+    await box.click({ timeout: 3000 });
+    let opts: string[] = [];
+    for (let i = 0; i < 8 && !opts.length; i++) { await this.pg.waitForTimeout(400); opts = await this.select2Options(); }
+    await this.pg.keyboard.press("Escape").catch(() => {});
+    return opts.length && opts.length <= 300 ? [...new Set(opts)] : undefined;
+  }
+
+  protected override async fillOne(it: FillItem): Promise<FillResult["status"]> {
+    const isSelect2 = it.key.startsWith("#") && await this.pg.locator(`[id="${it.key.slice(1).replace(/"/g, '\\"')}"].select2-hidden-accessible`).count().catch(() => 0);
+    if (!isSelect2) return super.fillOne(it);
+    const value = it.value ?? "";
+    const box = this.select2Box(it.key);
+    if (!(await box.count())) return "not_found";
+    for (const term of [...searchTermsFor(value), ""]) {
+      await box.click({ timeout: 5000 }).catch(() => {});
+      const search = this.pg.locator(".select2-container--open .select2-search__field").filter({ visible: true }).first();
+      if (term && await search.count()) { await search.fill(term).catch(() => search.pressSequentially(term)); }
+      let opts: string[] = [];
+      for (let i = 0; i < 10 && !opts.length; i++) { await this.pg.waitForTimeout(400); opts = await this.select2Options(); }
+      const match = matchChoice(opts, value);
+      if (match) {
+        await this.pg.locator(".select2-container--open .select2-results__option").filter({ hasText: match }).first().click({ timeout: 5000 }).catch(() => {});
+        await this.pg.waitForTimeout(300);
+        const has = await this.pg.locator(`[id="${it.key.slice(1).replace(/"/g, '\\"')}"]`).evaluate((el: HTMLSelectElement) => el.multiple ? el.selectedOptions.length > 0 : !!el.value).catch(() => false);
+        return has ? "filled" : "failed";
+      }
+      await this.pg.keyboard.press("Escape").catch(() => {});
+    }
+    return "no_match";
+  }
+
+  /**
+   * Continue to the next step. On the last step the button sends the application, so it isn't
+   * pressed here: the step counts as the Review point and the one Submit press comes after approval.
+   */
+  async next(): Promise<{ moved: boolean; errors: string[] }> {
+    const btn = this.saveButton();
+    if (!(await btn.count().catch(() => 0))) return { moved: false, errors: [] };
+    const label = (await btn.innerText().catch(() => "")).replace(/\s+/g, " ").trim();
+    if (!/continue|next|save and|weiter/i.test(label) || /submit|send|apply|finish|complete/i.test(label)) {
+      this.atLast = true;
+      return { moved: true, errors: [] };
+    }
+    await this.typeAccount();
+    const before = `${this.pg.url()}|${await this.stepTitle()}`;
+    await btn.click({ timeout: 10_000 }).catch(() => btn.click({ force: true }));
+    for (let i = 0; i < 30; i++) {
+      await this.pg.waitForTimeout(1000);
+      await this.pg.waitForLoadState("domcontentloaded", { timeout: 3000 }).catch(() => {});
+      const now = `${this.pg.url()}|${await this.stepTitle()}`;
+      if (now !== before) { await settle(this.pg); this.account = null; return { moved: true, errors: [] }; }
+      await this.helpers().catch(() => {});
+      const errs = await this.pg.evaluate(() => (window as any).__tcApply?.errors() ?? []).catch(() => []) as string[];
+      if (errs.length && i >= 2) return { moved: false, errors: errs };
+    }
+    return { moved: false, errors: [] };
   }
 }

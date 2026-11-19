@@ -1,0 +1,44 @@
+<!doctype html>
+<html><head><title>Careers</title>
+<style>.select2-hidden-accessible{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden;clip:rect(0 0 0 0)}
+.select2{display:inline-block;min-width:200px;border:1px solid #888}.select2-selection{display:block;padding:4px}
+.drop{position:absolute;background:#fff;border:1px solid #444}#cookie{position:fixed;top:0;left:0;right:0;background:#ddd;padding:20px}</style></head>
+<body>
+<div id="cookie"><p>We value your privacy</p><button type="button" onclick="this.parentNode.remove()">Reject Cookies</button><button type="button" onclick="this.parentNode.remove()">Accept All Cookies</button></div>
+<main>
+<!--STEP-->
+</main>
+<script>
+// A small stand-in for select2: the real list is hidden; its choices appear once it's opened, filtered by typing.
+document.querySelectorAll("select.select2-hidden-accessible").forEach(function (sel) {
+  var all = JSON.parse(sel.getAttribute("data-choices") || "[]");
+  var box = document.createElement("span"); box.className = "select2 select2-container";
+  box.innerHTML = '<span class="select2-selection" role="combobox" tabindex="0"><span class="shown">Select an option</span></span>';
+  sel.parentNode.insertBefore(box, sel.nextSibling);
+  function close() { var d = document.querySelector(".select2-container--open"); if (d) d.remove(); }
+  box.querySelector(".select2-selection").addEventListener("click", function () {
+    close();
+    var d = document.createElement("span"); d.className = "select2-container select2-container--open drop";
+    d.innerHTML = '<input class="select2-search__field" type="search"><ul class="select2-results"></ul>';
+    document.body.appendChild(d);
+    var ul = d.querySelector("ul"), q = d.querySelector("input");
+    function draw() {
+      ul.innerHTML = "<li class='select2-results__option'>Searching…</li>";
+      setTimeout(function () {
+        ul.innerHTML = "";
+        all.filter(function (c) { return c.toLowerCase().indexOf(q.value.toLowerCase()) >= 0; }).slice(0, 50).forEach(function (c) {
+          var li = document.createElement("li"); li.className = "select2-results__option"; li.setAttribute("role", "option"); li.textContent = c;
+          li.addEventListener("click", function () {
+            sel.innerHTML = '<option value=""></option><option value="' + c + '" selected>' + c + "</option>";
+            box.querySelector(".shown").textContent = c; close();
+          });
+          ul.appendChild(li);
+        });
+      }, 300);
+    }
+    q.addEventListener("input", draw); draw();
+  });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+});
+</script>
+</body></html>
