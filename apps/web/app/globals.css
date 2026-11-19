@@ -408,6 +408,10 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 .status-block .sb-attach .inline-actions { display: inline-flex; gap: 8px; margin: 0; }
 .status-card { margin: 14px 0; padding: 22px; }
 .status-card .sb-status.reason.big { margin-top: 0; }
+/* A failure on the status card: the whole card reads red, at the top of the page (Yong, 2026-11-19). */
+.status-card.is-problem { border: 1px solid var(--error); border-left-width: 5px; background: color-mix(in srgb, var(--error) 7%, var(--surface)); }
+.status-card.is-problem .sb-status { color: var(--error); }
+.status-card + p.status { margin-top: -4px; }
 @media (max-width: 640px) { .status-block .sb-action { flex-basis: 100%; } }
 /* Needs you: amber-tinted, pinned first. */
 .needs-you { background: var(--amber-bg); border-color: var(--amber-border); }

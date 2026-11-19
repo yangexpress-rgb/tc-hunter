@@ -301,6 +301,12 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
 
   // 2. Ready to apply: the packet is assembled and waits for the applicant's go-ahead.
   if (p?.state === "packet_ready_for_review") {
+    // The newest run failed after these answers were prepared: the failure leads, not "review & approve"
+    // (Huron, 2026-11-19). Approving alone wouldn't restart a failed run; Try again does.
+    if (r?.status === "failed" || r?.status === "stopped") {
+      const f = failedIn("ready_to_apply", r, i);
+      return { ...f, note: f.note ?? "Your prepared answers are saved. Nothing was sent." };
+    }
     const extra = p.missingRequired ? ` ${p.missingRequired === 1 ? "1 question needs" : `${p.missingRequired} questions need`} your answer first.`
       : p.draftsToCheck ? ` ${p.draftsToCheck === 1 ? "1 essay draft" : `${p.draftsToCheck} essay drafts`} to check.` : "";
     return { stage: "ready_to_apply", status: `${L1["packet.packet_ready_for_review"].replace(" — ", ": ")}.${extra}`, owner: "applicant", tone: "yours",
@@ -333,9 +339,10 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
 function failedIn(stage: JourneyStage, r: NonNullable<JourneyInput["run"]>, i: JourneyInput): Decided {
   const reason = r.problem ?? r.step ?? L1["packet.failed"];
   if (r.status === "stopped") return { stage, status: reason, owner: "app", tone: "problem", action: null };
+  // The way on is a button that does it, never a link to read more.
   const action: JourneyAction = r.finishYourself
     ? { kind: "link", label: "Finish it yourself", href: `/applications/${i.ref}/finish` }
-    : { kind: "link", label: "See what to do", anchor: `stage-${stage}` };
+    : { kind: "apply", label: "Try again" };
   return { stage, status: reason, owner: "applicant", tone: "problem", action };
 }
 
