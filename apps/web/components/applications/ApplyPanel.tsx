@@ -29,7 +29,11 @@ function Button({ appRef, label, anyway, secondary }: { appRef: string; label: s
  * doing now, every step it took, where and why it stopped (in red), and pictures of the
  * employer's page as proof. Checks every few seconds while it's working.
  */
-export function ApplyPanel({ appRef, employer, initial, canApply }: { appRef: string; employer: string; initial: ApplyStatus; canApply: boolean }) {
+export function ApplyPanel({ appRef, employer, initial, canApply, problemShown = false }: {
+  appRef: string; employer: string; initial: ApplyStatus; canApply: boolean;
+  /** The status card at the top of the page already shows this run's failure and its button: don't repeat them here. */
+  problemShown?: boolean;
+}) {
   const [s, setS] = useState(initial);
   const router = useRouter();
   const was = useRef(initial.status);
@@ -91,7 +95,7 @@ export function ApplyPanel({ appRef, employer, initial, canApply }: { appRef: st
           </div>
         </>
       ) : null}
-      {s.status === "failed" || s.status === "stopped" ? (
+      {(s.status === "failed" || s.status === "stopped") && !problemShown ? (
         <>
           {s.problem ? <p className="error" role="alert">{s.problem}</p> : <p className="status">{s.step}</p>}
           <div className="inline-actions">

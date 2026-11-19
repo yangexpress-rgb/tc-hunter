@@ -81,6 +81,22 @@ export default async function ApplicationPage(props: Props) {
   const answers = packet ? packet.fields.length : 0;
   const drafted = packet ? packet.fields.filter((f) => f.source === "drafted").length : 0;
   const packetDone = !!packet && !["packet_draft", "packet_ready_for_review"].includes(packet.state);
+  const problem = j.tone === "problem";
+  const working = ["queued", "running"].includes(String(applying.status));
+  // One-time notes after an action, shown only while they still match where it is now: never "Approved"
+  // next to a "waiting for your approval" chip, and never good news above a failure (Huron, 2026-11-19).
+  const notes = [
+    params.moved === "1" && "Moved. You can change it any time.",
+    params.approved === "1" && packetDone && !problem && "Approved. Nothing has been typed or sent yet.",
+    params.submitted === "1" && "Recorded as applied. Your receipt is ready below.",
+    params.send_approved === "1" && packet?.state === "ready_to_submit" && !problem && "Approved. Go back to their form and choose Send it.",
+    params.not_sent === "1" && !problem && "Noted, it wasn't sent. If TC Hunter applies for you by itself, it's filling in their form again now; otherwise check your answers below and approve again.",
+    params.confirmed === "1" && "Thanks, that's confirmed.",
+    params.applying === "1" && working && "On it. TC Hunter is opening the employer's form now.",
+    params.handed_back === "1" && working && "Thanks. TC Hunter is taking over their page again.",
+    params.gave_up === "1" && "Their page is closed. Choose Finish it yourself to apply on their site with your packet one tap away.",
+    params.dismissed === "1" && "Noted. That email suggestion is gone.",
+  ].filter((x): x is string => typeof x === "string");
 
   return (
     <>
@@ -89,19 +105,6 @@ export default async function ApplicationPage(props: Props) {
       <Flash saved={saved} error={error} />
       <h1>{a.title}</h1>
       <p className="job-meta">{a.employer_canonical} · <a href={`/jobs/${a.job_ref}`}>See the job</a></p>
-
-      <Stepper j={j} />
-
-      {params.moved === "1" ? <p className="status" role="status">Moved. You can change it any time.</p> : null}
-      {params.approved === "1" ? <p className="status" role="status">Approved. Nothing has been typed or sent yet.</p> : null}
-      {params.submitted === "1" ? <p className="status" role="status">Recorded as applied. Your receipt is ready below.</p> : null}
-      {params.send_approved === "1" ? <p className="status" role="status">Approved. Go back to their form and choose Send it.</p> : null}
-      {params.not_sent === "1" ? <p className="status" role="status">Noted, it wasn&apos;t sent. If TC Hunter applies for you by itself, it&apos;s filling in their form again now; otherwise check your answers below and approve again.</p> : null}
-      {params.confirmed === "1" ? <p className="status" role="status">Thanks, that&apos;s confirmed.</p> : null}
-      {params.applying === "1" ? <p className="status" role="status">On it. TC Hunter is opening the employer&apos;s form now.</p> : null}
-      {params.handed_back === "1" ? <p className="status" role="status">Thanks. TC Hunter is taking over their page again.</p> : null}
-      {params.gave_up === "1" ? <p className="status" role="status">Their page is closed. Choose Finish it yourself to apply on their site with your packet one tap away.</p> : null}
-      {params.dismissed === "1" ? <p className="status" role="status">Noted. That email suggestion is gone.</p> : null}
 
       {/* The status card: the same block as this application's row on the list, full size. */}
       <StatusBlock j={j} appRef={a.public_ref} back={back} card>
@@ -120,6 +123,10 @@ export default async function ApplicationPage(props: Props) {
         {a.posting_status !== "active" && !closed ? <p className="warn sb-note">The employer no longer lists this job.</p> : null}
         {signal && j.action?.kind !== "email" ? <EmailAttach s={signal} back={back} /> : null}
       </StatusBlock>
+
+      {notes.length ? notes.map((n) => <p key={n} className="status" role="status">{n}</p>) : null}
+
+      <Stepper j={j} />
 
       {/* Stage panels, in journey order, each only when it's relevant. */}
       {at <= 3 ? (
@@ -140,12 +147,11 @@ export default async function ApplicationPage(props: Props) {
             <li>
               <span className={`jchip tone-${packetDone ? "active" : packet?.state === "packet_ready_for_review" ? "yours" : "upcoming"}`}>{packetDone ? "Approved" : packet?.state === "packet_ready_for_review" ? "Waiting for your approval" : packet ? "Being written" : "Not started"}</span>
               <span>Prepared answers{answers ? ` (${answers})` : ""}{drafted && packet?.state === "packet_ready_for_review" ? ` · ${drafted === 1 ? "1 essay draft" : `${drafted} essay drafts`} to check` : ""}</span>
-              {packet ? <a href="#packet">{packet.state === "packet_ready_for_review" ? "Review & approve" : "See them"}</a> : <span className="small muted">Made from their form when TC Hunter opens it</span>}
+              {packet ? <a href="#packet">{packet.state === "packet_ready_for_review" && !problem ? "Review & approve" : "See them"}</a> : <span className="small muted">Made from their form when TC Hunter opens it</span>}
             </li>
           </ul>
-          {/* The packet approval is this panel's exit action. */}
-          {packet && (packet.state === "packet_ready_for_review" || packet.state === "packet_draft") ? packetCard : null}
-          {preApplied && !packetActive && !sent ? (
+          {/* With a packet, its own card carries "Applied on their site yourself?": one toggle, not two. */}
+          {preApplied && !packet && !sent ? (
             <Details summary="Applied already, on their site?">
               <p className="muted">If you applied on the employer's site yourself, tell us here.
                 {a.apply_url ? <> <a href={a.apply_url} rel="noopener noreferrer" target="_blank">Open the employer's page</a></> : null}</p>
@@ -169,9 +175,12 @@ export default async function ApplicationPage(props: Props) {
         </section>
       ) : <><Anchor s="getting_ready" /><Anchor s="ready_to_apply" /></>}
 
+      {/* The packet approval is stage 2's exit action: its own card, right under the documents. */}
+      {at <= 3 && packet && (packet.state === "packet_ready_for_review" || packet.state === "packet_draft") ? packetCard : null}
+
       {at === 2 || (live && at <= 2) || packetInApplying ? (
         <section className="stage-panel" id="stage-applying" aria-label="Applying">
-          {live || applying.status === "sent" ? <ApplyPanel appRef={a.public_ref} employer={a.employer_canonical} initial={applying} canApply={canApply} /> : null}
+          {live || applying.status === "sent" ? <ApplyPanel appRef={a.public_ref} employer={a.employer_canonical} initial={applying} canApply={canApply} problemShown={problem} /> : null}
           {packetInApplying ? packetCard : null}
         </section>
       ) : <Anchor s="applying" />}

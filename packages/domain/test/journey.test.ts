@@ -68,6 +68,17 @@ describe("the section 4 mapping: every row gives one stage and one status line",
     expect(x.action).toMatchObject({ label: "Finish it yourself" });
   });
 
+  it("Huron: a failed run outranks prepared answers waiting for approval, in red, with Try again", () => {
+    const x = j({ stage: "ready_to_apply", docs: approvedDocs, packet: pk("packet_ready_for_review"),
+      run: { status: "failed", problem: "Something went wrong on Acme's site. Nothing was sent. Try again later, or apply on their site yourself." } });
+    expect(x.stage).toBe("ready_to_apply");
+    expect(x.tone).toBe("problem");
+    expect(x.owner).toBe("applicant");
+    expect(x.status).toMatch(/^Something went wrong/);
+    expect(x.status).not.toMatch(/review & approve/i);
+    expect(x.action).toMatchObject({ kind: "apply", label: "Try again" });
+  });
+
   it("closed always carries its reason", () => {
     expect(j({ stage: "closed_lost" }).chip).toBe("Closed · Not successful");
     expect(j({ stage: "no_response" }).chip).toBe("Closed · No reply");
