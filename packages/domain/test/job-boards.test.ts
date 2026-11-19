@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { avatureResults, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, SourceRefusedError, type Fetcher } from "../src";
+import { avatureResults, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, proposeFields, SourceRefusedError, willFill, type Fetcher, type PacketProfile } from "../src";
 
 describe("job-gathering sites (Yong, 2026-11-19)", () => {
   it("knows Adzuna, Jooble and the like, and not employers or LinkedIn", () => {
@@ -57,5 +57,24 @@ describe("Avature careers sites (Siemens, 2026-11-19)", () => {
     const r = await findOnEmployerSite({ employer: "Siemens", title: "Digital Transformation Expert", location: "Peachtree Corners, GA" }, f, { lookup });
     expect(r).toMatchObject({ found: true, url: "https://jobs.siemens.example/en_US/externaljobs/JobDetail/529223", title: "Digital Transformation Expert" });
     expect(asked.some((u) => /linkedin|indeed/.test(u))).toBe(false);
+  });
+});
+
+describe("country lists on Siemens' form (2026-11-19)", () => {
+  const profile = { firstName: "Yong", lastName: "Y", fullName: "Yong Y", preferredName: "Yong", email: null, phone: null, city: "Cary", region: "NC", country: null,
+    links: {}, answers: [], resume: null, letter: null } as PacketProfile;
+  const countries = Array.from({ length: 230 }, (_, i) => `Country ${i}`).concat(["United Kingdom", "United States Minor Outlying Islands", "United States of America", "Uruguay"]);
+
+  it("a long country list (251 choices) still answers the United States of America", () => {
+    const f = { key: "#42332", label: "Country / Region of residence *", type: "select" as const, options: countries, required: true };
+    expect(proposeFields([f], profile)[0]).toMatchObject({ answer: "United States of America" });
+  });
+
+  it("a searchable list showing only its first choices: the United States is searched for, and shown as a choice", () => {
+    const f = { key: "#42331", label: "Country/Region of citizenship *", type: "select" as const, options: ["Afghanistan", "Åland Islands", "Albania"], required: true, searchable: true };
+    const p = proposeFields([f], profile)[0]!;
+    expect(p.answer).toBe("United States");
+    expect(p.options).toContain("United States");
+    expect(willFill(p)).toBe(true);
   });
 });
