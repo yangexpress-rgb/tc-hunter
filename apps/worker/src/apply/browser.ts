@@ -123,6 +123,8 @@ export function showsAnswer(shown: string, chose: string, answer: string): boole
   return sameAnswer(shown, answer) || !!matchChoice([shown], answer) || shown.split(/\s*,\s*/).some((p) => !!p && sameAnswer(p, answer));
 }
 
+/** A choice that states something about the applicant, never taken as a stand-in answer. */
+const SELF_CLAIM = /\b(i'?m|i am|i was|i have|referr(ed|al)|employee|contractor|intern\b|current(ly)?|former|recruiter (contacted|reached))|\(\+\d{1,4}\)\s*$/i;
 /** A list's prompt rather than a choice. */
 const PLACEHOLDER = /^(select( one)?|choose( one)?|please select|no options|no items\.?|loading)\b/i;
 
@@ -338,17 +340,24 @@ class PwPage implements ApplyPage {
         const list = tag === "button" || await this.isSiteList(it);
         if (list) {
           ways.push(["type, then pick the first match", async () => {
+            const all = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible, .select2-results__option:visible");
+            const texts = async () => (await all.allTextContents().catch(() => [] as string[])).map((t) => t.replace(/\s+/g, " ").trim());
+            await this.pg.keyboard.press("Escape").catch(() => {});
+            const before = new Set(await texts());
             for (const term of searchTermsFor(value)) {
-              await loc.click({ timeout: 3000 });
+              await loc.click({ timeout: 3000 }).catch(() => loc.click({ force: true, timeout: 3000 }));
               if (tag !== "button") await loc.fill(term).catch(() => loc.pressSequentially(term, { delay: 30 }));
               else await this.pg.keyboard.type(term, { delay: 30 });
               await this.pg.waitForTimeout(1500);
-              const option = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible, .select2-results__option:visible").first();
-              const text = ((await option.textContent().catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
-              if (text && matchChoice([text], value)) { this.chose = text; await option.click({ timeout: 3000 }); return; }
+              // The first choice the list itself offers (not another question's chosen item showing before it opened).
+              const now = await texts();
+              const at = now.findIndex((t) => !!t && !before.has(t));
+              const text = at >= 0 ? now[at]! : "";
+              if (text && matchChoice([text], value)) { this.chose = text; await all.nth(at).click({ timeout: 3000 }); return; }
               await this.pg.keyboard.press("Escape").catch(() => {});
             }
           }]);
+          if (it.anyChoice) ways.push(["take the closest general choice", () => this.pickFromList(loc, "", tag === "button", tag === "input")]);
           ways.push(["arrow down and Enter", async () => {
             await loc.click({ timeout: 3000 });
             if (tag !== "button") await loc.fill(searchTermsFor(value)[0] ?? value).catch(() => {});
@@ -503,18 +512,29 @@ class PwPage implements ApplyPage {
     // Typing filters the list. Try the answer, then its other names ("USA" finds "United States");
     // for an agreement the site's wording may differ, so look at the whole list.
     const terms = isButton || agreeing ? [""] : [...searchTermsFor(value), ""];
+    const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
+    const read = async () => (await options.allTextContents().catch(() => [] as string[])).map((t) => t.replace(/\s+/g, " ").trim());
+    // What already shows as a choice before this list opens belongs to something else: another question's
+    // chosen item ("Afghanistan (+93)" beside the phone code, Workday's own site, 2026-11-19) or a list left open.
+    // It is never picked here.
+    await this.pg.keyboard.press("Escape").catch(() => {});
+    const stale = new Set((await read()).filter(Boolean));
+    const fresh = (texts: string[]) => {
+      const kept = texts.map((t) => (stale.has(t) ? "" : t));
+      // Nothing new: the same list was already open (it doesn't close on Escape), so what shows is its own.
+      return kept.some(Boolean) ? kept : texts;
+    };
     for (const term of terms) {
       // Something on the page can sit over the box: a short wait, then the click goes straight to it.
       await loc.click({ timeout: 5000 }).catch(() => loc.click({ force: true, timeout: 5000 }));
       if (!isButton) { await loc.fill(term).catch(() => loc.pressSequentially(term)); }
       await this.pg.waitForTimeout(700 * this.pace);
-      const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
       // Workday's search lists look the typed words up only on Enter (the list shown before that is just its first few choices).
       if (enterSearches && term) { await loc.press("Enter").catch(() => {}); await this.pg.waitForTimeout(1500 * this.pace); }
       // A list can show only "Select One" or "Loading" for a while after opening: wait for real choices (up to 4s, longer on a slow try).
       let texts: string[] = [];
       for (let w = 0; w < 10 * this.pace; w++) {
-        texts = (await options.allTextContents().catch(() => [])).map((t) => t.replace(/\s+/g, " ").trim());
+        texts = fresh(await read());
         if (texts.some((t) => t && !PLACEHOLDER.test(t))) break;
         await this.pg.waitForTimeout(400);
       }
@@ -528,23 +548,25 @@ class PwPage implements ApplyPage {
       // Only on the whole list, so the answer itself is looked for first.
       if (at < 0 && this.anyChoice && !term) {
         at = texts.findIndex((t) => GENERAL_SOURCE.test(t));
-        // Never a choice left over from another list still open (a phone code, "Afghanistan (+93)").
-        if (at < 0) at = texts.findIndex((t) => !!t && !PLACEHOLDER.test(t) && !/\(\+\d{1,4}\)\s*$/.test(t));
+        // Never a choice that says something about the applicant ("I was referred by someone", "I'm a contractor").
+        if (at < 0) at = texts.findIndex((t) => !!t && !PLACEHOLDER.test(t) && !SELF_CLAIM.test(t));
         if (at >= 0) log.info("apply.list_general_choice", { choice: texts[at]!.slice(0, 80) });
       }
+      if (this.anyChoice) log.info("apply.list_pick", { term: term.slice(0, 40), looking_for: value.slice(0, 60), choices: texts.filter(Boolean).slice(0, 15).join(" / ").slice(0, 500), picked: at >= 0 ? texts[at]!.slice(0, 80) : null });
       if (at >= 0) {
         this.chose = texts[at] ?? null;
         await options.nth(at).click();
         await this.pg.waitForTimeout(500);
         // Workday's grouped lists ("How Did You Hear About Us?"): a group opens its own list
         // instead of being chosen. Choose inside it: the answer itself, else its "Other" choice.
-        const inner: string[] = [];
-        const m = await options.count();
-        for (let i = 0; i < m; i++) inner.push(((await options.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
-        const opened = inner.filter(Boolean).length > 0 && inner.join("|") !== texts.join("|") && !(await this.chosenIn(loc));
+        let inner = fresh(await read());
+        for (let w = 0; w < 5 && !inner.some((t) => t && !PLACEHOLDER.test(t)) && !(await this.chosenIn(loc)); w++) { await this.pg.waitForTimeout(400); inner = fresh(await read()); }
+        const opened = inner.some(Boolean) && inner.join("|") !== texts.join("|") && !(await this.chosenIn(loc));
+        if (this.anyChoice) log.info("apply.list_pick", { group: this.chose?.slice(0, 80), opened, choices: inner.filter(Boolean).slice(0, 15).join(" / ").slice(0, 500) });
         if (!opened) return "filled";
         const leaf = matchChoice(inner.filter(Boolean), value) ?? inner.find((t) => /^other\b|\bother$/i.test(t))
-          ?? inner.find((t) => GENERAL_SOURCE.test(t)) ?? (this.anyChoice ? inner.find((t) => !!t && !PLACEHOLDER.test(t)) : undefined);
+          ?? inner.find((t) => GENERAL_SOURCE.test(t))
+          ?? (this.anyChoice ? inner.find((t) => !!t && !PLACEHOLDER.test(t) && !SELF_CLAIM.test(t)) : undefined);
         if (leaf) {
           this.chose = leaf;
           await options.nth(inner.indexOf(leaf)).click();

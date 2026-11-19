@@ -60,11 +60,12 @@ beforeAll(async () => {
       ' lb.querySelectorAll("li").forEach(function (li) { li.addEventListener("click", function () { document.getElementById("src").textContent = li.textContent; lb.innerHTML = ""; }); }); }, 3000); });' +
       'document.addEventListener("keydown", function (e) { if (e.key === "Escape") document.getElementById("lb").innerHTML = ""; });</script>');
     // "How did you hear" grouped without the answer (Workday's own site, 2026-11-19): Website opens its own list.
-    if (url.startsWith("/heard")) return html('<div data-automation-id="formField-src"><label>How Did You Hear About Us?*</label><button type="button" aria-haspopup="listbox" id="src">Select One</button></div>' +
+    if (url.startsWith("/heard")) return html('<div data-automation-id="formField-ph"><label>Country Phone Code</label><div data-automation-id="selectedItem"><div data-automation-id="promptOption">Afghanistan (+93)</div></div></div>' +
+      '<div data-automation-id="formField-src"><label>How Did You Hear About Us?*</label><button type="button" aria-haspopup="listbox" id="src">Select One</button></div>' +
       '<ul id="lb" role="listbox"></ul>' +
       '<script>var lb = document.getElementById("lb"), src = document.getElementById("src");' +
       'function show(items, group) { lb.innerHTML = ""; items.forEach(function (t) { var li = document.createElement("li"); li.setAttribute("role", "option"); li.textContent = t;' +
-      ' li.addEventListener("click", function () { if (!group && t === "Website") return show(["Workday.com", "Other Website"], true); src.textContent = t; lb.innerHTML = ""; }); lb.appendChild(li); }); }' +
+      ' li.addEventListener("click", function () { if (!group && t === "Website") return show(["I was referred by someone at Workday", "Workday.com"], true); src.textContent = t; lb.innerHTML = ""; }); lb.appendChild(li); }); }' +
       'src.addEventListener("click", function () { show(["Advertisement", "Partnership", "Website"], false); });' +
       'document.addEventListener("keydown", function (e) { if (e.key === "Escape") lb.innerHTML = ""; });</script>');
     if (url.startsWith("/slow")) return html('<div data-automation-id="formField-deg"><label>Degree*</label><button type="button" aria-haspopup="listbox" id="deg">Select One</button></div>' +
@@ -315,6 +316,8 @@ describe.skipIf(!available)("\"How did you hear about us?\" whose list doesn't o
     try {
       expect((await page.fill([{ key: "#src", type: "select", value: "LinkedIn", anyChoice: true }])).map((r) => r.status)).toEqual(["filled"]);
       expect((await page.readForm()).fields.find((f) => f.key === "#src")?.hasValue).toBe(true);
+      // Never another question's chosen item showing on the page, never a choice that says something about the applicant.
+      expect(await (page as any).pg.locator("#src").textContent()).toBe("Workday.com");
     } finally { await page.close(); }
   });
   it("leaves any other list alone when the answer isn't there", async () => {
