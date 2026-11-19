@@ -874,7 +874,7 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
           AND state IN ('approved_to_apply','filling','waiting_for_applicant','ready_to_submit') AND submission_key_used_at IS NULL
         ORDER BY version DESC LIMIT 1`, [app.id, fp])).rows[0];
     if (!k) {
-      const made = await createPacket(c, deps.cfg, auto.applicantId, app, form.url, fields, { keepTyped: true, ats, inferred });
+      const made = await createPacket(c, deps.cfg, auto.applicantId, app, form.url, fields, { keepTyped: true, ats, inferred, prefilled });
       k = { id: made.packetId, state: "packet_ready_for_review" };
     }
     await c.query("UPDATE apply_run SET packet_id = $2 WHERE id = $1", [run.id, k.id]);

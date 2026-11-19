@@ -19,13 +19,13 @@ import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./
  * one press of Submit. The real browser runs against local pages in apps/worker/test.
  */
 
-interface FakeSpec { securityCode?: boolean; growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
+interface FakeSpec { prefilled?: Record<string, string>; securityCode?: boolean; growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
 
 class FakePage implements ApplyPage {
   values = new Map<string, string>();
   clicks = 0;
   fills: FillItem[][] = [];
-  constructor(public spec: FakeSpec) {}
+  constructor(public spec: FakeSpec) { for (const [k, v] of Object.entries(spec.prefilled ?? {})) this.values.set(k, v); }
   url() { return this.spec.url; }
   async openForm() { return this.readForm(); }
   async readForm(): Promise<PageForm> {
@@ -100,7 +100,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Dollar Shave Club", "Nowhere Co", "Choices Co", "Code Co", "Nocode Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Huron Co", "Dollar Shave Club", "Nowhere Co", "Choices Co", "Code Co", "Nocode Co"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: ["Dollar Shave Club", "Nowhere Co"].includes(emp) ? `https://www.linkedin.com/jobs/view/${emp.length}` : `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -179,6 +179,22 @@ describe("the hard limits", () => {
     expect(s.status).toBe("sent");
     expect(browser.pages.at(-1)!.values.get("#notice")).toBe("Two weeks");
     expect(browser.clicks).toBe(2);
+  });
+
+  it("the form's own Language list is answered English, and a question their form already answered isn't asked (Huron, 2026-11-19)", async () => {
+    const app = apps[21]!;
+    browser.spec = () => ({ url: GH(21), after: "thanks", prefilled: { "#site_code": "A1" }, fields: [...BASE,
+      { key: "#language", label: "Language*", type: "select", options: ["English", "Spanish", "French"], required: true },
+      { key: "#site_code", label: "Location code *", type: "text", required: true }] });
+    await approveResume(app);
+    await runNow();
+    expect(await applyStatus(pool, yong, app)).toMatchObject({ status: "sent", problem: null });
+    const page = browser.pages.at(-1)!;
+    expect(page.values.get("#language")).toBe("English");
+    expect(page.values.get("#site_code")).toBe("A1");
+    const p = (await getPacket(pool, cfg, yong, app))!;
+    expect(p.fields.find((f) => f.label === "Language*")).toMatchObject({ answer: "English", source: "master_profile", willFill: true });
+    expect(p.fields.find((f) => f.label.startsWith("Location code"))).toMatchObject({ answer: null, required: false, note: "Their form already had an answer here, so TC Hunter left it as it was." });
   });
 
   it("a required consent is never ticked without a standing answer; with one, it is, and it's marked as such", async () => {

@@ -160,7 +160,9 @@ export async function buildPacket(pool: pg.Pool, cfg: AppConfig, session: Sessio
  * after they answer, and on Workday page by page).
  */
 export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId: string,
-  app: { id: string; public_ref: string; match_id: string; job_ref: string }, url: string, fields: FormField[], opts: { keepTyped?: boolean; ats?: Ats; inferred?: Map<string, { answer: string; basis: string; replace?: boolean; draft?: boolean }> } = {}) {
+  app: { id: string; public_ref: string; match_id: string; job_ref: string }, url: string, fields: FormField[], opts: { keepTyped?: boolean; ats?: Ats; inferred?: Map<string, { answer: string; basis: string; replace?: boolean; draft?: boolean }>;
+    /** Questions the employer's site had already answered itself (Workday fills some): nothing is needed from the applicant there. */
+    prefilled?: Set<string> } = {}) {
   let host: string | null = null;
   try { host = new URL(url).hostname.toLowerCase(); } catch { /* keep null */ }
   if ((await c.query("SELECT 1 FROM application_packet WHERE application_id = $1 AND state = 'submitted'", [app.id])).rowCount) throw new DomainError("TC_PACKET_CLOSED");
@@ -201,6 +203,11 @@ export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId
     // A start date worked out from their saved words replaces those words in a date box.
     if (inf && !inf.draft && (!willFill(p) || (inf.replace && p.source === "answer_bank")) && (!p.step || p.step === "work_auth")) {
       return { ...p, step: null, answer: inf.answer, source: "inferred" as const, sourceRefId: null, confidence: 0.9, note: `Worked out from your profile: ${inf.basis}` };
+    }
+    // Their form already shows an answer here and TC Hunter has none of its own: the site's stays, and the
+    // applicant isn't asked for it (it read as a required "New question" before; Huron, 2026-11-19).
+    if (opts.prefilled?.has(f.key) && !p.step && !willFill(p)) {
+      return { ...p, required: false, note: "Their form already had an answer here, so TC Hunter left it as it was." };
     }
     return p;
   });

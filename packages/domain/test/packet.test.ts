@@ -27,6 +27,19 @@ describe("number questions (Premier, 2026-11-17)", () => {
   });
 });
 
+describe("the form's language (Huron, 2026-11-19)", () => {
+  it("answers English when the form offers it, a saved answer first, and leaves a list without English", () => {
+    const p = profile();
+    expect(proposeField({ key: "l", label: "Language*", type: "select", options: ["English", "Spanish", "French"], required: true }, p))
+      .toMatchObject({ answer: "English", source: "master_profile", confidence: 0.9 });
+    expect(proposeField({ key: "l", label: "Preferred language", type: "select", options: ["Select One", "English (United States)", "Español"] }, p)).toMatchObject({ answer: "English (United States)" });
+    expect(proposeField({ key: "l", label: "Language", type: "select", options: ["Spanish", "French"] }, p)).toMatchObject({ answer: null });
+    expect(proposeField({ key: "l", label: "Which languages do you speak fluently?", type: "text" }, p)).toMatchObject({ answer: null });
+    const saved = profile({ answers: [{ id: "s1", key: "custom:Language", patterns: ["^language"], text: "French", approved: true, stale: false, isApplicantStep: false }] });
+    expect(proposeField({ key: "l", label: "Language*", type: "select", options: ["English", "French"] }, saved)).toMatchObject({ answer: "French", source: "answer_bank" });
+  });
+});
+
 describe("proposing answers (design 5.5)", () => {
   it("fills profile facts, approved saved answers and approved documents, each with its source", () => {
     const p = profile();
