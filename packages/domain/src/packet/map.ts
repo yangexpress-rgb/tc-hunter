@@ -191,6 +191,13 @@ const FORM_LANGUAGE = /^(preferred |form |display |communication )?language( of 
 /** A question whose box takes a number. */
 export const NUMBER_QUESTION = /\b(percent(age)?|number of|how many)\b/i;
 const HEARD_ABOUT = /how did you (hear|learn|find out) about|where did you (hear|find|see|learn)|how did you find (us|this|out)|^(referral |candidate |application )?source$/;
+/**
+ * "How did you hear about us?" (Yong, 2026-11-16: take the first choice when no answer fits). The browser may take the
+ * closest general choice its list offers when the answer itself isn't there (a list grouped "Website > ...").
+ */
+export function isHeardAbout(label: string): boolean {
+  return HEARD_ABOUT.test(label.toLowerCase().replace(/[*:?]+/g, " ").replace(/\s+/g, " ").trim());
+}
 /** The choice for a job TC Hunter found online, best first. */
 const HEARD_DEFAULTS = [/^job ?boards?\b/i, /job (boards?|sites?|search|postings?)|online job|posting site|career (site|board)s?/i, /internet|online/i, /^web ?site$/i, /^other\b/i, /\bother\b/i];
 
