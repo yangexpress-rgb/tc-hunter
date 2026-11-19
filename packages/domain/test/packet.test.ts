@@ -167,3 +167,32 @@ describe("a yes/no question that names a place (GitLab, 2026-11-19)", () => {
     expect(profileFieldFor("Current location")).toBe("city");
   });
 });
+
+describe("work-history boxes (Accenture Workday \"My Experience\", 2026-11-19)", () => {
+  const roles = profile({ experience: [
+    { id: "e1", title: "Director, Digital Manufacturing", employer: "Northwind Pharma", location: null, start: "2019-03-01", end: null, description: null },
+    { id: "e2", title: "Manufacturing Systems Lead", employer: "Contoso Labs", location: "Boston, MA", start: "2014-06-01", end: "2019-02-28", description: "Ran MES rollouts." },
+  ] });
+  const block = (n: number): Array<{ key: string; label: string; type: "text" | "checkbox" | "textarea"; required?: boolean }> => [
+    { key: `workExperience-${n}--jobTitle`, label: "Job Title*", type: "text", required: true },
+    { key: `workExperience-${n}--companyName`, label: "Company*", type: "text", required: true },
+    { key: `workExperience-${n}--location`, label: "Location", type: "text" },
+    { key: `workExperience-${n}--currentlyWorkHere`, label: "I currently work here", type: "checkbox" },
+    { key: `workExperience-${n}--startDate-month`, label: "From: Month", type: "text", required: true },
+    { key: `workExperience-${n}--startDate-year`, label: "From: Year", type: "text", required: true },
+    { key: `workExperience-${n}--endDate-month`, label: "To: Month", type: "text", required: true },
+    { key: `workExperience-${n}--endDate-year`, label: "To: Year", type: "text", required: true },
+    { key: `workExperience-${n}--roleDescription`, label: "Role Description", type: "textarea" },
+  ];
+  it("fills each block from the next role, word for word, with no AI", () => {
+    const out = proposeFields([...block(1), ...block(2), { key: "city", label: "City*", type: "text", required: true }], roles);
+    const a = (i: number) => [out[i]!.answer, out[i]!.source];
+    expect([0, 1, 2, 3, 4, 5].map(a)).toEqual([["Director, Digital Manufacturing", "master_profile"], ["Northwind Pharma", "master_profile"], [null, null], ["Yes", "master_profile"], ["3", "master_profile"], ["2019", "master_profile"]]);
+    // They work there now: "To" isn't needed (their form hides it once the box is ticked).
+    expect(out[6]).toMatchObject({ answer: null, required: false });
+    expect(out.slice(9, 18).map((f) => f.answer)).toEqual(["Manufacturing Systems Lead", "Contoso Labs", "Boston, MA", "No", "6", "2014", "2", "2019", "Ran MES rollouts."]);
+    expect(out.slice(0, 18).filter((f) => f.answer).every((f) => willFill(f))).toBe(true);
+    // Outside the blocks, "City" is still their own city.
+    expect(out[18]!.answer).toBe("Toronto");
+  });
+});
