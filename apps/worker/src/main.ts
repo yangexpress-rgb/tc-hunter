@@ -88,6 +88,8 @@ const apply = process.env.TC_APPLY_BROWSER === "off" ? undefined : {
   // Jobs from LinkedIn or Indeed are applied for on the employer's own site (Yong, 2026-11-17); Claude says where to look when board names don't answer.
   careers: discover.careers,
   held,
+  // A run whose browser closes because the worker is stopping (an app update) starts again by itself.
+  stopping: () => stopping,
 };
 const smart = smartAnswersStatus();
 const IDLE_MS = Number(process.env.TC_WORKER_IDLE_MS ?? 5000);

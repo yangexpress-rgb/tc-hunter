@@ -167,18 +167,34 @@ class PwPage implements ApplyPage {
    */
   protected async setTick(loc: Locator, want: boolean): Promise<boolean> {
     const is = () => loc.isChecked().catch(() => null);
+    // Took, and still holds a moment later: a site that keeps its own state (Workday) undoes a tick it never saw.
+    const held = async () => {
+      if ((await is()) !== want) return false;
+      await this.pg.waitForTimeout(400);
+      return (await is()) === want;
+    };
     if ((await is()) === want) return true;
-    await loc.setChecked(want, { force: true, timeout: 3000 }).catch(() => {});
-    if ((await is()) === want) return true;
+    // As a person would: the box itself when it shows, else its label, with a real click the site hears
+    // (Huron, 2026-11-19: a box set from outside read as ticked, but Workday said none was).
+    if (await loc.isVisible().catch(() => false)) {
+      await loc.setChecked(want, { timeout: 3000 }).catch(() => {});
+      if (await held()) return true;
+    }
+    const id = await loc.getAttribute("id").catch(() => null);
+    const label = id ? this.pg.locator(`label[for="${id.replace(/"/g, '\\"')}"]`).filter({ visible: true }).first() : null;
+    if (label && await label.count().catch(() => 0)) {
+      await label.click({ timeout: 3000 }).catch(() => {});
+      if (await held()) return true;
+    }
     await loc.evaluate((el: HTMLInputElement) => {
       const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest("label");
       (l as HTMLElement | null ?? el).click();
     }).catch(() => {});
-    await this.pg.waitForTimeout(300);
-    if ((await is()) === want) return true;
+    if (await held()) return true;
+    await loc.setChecked(want, { force: true, timeout: 3000 }).catch(() => {});
+    if (await held()) return true;
     await loc.evaluate((el: HTMLInputElement) => el.click()).catch(() => {});
-    await this.pg.waitForTimeout(300);
-    return (await is()) === want;
+    return held();
   }
 
   protected async fillOne(it: FillItem): Promise<FillResult["status"]> {
@@ -769,6 +785,16 @@ class WorkdayPw extends PwPage implements WorkdayPage {
       const QUESTION = "[data-automation-id^='formField'] :is(input, textarea, select, button[aria-haspopup='listbox']), input[type=file]";
       await this.pg.locator(QUESTION).first().waitFor({ state: "attached", timeout: 20_000 }).catch(() => {});
       await this.pg.waitForTimeout(1000);
+      // Still no questions and no Next button: Workday's page didn't finish loading (Huron, 2026-11-19, signing
+      // in to an application started earlier). Say what it shows, then refresh once; Workday keeps what's saved.
+      if (!(await this.pg.locator(QUESTION).count().catch(() => 0)) && !(await this.nextButton())) {
+        log.warn("workday.empty_page", { host: new URL(this.pg.url()).host, title, shows: await this.describe(), says: await this.says() });
+        await this.pg.reload({ waitUntil: "domcontentloaded" }).catch(() => {});
+        await settle(this.pg, 5000);
+        await this.pg.locator(QUESTION).first().waitFor({ state: "attached", timeout: 30_000 }).catch(() => {});
+        await this.pg.waitForTimeout(1000);
+        log.info("workday.empty_page_refreshed", { host: new URL(this.pg.url()).host, questions: await this.pg.locator(QUESTION).count().catch(() => 0), next: !!(await this.nextButton()) });
+      }
     }
     const form = await this.readForm();
     // Only the application's own questions: not the site's header (language picker, account menu).
@@ -788,9 +814,24 @@ class WorkdayPw extends PwPage implements WorkdayPage {
     return ((await this.pg.locator("h2").first().textContent({ timeout: 1000 }).catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
   }
 
+  /** The page's Next / Save and Continue button, by Workday's name for it; null when none shows. */
+  private async nextButton(ms = 0): Promise<string | null> {
+    const until = Date.now() + ms;
+    for (;;) {
+      for (const n of ["pageFooterNextButton", "bottom-navigation-next-button"]) if (await this.has(n)) return n;
+      if (Date.now() >= until) return null;
+      await this.pg.waitForTimeout(1000);
+    }
+  }
+
   async next(): Promise<{ moved: boolean; errors: string[] }> {
     const before = await this.where();
-    const btn = (await this.has("pageFooterNextButton")) ? "pageFooterNextButton" : "bottom-navigation-next-button";
+    const btn = await this.nextButton(15_000);
+    if (!btn) {
+      // No button to press: say what the page shows rather than waiting on a button that isn't there.
+      log.warn("workday.no_next", { host: new URL(this.pg.url()).host, before, shows: await this.describe(), says: await this.says() });
+      return { moved: false, errors: [] };
+    }
     // A list left open (a search box's choices) takes the first press just to close itself (Premier, 2026-11-16).
     await this.pg.keyboard.press("Escape").catch(() => {});
     await this.pg.waitForTimeout(300);

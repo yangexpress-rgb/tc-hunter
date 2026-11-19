@@ -261,6 +261,8 @@ export interface ApplyDeps {
   held?: HeldSessions;
   /** How long a paused step waits (ms); TC_HANDOVER_HOURS on the server, shorter in tests. */
   handoverMs?: number;
+  /** True once the worker is shutting down (an app update): a run its browser closed under starts again by itself. */
+  stopping?: () => boolean;
 }
 
 /** What was worked out for a question this run, by its words and choices (Workday asks page by page). */
@@ -278,6 +280,8 @@ const cacheKey = (f: FormField) => `${f.label}|${(f.options ?? []).join("/")}`;
  */
 const savedWordsForDate = (f: FormField, p: { source: string | null; answer: string | null }) =>
   p.source === "answer_bank" && f.type !== "checkbox" && !f.options?.length && START_QUESTION.test(f.label) && !/^[\d\s/.-]+$/.test(p.answer ?? "");
+/** A form's own date, whole or in parts ("Date: Month", "Today's Date*", "Date signed"). Not a start, birth or other date. */
+export const FORM_DATE = /^(today'?s date|date( signed| of signature)?)\s*\*?(:\s*(month|day|year)\s*\*?)?$/i;
 /** Kinds of question never worked out for the applicant: statements, consents, signatures, diversity. */
 const NEVER_INFER = new Set(["eeo", "signature", "consent", "attestation"]);
 
@@ -326,6 +330,12 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
     if (f.options?.length && DEGREE_QUESTION.test(f.label.trim())) {
       // Why their degree matched none of the form's choices: the levels found and the site's choices (no school names).
       applyLog.info("apply.degree_unmatched", { levels: facts.education.map((e) => degreeLevel(e.degree)).join(","), choices: f.options.join(" / ").slice(0, 800) });
+    }
+    // The form's own date ("Date", "Today's date", "Date signed"; Workday's disability form asks it in parts):
+    // today, where the applicant lives, by the calendar rather than by judgement (Huron, 2026-11-19).
+    if (f.type !== "checkbox" && !f.options?.length && FORM_DATE.test(f.label.trim())) {
+      const a = { answer: startDatePart(f.label, facts.today), basis: `Today's date: ${facts.today}` };
+      out.set(f.key, a); cache.set(cacheKey(f), a); continue;
     }
     // A start date is worked out from their saved answer by the calendar, not by judgement ("2 weeks from next Monday").
     if (start && f.type !== "checkbox" && !f.options?.length && START_QUESTION.test(f.label)) {
@@ -559,7 +569,28 @@ class Hand {
  * the provider it started on (it is stored on the run), even when the setting is switched meanwhile,
  * and carries on with it after the applicant's turn. A new run takes the provider the work was claimed on.
  */
-export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string }> {
+/** Its browser closed under it: TC Hunter restarting, not the employer's site. */
+const BROWSER_CLOSED = /target page, context or browser has been closed|browser has been closed|browser closed|page closed/i;
+
+/**
+ * The same apply work queued again: TC Hunter's retry after a site hiccup, or the run a restart cut short.
+ * Called by the worker once the running item has ended, so it never meets "one apply at a time".
+ */
+export async function requeueApply(pool: pg.Pool, ctx: RequestContext, itemId: string, applicationId: string, seconds: number): Promise<void> {
+  await withApplicant(pool, { ...ctx, actor: "automation" }, async (c) => {
+    const moved = (await c.query(
+      `UPDATE work_item SET status = 'queued', attempts = 0, locked_until = NULL, run_after = now() + make_interval(secs => $2), updated_at = now()
+        WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM work_item w WHERE w.id <> $1 AND w.kind = 'apply' AND w.status IN ('queued','running') AND w.payload->>'application_id' = $3)`,
+      [itemId, seconds, applicationId])).rowCount;
+    if (moved && !(await c.query("SELECT 1 FROM apply_run WHERE application_id = $1 AND status IN ('queued','running')", [applicationId])).rowCount) {
+      // The new run says why it is waiting: the last run's own words ("... tries once more in 10 minutes").
+      const why = (await c.query("SELECT coalesce(problem, step) AS why FROM apply_run WHERE application_id = $1 ORDER BY created_at DESC LIMIT 1", [applicationId])).rows[0]?.why as string | undefined;
+      await c.query("INSERT INTO apply_run (applicant_id, application_id, status, step) VALUES (app_applicant_id(), $1, 'queued', $2)", [applicationId, why || "Waiting to start"]);
+    }
+  });
+}
+
+export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string; requeueIn?: number }> {
   const kept = await withApplicant(pool, { ...ctx, actor: "automation" }, async (c) => (await c.query(
     `SELECT r.ai_provider FROM apply_run r
       WHERE r.ai_provider IS NOT NULL AND (
@@ -570,7 +601,7 @@ export async function runApply(pool: pg.Pool, ctx: RequestContext, payload: { ap
   return withAiProvider(provider, () => runApplyOn(pool, ctx, payload, deps));
 }
 
-async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string }> {
+async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { application_id?: string; anyway?: boolean; handover?: string }, deps: ApplyDeps): Promise<{ status: string; requeueIn?: number }> {
   const auto: RequestContext = { ...ctx, actor: "automation" };
   // The applicant's turn on this application's page: no run touches it until they hand it back (Yong, 2026-11-17).
   const theirs = deps.held?.all().find((h) => h.applicationId === payload.application_id && h.purpose === "handover");
@@ -671,14 +702,22 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
       await run.end("unclear", `TC Hunter pressed Submit, then lost track of ${app.employer}'s page. Nothing will be sent again. It's checking your email for their confirmation; if none comes, tell TC Hunter below whether it went through.`);
       return { status: (status = "unclear") };
     }
+    // TC Hunter itself restarted (an app update) part way, before Submit: not the site's fault, and not a try
+    // that counts. It starts again by itself in a minute (Huron, 2026-11-19: the restart's "failure" used up
+    // the one retry, so the next real hiccup ended the application).
+    if (deps.stopping?.() && BROWSER_CLOSED.test(detail)) {
+      await run.end("stopped", null, null, "TC Hunter restarted while applying. Nothing was sent. It starts again by itself in a minute.");
+      return { status: (status = "stopped"), requeueIn: 60 };
+    }
     await run.shot("stopped", "Where it stopped", page, deps.cfg).catch(() => {});
     const retry = await withApplicant(pool, auto, async (c) => (await c.query(
       "SELECT count(*)::int AS n FROM apply_run WHERE application_id = $1 AND status = 'failed' AND created_at > now() - interval '1 day'", [app.id])).rows[0].n < 1);
     await run.end("failed", `Something went wrong on ${app.employer}'s site${retry ? ". Nothing was sent. TC Hunter tries once more in 10 minutes" : ". Nothing was sent. Try again later, or apply on their site yourself"}.`, null);
     await withApplicant(pool, auto, (c) => c.query(
       `UPDATE apply_run SET steps = steps || jsonb_build_array(jsonb_build_object('at', now(), 'text', $2::text, 'detail', true)) WHERE id = $1`, [run.id, detail]));
-    if (retry) await withApplicant(pool, auto, (c) => queueApply(c, app.id, { retry: true }, 600));
-    return { status: "failed" };
+    // The retry is this same piece of work, queued again by the worker once this run ends. A new one queued
+    // from in here clashed with this one (one apply at a time per application) and was quietly dropped.
+    return retry ? { status: "failed", requeueIn: 600 } : { status: "failed" };
   } finally {
     await hand.settle(status);
     // A page handed to the applicant (or kept for the send's approval) stays open; every other page is closed.
@@ -1373,7 +1412,16 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     // Statements on this page only the applicant may make: their turn, on this page, before moving on.
     const theirs = pg.form.fields.filter((f) => p.personalKeys.has(`${prefix}${f.key}`));
     if (theirs.length && await hand.pause(wd, "attestation", "before_submit", { ats: "workday", labels: theirs.map((f) => f.label), keys: theirs.map((f) => f.key) })) return "handover";
-    const next = await wd.next();
+    let next = await wd.next();
+    // A page with no questions and no way on: Workday's page didn't load. That's their site; the usual retry follows.
+    if (!next.moved && !pg.form.fields.length) throw new Error(`Workday page ${n} showed no questions and no Next button`);
+    // Their form says an answer that went in isn't there (a date, a tick box): put this page's answers in once more,
+    // then try Next again before asking the applicant (Huron, 2026-11-19).
+    if (!next.moved && next.errors.length && items.length) {
+      applyLog.info("workday.refill", { run: run.id, page: n, errors: next.errors.slice(0, 3).join(" | ").slice(0, 400) });
+      await wd.fill(items);
+      next = await wd.next();
+    }
     if (!next.moved) {
       await run.shot("stopped", `Workday page ${n}, where it stopped`, wd, deps.cfg);
       await run.end("waiting", `${app.employer}'s Workday form wants more on "${pg.title || `page ${n}`}"${next.errors.length ? `: ${next.errors.slice(0, 3).map((e) => `"${e}"`).join(", ")}` : ""}. Add these to your profile or saved answers, then choose Continue. Workday keeps what's filled so far.`, "answers");

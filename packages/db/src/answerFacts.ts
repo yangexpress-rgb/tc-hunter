@@ -4,6 +4,13 @@ import {
   type InferFacts, type PacketProfile, type ResumeFileKind, type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
 import { loadTailorProfile, postingForMatch } from "./documents";
+import { tz } from "./tracker";
+
+/** Today's date (YYYY-MM-DD) in a time zone. */
+export function localDay(zone: string, now = new Date()): string {
+  try { return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(now); }
+  catch { return now.toISOString().slice(0, 10); }
+}
 
 /**
  * The full evidence pack for working out application answers (Yong, 2026-11-17): goals, every role
@@ -64,7 +71,9 @@ export async function answerEvidence(c: pg.PoolClient, dk: Buffer, profile: Pack
   const master = await readMasterResume(c, dk);
   const masterResumeText = master ? stripForAnswers(master, names).slice(0, RESUME_TEXT_CAP) : null;
   const facts: InferFacts = {
-    today: new Date().toISOString().slice(0, 10), employer: app.employer, jobTitle: app.title, goals, home,
+    // Today where the applicant lives: in the evening in New York it is already tomorrow in UTC, and a form
+    // dated tomorrow was turned down as empty (Huron's disability form, 2026-11-19 00:20 UTC).
+    today: localDay(await tz(c)), employer: app.employer, jobTitle: app.title, goals, home,
     work: tailor.experience.map((e) => ({ id: e.id, employer: e.employer, title: e.title, start: e.start, end: e.end, type: e.type, location: e.location })),
     bullets: tailor.experience.flatMap((e) => e.bullets.map((b) => ({ id: b.id, roleId: e.id, text: b.text }))),
     skills: tailor.skills.map((s) => ({ id: s.id, name: s.name, category: [category.get(s.id) ?? "skill", s.aliases.length ? `also called ${s.aliases.join(", ")}` : ""].filter(Boolean).join("; "), level: s.proficiency ?? "not stated" })),

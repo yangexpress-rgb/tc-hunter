@@ -19,7 +19,7 @@ import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./
  * one press of Submit. The real browser runs against local pages in apps/worker/test.
  */
 
-interface FakeSpec { prefilled?: Record<string, string>; securityCode?: boolean; growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
+interface FakeSpec { throws?: string; prefilled?: Record<string, string>; securityCode?: boolean; growOptions?: boolean; url: string; fields: FormField[]; after?: "thanks" | "nothing" | "errors"; captcha?: boolean; more?: FormField[]; fileDoesNotStick?: boolean }
 
 class FakePage implements ApplyPage {
   values = new Map<string, string>();
@@ -27,7 +27,7 @@ class FakePage implements ApplyPage {
   fills: FillItem[][] = [];
   constructor(public spec: FakeSpec) { for (const [k, v] of Object.entries(spec.prefilled ?? {})) this.values.set(k, v); }
   url() { return this.spec.url; }
-  async openForm() { return this.readForm(); }
+  async openForm() { if (this.spec.throws) throw new Error(this.spec.throws); return this.readForm(); }
   async readForm(): Promise<PageForm> {
     // "more" questions appear once the first answers are in (a form that grows as you answer).
     const fields = this.fills.length && this.spec.more ? [...this.spec.fields, ...this.spec.more] : this.spec.fields;
@@ -100,7 +100,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "work_auth", patterns: ["authori[sz]ed to work"], answer: "Yes", isApplicantStep: true, approve: true });
   browser = new FakeBrowser(() => ({ url: GH(1), fields: BASE, after: "thanks" }));
   applyDeps = { browser, cfg, vault: new MemorySecretStore(), confirmWaitMs: 300, emailWaitMs: 200, pollMs: 10 };
-  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Huron Co", "Dollar Shave Club", "Nowhere Co", "Choices Co", "Code Co", "Nocode Co"];
+  const employers = ["Contoso", "Fabrikam", "Tailspin", "Litware", "Adatum", "Wingtip", "Proseware", "Workday Co", "Coho", "Fourth Coffee", "Relecloud", "Spaulding", "Northwind Traders", "Alpine Ski", "Bellows", "Premier Co", "Carver Health", "Dunmore", "Premier Health", "Follow Co", "Quiet Co", "Huron Co", "Retry Co", "Restart Co", "Dollar Shave Club", "Nowhere Co", "Choices Co", "Code Co", "Nocode Co"];
   for (const emp of employers) {
     await requestLink(pool, yong, { url: ["Dollar Shave Club", "Nowhere Co"].includes(emp) ? `https://www.linkedin.com/jobs/view/${emp.length}` : `https://jobs.example.test/${emp.replace(/ /g, "")}`, title: "Operations Analyst", employer: emp, location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
   }
@@ -195,6 +195,44 @@ describe("the hard limits", () => {
     const p = (await getPacket(pool, cfg, yong, app))!;
     expect(p.fields.find((f) => f.label === "Language*")).toMatchObject({ answer: "English", source: "master_profile", willFill: true });
     expect(p.fields.find((f) => f.label.startsWith("Location code"))).toMatchObject({ answer: null, required: false, note: "Their form already had an answer here, so TC Hunter left it as it was." });
+  });
+
+  it("a site hiccup is tried once more as the same work 10 minutes later; a second one stops (Huron, 2026-11-19)", async () => {
+    const app = apps[22]!;
+    browser.spec = () => ({ url: GH(119), fields: BASE, throws: "locator.click: Timeout 30000ms exceeded." });
+    await approveResume(app);
+    await runNow();
+    let s = await applyStatus(pool, yong, app);
+    expect(s).toMatchObject({ status: "queued" });
+    expect(s.step).toMatch(/Something went wrong.*tries once more in 10 minutes/);
+    const q = (await ownerQuery(`SELECT status, run_after > now() + interval '9 minutes' AS later FROM work_item w JOIN application a ON a.id::text = w.payload->>'application_id'
+      WHERE a.public_ref = $1 AND w.kind = 'apply' AND w.status = 'queued'`, [app])).rows;
+    expect(q).toEqual([{ status: "queued", later: true }]);
+    await runNow();
+    s = await applyStatus(pool, yong, app);
+    expect(s.problem).toMatch(/Try again later, or apply on their site yourself/);
+    expect((await ownerQuery(`SELECT 1 FROM work_item w JOIN application a ON a.id::text = w.payload->>'application_id'
+      WHERE a.public_ref = $1 AND w.kind = 'apply' AND w.status = 'queued'`, [app])).rowCount).toBe(0);
+  });
+
+  it("TC Hunter restarting part way isn't a failed try: it starts again by itself a minute later (Huron, 2026-11-19)", async () => {
+    const app = apps[23]!;
+    let stopping = true;
+    applyDeps = { ...applyDeps, stopping: () => stopping };
+    browser.spec = () => ({ url: GH(120), fields: BASE, throws: "page.evaluate: Target page, context or browser has been closed" });
+    await approveResume(app);
+    await runNow();
+    const s = await applyStatus(pool, yong, app);
+    expect(s).toMatchObject({ status: "queued", problem: null });
+    expect(s.step).toMatch(/restarted while applying.*starts again by itself/);
+    expect((await ownerQuery(`SELECT count(*)::int AS n FROM apply_run r JOIN application a ON a.id = r.application_id WHERE a.public_ref = $1 AND r.status = 'failed'`, [app])).rows[0].n).toBe(0);
+    expect((await ownerQuery(`SELECT run_after < now() + interval '2 minutes' AS soon FROM work_item w JOIN application a ON a.id::text = w.payload->>'application_id'
+      WHERE a.public_ref = $1 AND w.kind = 'apply' AND w.status = 'queued'`, [app])).rows).toEqual([{ soon: true }]);
+    stopping = false;
+    browser.spec = () => ({ url: GH(120), fields: BASE, after: "thanks" });
+    await runNow();
+    expect((await applyStatus(pool, yong, app)).status).toBe("sent");
+    applyDeps = { ...applyDeps, stopping: undefined };
   });
 
   it("a required consent is never ticked without a standing answer; with one, it is, and it's marked as such", async () => {
@@ -631,6 +669,8 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
       { key: "#start_y", label: "When will you be available to start employment?: Year", type: "text", required: true },
       { key: "#degree", label: "Degree*", type: "select", options: ["Select One", "Certificate", "Juris Doctorate", "High School", "Bachelor's Degree", "Master's Degree", "Doctorate"], required: true },
       { key: "#why", label: "Why do you want to work at Premier Health?", type: "textarea" },
+      { key: "#signed_m", label: "Date: Month", type: "text", required: true },
+      { key: "#signed_y", label: "Date: Year", type: "text", required: true },
     ];
     await addFact(pool, yong, "education_item", { institution: "Example University", degree: "BS", field: "Economics", start_date: "2008-09-01", end_date: "2012-05-01" });
     await addFact(pool, yong, "education_item", { institution: "Example Business School", degree: "MBA", field: null, start_date: "2015-09-01", end_date: "2017-05-01" });
@@ -649,6 +689,7 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     expect(asked).not.toContain("#degree");       // settled by their education rows
     expect(asked).not.toContain("#start_m");      // worked out by the calendar from their saved words
     expect(asked).not.toContain("#why");          // a written answer: drafted, not inferred
+    expect(asked).not.toContain("#signed_m");     // the form's own date: today, by the calendar
     expect(drafted).toEqual(["#why"]);
     expect(JSON.stringify(seen[0]!.facts)).not.toMatch(/yong@example\.test/);
     expect(seen[0]!.facts.work.map((w) => w.employer)).toContain("Northwind");
@@ -664,7 +705,11 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     expect(by(/worked for Premier/)).toMatchObject({ answer: "No", source: "inferred", willFill: true });
     expect(by(/Full-Time/)).toMatchObject({ answer: "Yes", source: "inferred" });
     expect(by(/^Degree/)).toMatchObject({ answer: "Master's Degree", source: "inferred", willFill: true });
-    const start = startDateFrom("2 weeks from next Monday", new Date().toISOString().slice(0, 10))!;
+    // Today where Yong lives (Toronto), not in UTC: in the evening there it is already tomorrow in UTC.
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    expect(by(/^Date: Month/)).toMatchObject({ answer: String(+today.slice(5, 7)), source: "inferred", willFill: true });
+    expect(by(/^Date: Year/)).toMatchObject({ answer: today.slice(0, 4), source: "inferred", willFill: true });
+    const start = startDateFrom("2 weeks from next Monday", today)!;
     expect(by(/start employment\?: Month/)).toMatchObject({ answer: String(+start.slice(5, 7)), source: "inferred", willFill: true });
     expect(by(/start employment\?: Year/)).toMatchObject({ answer: start.slice(0, 4), source: "inferred", willFill: true });
     // The written answer is a draft: in the box for the applicant, never typed in until they use it.

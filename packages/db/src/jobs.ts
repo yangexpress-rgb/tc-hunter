@@ -15,7 +15,7 @@ import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
 import { goalFromRow } from "./profile";
 import { discoveryDue, namedSourceIds, runDiscovery, type DiscoverDeps } from "./discover";
-import { runApply, type ApplyDeps } from "./autoApply";
+import { requeueApply, runApply, type ApplyDeps } from "./autoApply";
 
 /**
  * Module B and C on the server (design 5.2, 5.3). The catalogue (sources,
@@ -842,6 +842,9 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
       "UPDATE work_item SET status = 'queued', attempts = 0, locked_until = NULL, run_after = now() + $2::interval, updated_at = now() WHERE id = $1",
       [item.id, `${BATCH_CHECK_MINUTES} minutes`]));
     else await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
+    // An application to try again (a site hiccup, or a run a restart cut short): this same work, queued again.
+    const again = item.kind === "apply" ? (result as { requeueIn?: number }).requeueIn : undefined;
+    if (again && item.payload?.application_id) await requeueApply(pool, ctx, item.id, String(item.payload.application_id), again);
     const counts = Object.fromEntries(Object.entries((result ?? {}) as Record<string, unknown>).filter(([, v]) => typeof v === "number"));
     done = { kind: item.kind, ok: true, ms: Date.now() - t0, attempt: item.attempts, result: counts };
   } catch (e) {
