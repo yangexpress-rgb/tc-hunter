@@ -8,7 +8,8 @@ import { TopBar } from "@/components/TopBar";
 import { BudgetLine, dateInput, day, localInput, when } from "@/components/applications/AppBits";
 import { ApplyPanel } from "@/components/applications/ApplyPanel";
 import { PacketCard } from "@/components/applications/Packet";
-import { EmailAttach, journeyFor, RunRecord, StatusBlock, Stepper, type RunLine } from "@/components/applications/Journey";
+import { DocChecklist } from "@/components/applications/DocChecklist";
+import { EmailAttach, journeyFor, reachedOf, RunRecord, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { interviewAction, nextStepAction, notesAction, outcomeAction, stageAction } from "../actions";
@@ -27,8 +28,6 @@ const MOVES: Partial<Record<ApplicationStage, Array<{ to: ApplicationStage; labe
   interview: [{ to: "offer", label: "I got an offer" }, { to: "closed_lost", label: "Not successful", secondary: true }, { to: "withdrawn", label: "I withdrew", secondary: true, outcome: "withdrew" }],
   offer: [{ to: "closed_won", label: "I accepted" }, { to: "withdrawn", label: "I turned it down", secondary: true, outcome: "offer_declined" }],
 };
-
-const DOC_STATE: Record<string, string> = { approved: "Approved", draft: "Waiting for your approval", writing: "Being written" };
 
 function Hidden({ appRef, back }: { appRef: string; back: string }) {
   return <><input type="hidden" name="app" value={appRef} /><input type="hidden" name="back" value={back} /></>;
@@ -59,13 +58,9 @@ export default async function ApplicationPage(props: Props) {
   const resume = docs.find((d) => d.type === "tailored_resume");
   const letter = docs.find((d) => d.type === "cover_letter");
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date());
-  // The live "Your turn" handover, when the apply run carries one.
-  const ho = (applying as { handover?: { what: string; until?: string | null } | null }).handover ?? null;
-  const runLine: RunLine = { status: String(applying.status), step: applying.step, problem: applying.problem, what: ho?.what ?? null, until: ho?.until ?? null,
-    finishYourself: !!(applying as { finishYourself?: boolean }).finishYourself };
+  const runLine = runLineOf(applying);
   const signal = signals.length ? signals[signals.length - 1] : undefined;
-  const reached = (a.events as Array<{ to_stage: ApplicationStage; conflict_flag: boolean }>).filter((e) => !e.conflict_flag).map((e) => e.to_stage);
-  const j = journeyFor(a, facts[a.public_ref], { today, timeZone: tz }, { run: runLine, signal, reached });
+  const j = journeyFor(a, facts[a.public_ref], { today, timeZone: tz }, { run: runLine, signal, reached: reachedOf(a.events) });
   const at = j.index;
 
   const preApplied = stage === "ready_to_apply" || stage === "tailoring" || stage === "interested";
@@ -134,26 +129,8 @@ export default async function ApplicationPage(props: Props) {
 
       {/* Stage panels, in journey order, each only when it's relevant. */}
       {at <= 3 ? (
-        <section className="card stage-panel" id="stage-getting_ready" aria-label="Your documents">
-          <Anchor s="ready_to_apply" />
-          <h2>Your documents</h2>
-          <ul className="plain doc-checklist">
-            <li>
-              <span className={`jchip tone-${resume?.status === "approved" ? "active" : resume ? "yours" : "upcoming"}`}>{resume ? DOC_STATE[facts[a.public_ref]?.docs.resume ?? resume.status] ?? "Waiting for your approval" : facts[a.public_ref]?.docs.resume === "writing" ? "Being written" : "Not started"}</span>
-              <span>Tailored resume{resume ? ` v${resume.version}` : ""}</span>
-              {resume ? <a href={`/documents/${resume.public_ref}`}>{resume.status === "approved" ? "Open" : "Look over and approve"}</a> : <a href={`/jobs/${a.job_ref}`}>Prepare a resume for this job</a>}
-            </li>
-            <li>
-              <span className={`jchip tone-${letter?.status === "approved" ? "active" : letter ? "yours" : "upcoming"}`}>{letter ? DOC_STATE[letter.status] ?? "Waiting for your approval" : "None"}</span>
-              <span>Cover letter{letter ? ` v${letter.version}` : ""}</span>
-              {letter ? <a href={`/documents/${letter.public_ref}`}>{letter.status === "approved" ? "Open" : "Look over and approve"}</a> : <span className="small muted">Optional</span>}
-            </li>
-            <li>
-              <span className={`jchip tone-${packetDone ? "active" : packet?.state === "packet_ready_for_review" ? "yours" : "upcoming"}`}>{packetDone ? "Approved" : packet?.state === "packet_ready_for_review" ? "Waiting for your approval" : packet ? "Being written" : "Not started"}</span>
-              <span>Prepared answers{answers ? ` (${answers})` : ""}{drafted && packet?.state === "packet_ready_for_review" ? ` · ${drafted === 1 ? "1 essay draft" : `${drafted} essay drafts`} to check` : ""}</span>
-              {packet ? <a href="#packet">{packet.state === "packet_ready_for_review" && !problem ? "Review & approve" : "See them"}</a> : <span className="small muted">Made from their form when TC Hunter opens it</span>}
-            </li>
-          </ul>
+        <DocChecklist resume={resume} letter={letter} resumeState={facts[a.public_ref]?.docs.resume} jobRef={a.job_ref} problem={problem}
+          packet={packet ? { state: packet.state, answers, drafted } : null}>
           {/* With a packet, its own card carries "Applied on their site yourself?": one toggle, not two. */}
           {preApplied && !packet && !sent ? (
             <Details summary="Applied already, on their site?">
@@ -176,7 +153,7 @@ export default async function ApplicationPage(props: Props) {
               ) : null}
             </Details>
           ) : null}
-        </section>
+        </DocChecklist>
       ) : <><Anchor s="getting_ready" /><Anchor s="ready_to_apply" /></>}
 
       {/* The packet approval is stage 2's exit action: its own card, right under the documents. */}

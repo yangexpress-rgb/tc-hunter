@@ -458,6 +458,8 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 .doc-checklist li:last-child { border-bottom: 0; }
 .doc-checklist li > span:nth-child(2) { flex: 1 1 200px; }
 .doc-checklist .jchip { min-width: 0; }
+.doc-prepare { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.doc-prepare .hint { margin-bottom: 0; }
 .stage-panel .packet { margin-top: 12px; }
 .finish-yourself { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .finish-yourself h3 { margin: 0 0 6px; }

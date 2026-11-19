@@ -26,6 +26,17 @@ export interface AppFacts {
 export type RunLine = { status: string; step: string | null; problem: string | null; what?: string | null; until?: string | null; expiresAt?: string | null; finishYourself?: boolean };
 export type Signal = { id: string; kind: string; employer: string; suggestedStage: string; appRef: string };
 
+/** The apply run as the journey reads it, with the live "Your turn" handover when there is one. Same on every page. */
+export function runLineOf(applying: { status: unknown; step: string | null; problem: string | null; handover?: { what: string; until?: string | null } | null; finishYourself?: boolean }): RunLine {
+  const ho = applying.handover ?? null;
+  return { status: String(applying.status), step: applying.step, problem: applying.problem, what: ho?.what ?? null, until: ho?.until ?? null, finishYourself: !!applying.finishYourself };
+}
+
+/** The tracker stages an application has really been in (conflicting email moves left out). */
+export function reachedOf(events: unknown): ApplicationStage[] {
+  return (events as Array<{ to_stage: ApplicationStage; conflict_flag: boolean }>).filter((e) => !e.conflict_flag).map((e) => e.to_stage);
+}
+
 /** Put one application's facts together and work out its journey. */
 export function journeyFor(a: AppFacts, f: JourneyFacts | undefined, ctx: { today: string; timeZone: string },
   extra: { run?: RunLine; signal?: Signal; reached?: ApplicationStage[] } = {}): Journey {
@@ -130,7 +141,7 @@ export function PipelineStrip({ counts, active }: { counts: Record<JourneyStage,
 }
 
 /** The 8 stages, done ✓, current highlighted, upcoming grey. Tapping a stage scrolls to its panel; it never changes anything. */
-export function Stepper({ j }: { j: Journey }) {
+export function Stepper({ j, base = "" }: { j: Journey; /** Where the stage panels live, when not on this page (the job page links to its application). */ base?: string }) {
   return (
     <ol className="stepper" aria-label="Stages">
       {JOURNEY_STAGES.map((s, n) => {
@@ -139,7 +150,7 @@ export function Stepper({ j }: { j: Journey }) {
         const cls = current ? (j.tone === "problem" ? "current problem" : j.stage === "closed" ? "current closed" : "current") : done ? "done" : "upcoming";
         return (
           <li key={s} className={`step ${cls}`} aria-current={current ? "step" : undefined}>
-            <a href={`#stage-${s}`}>
+            <a href={`${base}#stage-${s}`}>
               <span className="dot" aria-hidden="true">{done ? "✓" : current && j.stage === "closed" ? "■" : n + 1}</span>
               <span className="lbl">{s === "closed" && current ? j.chip : JOURNEY_LABEL[s]}</span>
             </a>

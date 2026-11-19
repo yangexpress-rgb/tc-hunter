@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { applyStatuses, getMatchByRef, getPreferences, journeyFacts, listApplications, listDocuments, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
+import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listApplications, listDocuments, listEmailSignals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -10,7 +10,8 @@ import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { tailorAction } from "@/app/documents/actions";
 import { trackAction } from "@/app/applications/actions";
-import { journeyFor, StatusBlock, type RunLine } from "@/components/applications/Journey";
+import { journeyFor, reachedOf, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
+import { DocChecklist } from "@/components/applications/DocChecklist";
 
 type FitPart = { key: string; label: string; weight: number; points: number; detail: string[] };
 
@@ -30,21 +31,30 @@ export default async function JobPage(props: Props) {
   const session = await requireSession();
   const { ref } = await props.params;
   if (!/^[A-Za-z0-9-]{1,40}$/.test(ref)) notFound();
-  const { pool } = app();
-  const [{ saved, error, params }, m] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref)]);
+  const { pool, cfg } = app();
+  const [{ saved, error }, m] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref)]);
   if (!m) notFound();
   const [docs, work, prefs, apps, ready] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session)]);
   const lastResult = (work?.status === "done" ? work.result ?? {} : {}) as { empty?: boolean };
   const tracked = apps.find((a) => a.job_ref === m.public_ref);
-  // A tracked job shows the same status block as its application, so its next step (e.g. "Apply for me now")
-  // is a button right here, not only a link to the application (Yong, 2026-11-19).
+  // A tracked job shows the application's own status card, stepper and "Your documents", worked out exactly as the
+  // application page does, so the two pages always say the same thing in the same design (Yong, 2026-11-19).
   let journey = null;
+  let packetLine: { state: string; drafted?: number } | null | undefined;
+  let resumeState: string | null | undefined;
   if (tracked) {
-    const [facts, runs, sum] = await Promise.all([journeyFacts(pool, session, tracked.public_ref), applyStatuses(pool, session), trackerSummary(pool, session)]);
+    const [full, facts, applying, signals, sum] = await Promise.all([getApplication(pool, cfg, session, tracked.public_ref), journeyFacts(pool, session, tracked.public_ref),
+      applyStatus(pool, session, tracked.public_ref), listEmailSignals(pool, session, tracked.public_ref), trackerSummary(pool, session)]);
+    const f = facts[tracked.public_ref];
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: sum.timeZone }).format(new Date());
-    journey = journeyFor(tracked, facts[tracked.public_ref], { today, timeZone: sum.timeZone }, { run: runs[tracked.public_ref] as RunLine | undefined });
+    journey = journeyFor(full ?? tracked, f, { today, timeZone: sum.timeZone },
+      { run: runLineOf(applying), signal: signals.length ? signals[signals.length - 1] : undefined, reached: full ? reachedOf(full.events) : undefined });
+    packetLine = f?.packet ? { state: f.packet.state, drafted: f.packet.draftsToCheck } : null;
+    resumeState = f?.docs.resume;
   }
-  const preparing = work && (work.status === "queued" || work.status === "running");
+  const preparing = !!work && (work.status === "queued" || work.status === "running");
+  const resume = docs.find((d) => d.type === "tailored_resume");
+  const letter = docs.find((d) => d.type === "cover_letter");
   const minScore = prefs?.min_score_to_tailor ?? null;
   const back = `/jobs/${m.public_ref}`;
   const status = m.status === "saved" ? "saved" : m.status === "new" ? "new" : "passed";
@@ -64,7 +74,7 @@ export default async function JobPage(props: Props) {
         <FitScores r={m} />
         <div>
           <h1>{m.title}</h1>
-          <p className="job-meta">{m.employer_canonical} · {place(m)}{pay(m) ? ` · ${pay(m)}` : ""} · {posted(m.posted_at)}</p>
+          <p className="job-meta">{m.employer_canonical} · {place(m)}{pay(m) ? ` · ${pay(m)}` : ""} · {posted(m.posted_at)}{tracked ? <> · <a href={`/applications/${tracked.public_ref}`}>See the application</a></> : null}</p>
         </div>
       </div>
       {m.posting_status !== "active" ? <p className="error" role="status">{t("jobs.closed")}</p> : null}
@@ -78,10 +88,17 @@ export default async function JobPage(props: Props) {
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
       <FeedbackButtons matchId={m.id} status={status} back={back} />
       {preparing ? <meta httpEquiv="refresh" content="4" /> : null}
+      {/* Problems first, in red. */}
+      {ready.roles === 0 && !preparing ? (
+        <p className="error" role="alert">{lastResult.empty ? "Nothing was prepared: " : "A resume can't be prepared yet: "}
+          your profile has no work history. <a href="/profile/import">Add your resume</a> or <a href="/profile/experience">add a role</a>, then come back and prepare it.</p>
+      ) : null}
+      {work?.status === "failed" && !preparing ? <p className="error" role="alert">We couldn&apos;t prepare your resume and cover letter this time. Try again below.</p> : null}
       {tracked && journey ? (
-        <StatusBlock j={journey} appRef={tracked.public_ref} back={`/applications/${tracked.public_ref}`} card>
-          <p className="small sb-note"><a href={`/applications/${tracked.public_ref}`}>Open the application</a></p>
-        </StatusBlock>
+        <>
+          <StatusBlock j={journey} appRef={tracked.public_ref} back={`/applications/${tracked.public_ref}`} card />
+          <Stepper j={journey} base={`/applications/${tracked.public_ref}`} />
+        </>
       ) : (
         <form action={trackAction} className="inline-actions">
           <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
@@ -90,34 +107,19 @@ export default async function JobPage(props: Props) {
         </form>
       )}
 
-      <section className="card tailor-card" aria-label="Your documents for this job" id="documents">
-        <h2>Your documents for this job</h2>
-        {ready.roles === 0 && !preparing ? (
-          <p className="error" role="alert">{lastResult.empty ? "Nothing was prepared: " : "A resume can't be prepared yet: "}
-            your profile has no work history. <a href="/profile/import">Add your resume</a> or <a href="/profile/experience">add a role</a>, then come back and prepare it.</p>
-        ) : null}
-        {preparing ? <p className="status" role="status">Preparing your resume and cover letter from your profile. This page updates when they're ready.</p> : null}
-        {work?.status === "failed" ? <p className="error" role="alert">We couldn't prepare them this time. Try again.</p> : null}
-        {docs.length ? (
-          <ul className="plain">
-            {docs.sort((a, b) => b.type.localeCompare(a.type)).map((d) => (
-              <li key={d.id}><a href={`/documents/${d.public_ref}`}>{d.type === "cover_letter" ? "Cover letter" : "Resume"}, version {d.version}</a>{" "}
-                <span className={d.status === "draft" ? "warn" : "muted"}>{d.status === "draft" ? "Draft, waiting for you" : d.status === "approved" ? "Approved" : "Replaced"}</span>{" "}
-                {d.status === "approved" ? <span className="small"><a href={`/documents/${d.public_ref}/pdf`}>PDF</a> · <a href={`/documents/${d.public_ref}/docx`}>Word</a></span>
-                  : <a className="small" href={`/documents/${d.public_ref}`}>Open to look it over</a>}</li>
-            ))}
-          </ul>
-        ) : null}
-        {!preparing && m.posting_status === "active" ? (
-          <form action={tailorAction}>
-            <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
-            {minScore !== null && m.score < minScore && !docs.length ? <p className="muted">This job scores below the {minScore} you set for preparing resumes.</p> : null}
-            <button className={docs.length ? "secondary" : ""}>{docs.length ? "Prepare a fresh draft" : "Prepare a resume for this job"}</button>
-            <p className="hint">Makes a resume and a cover letter from your profile as it is now, in its own words. Nothing is sent anywhere.</p>
-          </form>
-        ) : null}
-        {params.preparing === "1" && !preparing && docs.length ? <p className="status" role="status">Ready. Open the draft to look it over.</p> : null}
-      </section>
+      {!journey || journey.index <= 3 ? (
+        <DocChecklist resume={resume} letter={letter} resumeState={resumeState ?? (preparing ? "writing" : resume?.status)} jobRef={m.public_ref}
+          packet={tracked ? packetLine ?? null : undefined} packetHref={tracked ? `/applications/${tracked.public_ref}#packet` : "#packet"} problem={journey?.tone === "problem"}>
+          {!preparing && m.posting_status === "active" ? (
+            <form action={tailorAction} id="prepare" className="doc-prepare">
+              <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
+              {minScore !== null && m.score < minScore && !docs.length ? <p className="muted">This job scores below the {minScore} you set for preparing resumes.</p> : null}
+              <button className={docs.length ? "secondary" : ""}>{docs.length ? "Prepare a fresh draft" : "Prepare a resume for this job"}</button>
+              <p className="hint">Makes a resume and a cover letter from your profile as it is now, in its own words. Nothing is sent anywhere.</p>
+            </form>
+          ) : null}
+        </DocChecklist>
+      ) : null}
 
       {(m.gap_skills as string[]).length ? (
         <section className="card">
