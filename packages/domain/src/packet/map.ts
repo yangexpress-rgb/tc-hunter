@@ -165,6 +165,13 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     return chosen ? { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9 }
       : { ...base, note: "Your saved answer isn't one of the choices." };
   }
+  // The language of the form itself (Workday's disability self-identification page asks "Language*" with
+  // English / Spanish / ...): the applicant applies in English, their resume and profile are in English
+  // (Huron, 2026-11-19). A list without English stays theirs.
+  if (FORM_LANGUAGE.test(label) && f.type !== "checkbox") {
+    const chosen = !f.options?.length ? "English" : f.options.find((o) => /^english\b/i.test(o.trim())) ?? f.options.find((o) => /\benglish\b/i.test(o)) ?? null;
+    if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.9, note: "Your resume and profile are in English. Save your own answer under Saved answers to change it." };
+  }
   // "How did you hear about us?" with no saved answer: TC Hunter found the job online, so a job board.
   if (HEARD_ABOUT.test(label)) {
     // No fitting choice: the first one (Yong, 2026-11-16).
@@ -174,6 +181,8 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   return { ...base, note: "New question. Type your answer." };
 }
 
+/** A question about the language of the form or of contact with the applicant ("Language", "Preferred language"). */
+const FORM_LANGUAGE = /^(preferred |form |display |communication )?language( of (this|the) form| preference| for (this form|communication))?$/;
 /** A question whose box takes a number. */
 export const NUMBER_QUESTION = /\b(percent(age)?|number of|how many)\b/i;
 const HEARD_ABOUT = /how did you (hear|learn|find out) about|where did you (hear|find|see|learn)|how did you find (us|this|out)|^(referral |candidate |application )?source$/;
