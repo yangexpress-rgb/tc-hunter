@@ -307,6 +307,17 @@ describe.skipIf(!available)("tick boxes, radio buttons and blanks drawn or reset
   });
 });
 
+describe.skipIf(!available)("a tick box their form said was still empty (Accenture's \"I accept\", 2026-11-19)", () => {
+  it("is cleared and ticked again another way, and ends ticked", async () => {
+    const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/drawn`);
+    try {
+      expect((await page.fill([{ key: "#ft", type: "checkbox", value: "Yes" }])).map((r) => r.status)).toEqual(["filled"]);
+      expect((await page.fill([{ key: "#ft", type: "checkbox", value: "Yes", again: true }])).map((r) => r.status)).toEqual(["filled"]);
+      expect((await page.readForm()).fields.find((f) => f.key === "#ft")?.hasValue).toBe(true);
+    } finally { await page.close(); }
+  });
+});
+
 describe.skipIf(!available)("checking each answer took, and trying another way when it didn't (Yong, 2026-11-19)", () => {
   it("picks a radio worded longer than the answer, re-picks a list the site reset, waits longer for a slow list, and reads what the site flags", async () => {
     const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/selfcheck`);

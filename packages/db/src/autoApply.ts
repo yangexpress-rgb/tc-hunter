@@ -1573,8 +1573,19 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
       next = await wd.next();
     }
     if (!next.moved) {
+      // Which of this page's questions their form still says are missing: flagged ones, or ones its error names
+      // ("The field I accept. is required", Accenture 2026-11-19).
+      const flaggedNow = new Set(await wd.flagged?.().catch(() => []) ?? []);
+      const named = (f: FormField) => { const l = f.label.replace(/[\s*:?.]+$/, "").trim().toLowerCase(); return !!l && next.errors.some((e) => e.toLowerCase().includes(l)); };
+      const stuck = pg.form.fields.filter((f) => f.type !== "file" && (flaggedNow.has(f.key) || named(f)));
+      // An answer TC Hunter put in that their form won't take: the applicant puts it in on this page, then hands it back.
+      if (stuck.length && await hand.pause(wd, "answer", "before_submit", { ats: sys.ats, labels: stuck.map((f) => f.label), keys: stuck.map((f) => f.key) })) {
+        await run.stuck(stuck.map((f) => `${prefix}${f.key}`));
+        return "handover";
+      }
+      if (stuck.length) await run.stuck(stuck.map((f) => `${prefix}${f.key}`));
       await run.shot("stopped", `${sys.page} ${n}, where it stopped`, wd, deps.cfg);
-      await run.end("waiting", `${app.employer}'s ${sys.form} wants more on "${pg.title || `page ${n}`}"${next.errors.length ? `: ${next.errors.slice(0, 3).map((e) => `"${e}"`).join(", ")}` : ""}. Add these to your profile or saved answers, then choose Continue. ${sys.short} keeps what's filled so far.`, "answers");
+      await run.end("waiting", `${app.employer}'s ${sys.form} wants more on "${pg.title || `page ${n}`}"${next.errors.length ? `: ${next.errors.slice(0, 3).map((e) => `"${e}"`).join(", ")}` : ""}. ${stuck.length ? "Answer it below, then choose Save and continue" : "Add these to your profile or saved answers, then choose Continue"}. ${sys.short} keeps what's filled so far.`, "answers");
       return "waiting";
     }
   }

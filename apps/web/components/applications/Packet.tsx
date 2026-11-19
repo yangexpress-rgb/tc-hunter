@@ -251,7 +251,7 @@ function StoryPicker({ p, f, back }: { p: Packet; f: Packet["fields"][number]; b
  * A statement, consent, signature or personal question the form requires: answered right here,
  * as a standing answer (with what the applicant takes on), so no later form asks again.
  */
-function StandingAsk({ p, f, back, fresh, mfa }: { p: Packet; f: Packet["fields"][number]; back: string; fresh: boolean; mfa: boolean }) {
+export function StandingAsk({ p, f, back, fresh, mfa }: { p: Packet; f: Packet["fields"][number]; back: string; fresh: boolean; mfa: boolean }) {
   const kind = f.step ? standingKindFor(f.step as StepKind, f.label) : null;
   const def = kind ? STANDING_ANSWERS.find((x) => x.kind === kind) : undefined;
   if (!kind || !def) return <p className="small">Apply on their site yourself for this one.</p>;

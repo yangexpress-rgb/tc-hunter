@@ -597,6 +597,38 @@ describe("Workday", () => {
     expect(wd!.values.get("travel_pct")).toBe("25");
   });
 
+  it("an answer their form won't take (\"I accept\", Accenture 2026-11-19): named, kept as the question it stopped on, and asked on the page", async () => {
+    const s8: { account: FakeWorkday["account"] } = { account: null };
+    const host = "acc.wd103.myworkdayjobs.com";
+    const TERMS: FormField = { key: "termsAndConditions--acceptTermsAndAgreements", label: "I accept.*", type: "checkbox", required: true };
+    class Stubborn extends FakeWorkday {
+      override async page() {
+        if (this.step > 0) return { title: "Review", review: true, form: { url: this.url(), fields: [], captcha: false, humanCheck: false } };
+        return { title: "Voluntary Disclosures", review: false, form: { url: this.url(), fields: [TERMS], captcha: false, humanCheck: false } };
+      }
+      override async next() { return { moved: false, errors: ["Error: The field I accept. is required and must have a value."] }; }
+    }
+    await saveAnswer(pool, cfg, yong, { questionKey: "custom:I accept", patterns: ["^I accept"], answer: "Yes", isApplicantStep: false, approve: true });
+    await requestLink(pool, yong, { url: "https://jobs.example.test/AccCo", title: "Operations Analyst", employer: "Acc Co", location: "Remote", text: "Reports.\n\nRequirements:\n- SQL\n- Excel" });
+    await drain();
+    const job = (await listMatches(pool, yong, { status: "all" })).rows.find((r: { employer_canonical: string }) => r.employer_canonical === "Acc Co").public_ref;
+    await requestTailor(pool, yong, job, ["resume"]);
+    await drain();
+    const ref = await trackJob(pool, yong, job);
+    browser.workday = () => new Stubborn(s8, `https://${host}/en-US/External/job/Remote/Analyst_R1`);
+    browser.spec = () => ({ url: `https://${host}/en-US/External/job/Remote/Analyst_R1`, fields: [] });
+    applyDeps.email = { vault: applyDeps.vault as MemorySecretStore, cfg, reader: () => ({ ...reader, async accountLink(h: string) { return s8.account ? `https://${h}/en-US/External/activate?verify=abc` : null; } }) };
+    await approveResume(ref);
+    await requestApply(pool, yong, ref);
+    await runNow();
+    const st = await applyStatus(pool, yong, ref);
+    expect(st).toMatchObject({ status: "waiting", waitingFor: "answers" });
+    expect(st.problem).toMatch(/I accept\. is required.*Answer it below, then choose Save and continue/);
+    expect(st.stuckKeys).toEqual(["p1|termsAndConditions--acceptTermsAndAgreements"]);
+    const p = (await getPacket(pool, cfg, yong, ref))!;
+    expect(p.fields.find((f) => f.key === st.stuckKeys[0])).toMatchObject({ label: "I accept.*", type: "checkbox" });
+  });
+
   it("and when the site really didn't make it, the next try makes it with that same kept password", async () => {
     const s3: { account: FakeWorkday["account"] } = { account: null };
     const host = "bellows.wd1.myworkdayjobs.com";
