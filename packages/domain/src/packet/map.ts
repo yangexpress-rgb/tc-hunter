@@ -35,6 +35,8 @@ export interface PacketProfile {
   letter: { id: string; text: string } | null;
   /** Standing answers the applicant set in Settings for statements, consents, signatures and personal questions. */
   standing?: Array<{ kind: StandingKind; text: string }>;
+  /** Their roles, newest first (dates as YYYY-MM-DD; no end = they work there now), for a form's work-history boxes. */
+  experience?: Array<{ id: string; title: string; employer: string | null; location: string | null; start: string | null; end: string | null; description: string | null }>;
 }
 
 export interface ProposedField {
@@ -258,8 +260,51 @@ function standingAnswerFor(f: FormField, step: StepKind, standing: NonNullable<P
  * want to answer") are answered together: a personal question's boxes are all the applicant's own,
  * and with an EEO standing answer only the "I don't want to answer" box is ticked (Premier, 2026-11-17).
  */
+/**
+ * A form's work-history boxes, filled from the applicant's roles (Accenture's Workday "My Experience",
+ * 2026-11-19: in No AI mode "Job Title", "Company", "From: Month"... were all left for Yong though every
+ * one is in their profile). Each block starts at its "Job Title" box and takes the next role, newest
+ * first. Nothing is worked out: every answer is a profile row, word for word.
+ */
+const WH_TITLE = /^(job|position) title$|^title$/;
+const WH_PART: Array<[RegExp, string]> = [
+  [/^(company|employer)( name)?$/, "company"], [/^location$/, "location"], [/^i currently work here$|^current(ly)? (employed|work|job|position)/, "current"],
+  [/^(from|start( date)?)\b.*\bmonth$/, "from_month"], [/^(from|start( date)?)\b.*\byear$/, "from_year"],
+  [/^(to|end( date)?)\b.*\bmonth$/, "to_month"], [/^(to|end( date)?)\b.*\byear$/, "to_year"], [/^role description$|^(job )?description$/, "description"],
+];
+function workHistory(fields: FormField[], out: ProposedField[], p: PacketProfile) {
+  const roles = p.experience ?? [];
+  let block = -1, open = false;
+  for (const [i, f] of fields.entries()) {
+    const l = norm(f.label);
+    const title = WH_TITLE.test(l) && (l !== "title" || /experience|employ|work|job/i.test(f.key));
+    if (title) { block++; open = true; }
+    const part = title ? "title" : open ? WH_PART.find(([re]) => re.test(l))?.[1] : undefined;
+    if (!part) { open = false; continue; }
+    const r = roles[block];
+    if (!r) continue;
+    const [sy, sm] = (r.start ?? "").split("-"), [ey, em] = (r.end ?? "").split("-");
+    const value = part === "title" ? r.title : part === "company" ? r.employer : part === "location" ? r.location : part === "description" ? r.description
+      : part === "current" ? (r.end ? "No" : "Yes")
+      : part === "from_month" ? (sm ? String(+sm) : null) : part === "from_year" ? (sy || null)
+      : part === "to_month" ? (em ? String(+em) : null) : part === "to_year" ? (ey || null) : null;
+    const base = out[i]!;
+    if (value) {
+      const answer = f.options?.length ? pick(f.options, value) : value;
+      if (answer) out[i] = { ...base, answer, source: "master_profile", sourceRefId: r.id, confidence: 0.95, step: null, note: null };
+    } else if ((part === "to_month" || part === "to_year") && !r.end) {
+      // They work there now: the form hides "To" once "I currently work here" is ticked.
+      out[i] = { ...base, answer: null, required: false, note: "Not needed: you work here now." };
+    } else if (part === "location") {
+      // The role's own place, never the applicant's home city.
+      out[i] = { ...base, answer: null, source: null, sourceRefId: null, confidence: 0 };
+    }
+  }
+}
+
 export function proposeFields(fields: FormField[], p: PacketProfile): ProposedField[] {
   const out = fields.map((f) => proposeField(f, p));
+  workHistory(fields, out, p);
   const prefix = (l: string) => (l.includes(": ") ? l.slice(0, l.indexOf(": ")) : "");
   const choice = (l: string) => (l.includes(": ") ? l.slice(l.indexOf(": ") + 2) : l);
   for (let i = 0; i < fields.length; ) {

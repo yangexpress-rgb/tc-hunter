@@ -132,11 +132,17 @@ export async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantI
   // Standing answers the applicant set in Settings (hands-free applying, Yong 2026-11-15).
   const standing = (await c.query("SELECT kind, answer_enc FROM standing_answer")).rows
     .map((x) => ({ kind: x.kind as StandingKind, text: decryptField(dk, "standing_answer.answer", x.answer_enc) }));
+  // Their roles, newest first, for a form's work-history boxes (Workday "My Experience"). Not projects or coursework.
+  const ymd = (d: Date | string | null) => (d ? (d instanceof Date ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}` : String(d).slice(0, 10)) : null);
+  const experience = (await c.query(
+    `SELECT id, title, employer_name, location, start_date, end_date, description FROM experience_item
+      WHERE employment_type NOT IN ('project','coursework') ORDER BY end_date DESC NULLS FIRST, start_date DESC, sort_order`)).rows
+    .map((x) => ({ id: String(x.id), title: String(x.title), employer: x.employer_name ?? null, location: x.location ?? null, start: ymd(x.start_date), end: ymd(x.end_date), description: x.description ?? null }));
   const profile: PacketProfile = {
     firstName: parts[0] ?? "", lastName: parts.length > 1 ? parts[parts.length - 1]! : "", fullName: full, preferredName: a.preferred_name,
     email: dec("applicant.email", a.email_enc), phone: dec("applicant.phone", a.phone_enc), city: a.city, region: a.region, country: a.country,
     links: { linkedin: linkOf(/linkedin/i), github: linkOf(/github/i), website: linkOf(/^(website|portfolio|site|web)$/i) },
-    answers, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing,
+    answers, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing, experience,
   };
   return { profile, dk, resume, letter };
 }
