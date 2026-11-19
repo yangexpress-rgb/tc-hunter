@@ -352,6 +352,25 @@ export async function confirmMfaSetup(pool: pg.Pool, cfg: AppConfig, session: Se
   });
 }
 
+/**
+ * Turns two-step sign-in off (Yong, 2026-11-18: until a paid text-message service
+ * is added). Only allowed when the app doesn't require it (REQUIRE_MFA=false), and
+ * only after a fresh sign-in check. The authenticator key and recovery codes are
+ * deleted, so turning it back on later means setting up the app again.
+ */
+export async function disableMfa(pool: pg.Pool, cfg: AppConfig, session: Session): Promise<void> {
+  if (cfg.requireMfa) throw new Error("TC_MFA_REQUIRED");
+  if (!hasFreshStepUp(session, cfg)) throw new Error("TC_STEP_UP_REQUIRED");
+  const ctx = { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" as const };
+  await withApplicant(pool, ctx, async (c) => {
+    await c.query(
+      `UPDATE user_account SET mfa_enabled = false, mfa_secret_enc = NULL, mfa_pending_secret_enc = NULL WHERE id = $1`,
+      [session.userAccountId]);
+    await c.query("DELETE FROM mfa_recovery_code WHERE user_account_id = $1", [session.userAccountId]);
+    await recordAudit(c, "mfa.disabled", { objectType: "applicant", objectId: session.applicantId });
+  });
+}
+
 async function replaceRecoveryCodes(c: pg.PoolClient, accountId: string): Promise<string[]> {
   const codes = newRecoveryCodes();
   await c.query("DELETE FROM mfa_recovery_code WHERE user_account_id = $1", [accountId]);

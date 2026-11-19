@@ -5,7 +5,7 @@ import { app, requireSession } from "@/lib/server";
 import { AddPasskey } from "@/components/profile/PasskeyButtons";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { MfaSetup, RemakeCodes } from "./MfaSetup";
-import { signOutAction, signOutDeviceAction } from "./actions";
+import { signOutAction, signOutDeviceAction, turnOffMfaAction } from "./actions";
 import { removePasskeyAction } from "./vault-actions";
 import { OldAnchors } from "./OldAnchors";
 import { ConfirmCard, NeedsConfirm, SettingsHeader, ago } from "./shared";
@@ -41,11 +41,17 @@ export default async function SettingsPage(props: PageProps) {
                   on: t("settings.mfa.moved"), codesIntro: t("settings.mfa.codes_intro"), codesSaved: t("settings.mfa.codes_saved"),
                 }} />
               </div>
-            ) : <NeedsConfirm what="Making new recovery codes or moving to a new phone" />}
+            ) : <NeedsConfirm what={cfg.requireMfa ? "Making new recovery codes or moving to a new phone" : "Making new recovery codes, moving to a new phone or turning it off"} />}
+            {!cfg.requireMfa && fresh ? (
+              <form action={turnOffMfaAction} className="stack" style={{ marginTop: 12 }}>
+                <p className="muted">{t("settings.mfa.turn_off_intro")}</p>
+                <button className="secondary">{t("settings.mfa.turn_off")}</button>
+              </form>
+            ) : null}
           </>
         ) : (
           <>
-            <p>{t("settings.mfa.off")}</p>
+            {params.mfa === "off" ? <Status>{t("settings.mfa.turned_off")}</Status> : <p>{t("settings.mfa.off")}</p>}
             <MfaSetup text={{
               setup: t("settings.mfa.setup"), enable: t("settings.mfa.enable_cta"), confirm: t("settings.mfa.confirm_cta"),
               on: t("settings.mfa.on"), codesIntro: t("settings.mfa.codes_intro"), codesSaved: t("settings.mfa.codes_saved"),
