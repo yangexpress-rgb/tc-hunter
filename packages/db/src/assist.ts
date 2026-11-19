@@ -105,8 +105,9 @@ export function cleanForm(fields: unknown): FormField[] {
     const type = String(f?.type ?? "");
     if (!key || !label || !FIELD_TYPES.has(type) || seen.has(key)) continue;
     seen.add(key);
-    const options = Array.isArray(f.options) ? (f.options as unknown[]).slice(0, 200).map((o) => String(o).slice(0, 200)) : undefined;
-    out.push({ key, label, type: type as FormField["type"], options, required: !!f.required });
+    // Every country in a country list (Siemens' has 251; at 200 the list stopped before the United States).
+    const options = Array.isArray(f.options) ? (f.options as unknown[]).slice(0, 400).map((o) => String(o).slice(0, 200)) : undefined;
+    out.push({ key, label, type: type as FormField["type"], options, required: !!f.required, ...(f.searchable === true ? { searchable: true } : {}) });
   }
   return out;
 }

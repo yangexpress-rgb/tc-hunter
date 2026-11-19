@@ -22,7 +22,9 @@ export interface FormField { key: string; label: string; type: FieldType; option
   /** The site already shows a value here (Workday fills some questions from the resume). Server browser only. */
   hasValue?: boolean;
   /** The field's maxlength, when the site sets one (written answers must fit it). */
-  maxLength?: number }
+  maxLength?: number;
+  /** A list whose choices load as you type: the choices read are only its first few, so others can be searched for. */
+  searchable?: boolean }
 
 export interface PacketProfile {
   firstName: string; lastName: string; fullName: string; preferredName: string;
@@ -145,9 +147,12 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     if (!v) return { ...base, note: "Not in your profile yet." };
     // A country list read from a search box shows only its first few countries (Workday's
     // "Country Phone Code": Afghanistan to Anguilla); the browser searches it for the country.
-    const partial = kind === "country" && PHONE_CODE.test(label) && !!f.options?.length && f.options.length < 100;
+    // The same for a searchable list that loads its countries as you type (Siemens' "Country/Region of citizenship").
+    const partial = kind === "country" && !!f.options?.length && ((PHONE_CODE.test(label) && f.options.length < 100) || !!f.searchable);
     const chosen = pick(f.options, v) ?? (partial ? v : null);
-    return chosen ? { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: chosen === v ? conf : Math.min(conf, 0.86) }
+    // Found by searching the list: it joins the choices shown, so the applicant sees it there too.
+    const options = chosen && f.options && !f.options.includes(chosen) ? [...f.options, chosen] : f.options;
+    return chosen ? { ...base, options, answer: chosen, source: "master_profile", sourceRefId: null, confidence: chosen === v ? conf : Math.min(conf, 0.86) }
       : { ...base, note: "Your answer isn't one of the choices." };
   }
   // A number question ("percentage number you are willing to travel") takes only a saved answer with a number

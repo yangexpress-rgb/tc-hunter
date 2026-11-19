@@ -1045,7 +1045,8 @@ class AvaturePw extends PwPage implements WorkdayPage {
     for (const f of extra) {
       if (f.multi && f.hasValue) continue;
       const { multi: _m, ...field } = f;
-      if (!field.options?.length) field.options = await this.select2Choices(f.key).catch(() => undefined);
+      // Choices that load only when the list is opened are its first few: the rest are found by typing.
+      if (!field.options?.length) { field.options = await this.select2Choices(f.key).catch(() => undefined); field.searchable = true; }
       form.fields.push(field);
     }
     return form;

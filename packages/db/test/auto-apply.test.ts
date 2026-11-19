@@ -958,3 +958,13 @@ describe("an Avature careers site, like Siemens' (Yong, 2026-11-19)", () => {
     expect(p.fields.map((f: { label: string }) => f.label)).toEqual(["First Name *", "Phone Number", "CV / Resume *"]);
   });
 });
+
+describe("long choice lists (Siemens, 2026-11-19)", () => {
+  it("keeps every choice of a 251-country list, and a searchable list's flag", async () => {
+    const { cleanForm } = await import("../src/assist");
+    const countries = Array.from({ length: 251 }, (_, i) => `Country ${i}`);
+    const [a, b] = cleanForm([{ key: "#r", label: "Country", type: "select", options: countries }, { key: "#c", label: "Citizenship", type: "select", options: ["A"], searchable: true }]);
+    expect(a!.options).toHaveLength(251);
+    expect(b!.searchable).toBe(true);
+  });
+});
