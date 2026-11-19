@@ -88,6 +88,11 @@ describe("The AI provider setting (Yong, 2026-11-18)", () => {
     await expect(saveOpenAiKey(pool, vault, yong, "not-a-key", okCheck)).rejects.toMatchObject({ code: "key_format" });
     await expect(saveOpenAiKey(pool, vault, yong, KEY, async () => "rejected")).rejects.toMatchObject({ code: "key_rejected" });
     await expect(saveOpenAiKey(pool, undefined, yong, KEY, okCheck)).rejects.toMatchObject({ code: "no_vault" });
+    await expect(saveOpenAiKey(pool, vault, yong, "proj_abc123def456ghi789jkl", okCheck)).rejects.toMatchObject({ code: "key_format" });
+    // Copied with a line break, spaces or quotes: cleaned, then checked with OpenAI.
+    let checked = "";
+    await saveOpenAiKey(pool, vault, yong, ` "${KEY.slice(0, 20)}\n${KEY.slice(20)}" `, async (k) => { checked = k; return "ok"; });
+    expect(checked).toBe(KEY);
     await saveOpenAiKey(pool, vault, yong, KEY, okCheck);
     const row = (await ownerQuery("SELECT * FROM ai_provider_setting")).rows[0];
     expect(row.openai_key_ref).toMatch(/^vault:/);
