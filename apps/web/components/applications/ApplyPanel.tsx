@@ -85,7 +85,7 @@ export function ApplyPanel({ appRef, employer, initial, canApply, problemShown =
           <p className="muted small">This step is waiting until {s.handover.until}.{s.handover.remindedAt ? " It closes soon." : ""} TC Hunter holds their page, as it is, until then.</p>
         </div>
       ) : null}
-      {s.status === "waiting" ? (
+      {s.status === "waiting" && !(problemShown && s.problem && s.waitingFor !== "weekly_limit") ? (
         <>
           {s.problem ? <p className="error" role="alert">{s.problem}</p> : <p className="status">{s.step}</p>}
           <div className="inline-actions">

@@ -281,6 +281,12 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
       action: r.waitingFor === "site_account" ? { kind: "link", label: "Open Settings", href: "/settings/applying" } : { kind: "apply", label: "Continue" } };
   }
   const approved = !!p && LIVE_PACKET.includes(p.state);
+  // Any other pause with a problem (their form refused a field, an answer is missing): the problem leads,
+  // in red, with Continue, whatever the packet says (Workday "How did you hear", 2026-11-19).
+  if (r?.status === "waiting" && r.problem && r.waitingFor && !["weekly_limit", "cover_letter", "approve_send", "approve_answers"].includes(r.waitingFor ?? "")) {
+    return { stage: approved ? "applying" : p ? "ready_to_apply" : resumeApproved(i) ? "ready_to_apply" : "getting_ready", status: r.problem, owner: "applicant", tone: "problem",
+      action: { kind: "apply", label: "Continue" } };
+  }
   if (r && (r.status === "queued" || r.status === "running") && approved) {
     if (r.status === "queued") return { stage: "applying", status: `In line to start on ${E}'s form.`, owner: "app", tone: "active", action: null };
     return { stage: "applying", status: `Filling in ${E}'s form: ${stripDot(lower(r.step ?? "working on it"))}.`, owner: "app", tone: "active", action: null };
@@ -334,6 +340,8 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
   // Documents approved, no packet yet: the applicant's go-ahead starts it.
   return { stage: "ready_to_apply", status: "Your documents are approved. Say go and TC Hunter fills in their form for you to check.", owner: "applicant", tone: "yours", action: { kind: "apply", label: "Apply for me now" } };
 }
+
+const resumeApproved = (i: JourneyInput) => i.docs?.resume === "approved";
 
 /** A failure is not a stage: it shows in the stage where it happened, with a reason and a way on. */
 function failedIn(stage: JourneyStage, r: NonNullable<JourneyInput["run"]>, i: JourneyInput): Decided {
