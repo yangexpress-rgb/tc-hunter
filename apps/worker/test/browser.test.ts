@@ -50,6 +50,26 @@ beforeAll(async () => {
       ' ["Texas", "Tennessee"].filter(function (s) { return s.toLowerCase().indexOf(t.toLowerCase()) === 0; }).forEach(function (s) { var li = document.createElement("li"); li.setAttribute("role", "option"); li.textContent = s;' +
       ' li.addEventListener("click", function () { late.value = s; lb.innerHTML = ""; }); lb.appendChild(li); }); }, 1500); });' +
       'document.addEventListener("keydown", function (e) { if (e.key === "Escape") lb.innerHTML = ""; });</script>');
+    // Greenhouse's job-boards drop-downs (React Select; GitLab, 2026-11-19): the typing box sits in
+    // "select__input-container"; the picked choice shows beside it in "select__single-value" and the box empties.
+    if (url.startsWith("/ghselect")) {
+      const q = (id: string, label: string) => `<div class="select__container"><label id="${id}-label" for="${id}" class="label select__label">${label}<span class="required">*</span></label>` +
+        `<div class="select-shell container"><div class="select__control control"><div class="select__value-container"><div class="select__placeholder">Select...</div>` +
+        `<div class="select__input-container" data-value=""><input class="select__input" id="${id}" role="combobox" aria-required="true" aria-expanded="false" type="text" value=""></div></div></div>` +
+        `<div class="select__menu" hidden></div></div></div>`;
+      return html(q("question_1", "Will you now or in the future require sponsorship for a visa to remain in your current location?") +
+        q("question_2", "Have you previously worked at or consulted for GitLab?") +
+        '<script>document.querySelectorAll(".select__container").forEach(function (box) { var input = box.querySelector("input"), menu = box.querySelector(".select__menu"), vc = box.querySelector(".select__value-container");' +
+        ' function close() { menu.hidden = true; menu.innerHTML = ""; }' +
+        ' function open() { menu.hidden = false; menu.innerHTML = ""; ["Yes", "No"].filter(function (t) { return !input.value || t.toLowerCase().indexOf(input.value.toLowerCase()) === 0; }).forEach(function (t) {' +
+        '  var o = document.createElement("div"); o.setAttribute("role", "option"); o.textContent = t; o.addEventListener("click", function () {' +
+        '   var ph = vc.querySelector(".select__placeholder, .select__single-value"); if (ph) ph.remove(); var sv = document.createElement("div"); sv.className = "select__single-value"; sv.textContent = t;' +
+        '   vc.insertBefore(sv, vc.firstChild); input.value = ""; close(); }); menu.appendChild(o); }); }' +
+        ' input.addEventListener("focus", open); input.addEventListener("click", open); input.addEventListener("input", open);' +
+        // Like React Select: typed words that weren't picked are cleared when the box loses focus.
+        ' input.addEventListener("blur", function () { setTimeout(function () { input.value = ""; close(); }, 50); }); });' +
+        'document.addEventListener("keydown", function (e) { if (e.key === "Escape") document.querySelectorAll(".select__menu").forEach(function (m) { m.hidden = true; m.innerHTML = ""; }); });</script>');
+    }
     // Workday's slow parts (Premier, 2026-11-17): a list that shows only "Select One" for a moment after opening,
     // and a Review page whose Submit button is drawn after its heading.
     // A list that takes 3 seconds to show its choices, under a cookie notice (Workday's own careers site, 2026-11-19).
@@ -296,6 +316,18 @@ describe.skipIf(!available)("checking each answer took, and trying another way w
       const form = await page.readForm();
       expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["radio:auth", "#sp", "#late"]);
       expect(await page.flagged?.()).toEqual(["#flag"]);
+    } finally { await page.close(); }
+  });
+});
+
+describe.skipIf(!available)("Greenhouse's job-boards drop-downs (GitLab, 2026-11-19)", () => {
+  it("reads the picked choice beside the typing box, so a picked answer counts as filled", async () => {
+    const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/ghselect`);
+    try {
+      expect((await page.readForm()).fields.map((f) => [f.key, f.hasValue])).toEqual([["#question_1", false], ["#question_2", false]]);
+      const got = await page.fill([{ key: "#question_1", type: "select", value: "No" }, { key: "#question_2", type: "select", value: "No" }]);
+      expect(got.map((r) => r.status)).toEqual(["filled", "filled"]);
+      expect((await page.readForm()).fields.map((f) => [f.key, f.hasValue])).toEqual([["#question_1", true], ["#question_2", true]]);
     } finally { await page.close(); }
   });
 });

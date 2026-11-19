@@ -81,6 +81,8 @@ const countryOf = (p: PacketProfile) => p.country || countryForRegion(p.region) 
 /** The profile details a form question can be about. */
 export type ProfileField = "first_name" | "last_name" | "preferred_name" | "full_name" | "email" | "phone" | "linkedin" | "github" | "website" | "country" | "city";
 
+/** A yes/no question about the applicant: it never asks for a profile detail, even when it names a place. */
+const YES_NO_QUESTION = /^(will|would|do|does|did|are|is|have|has|can|could|were|was)\s+(you|your)\b/;
 const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefined, number, ProfileField]> = [
   [/\b(first|given) name|forename/, (p) => p.firstName, 0.98, "first_name"],
   [/\b(last|family) name|surname/, (p) => p.lastName, 0.98, "last_name"],
@@ -102,6 +104,10 @@ const PROFILE_RULES: Array<[RegExp, (p: PacketProfile) => string | null | undefi
 /** Which profile detail a form question asks for, if any (so an answer typed for it is kept in the profile). */
 export function profileFieldFor(label: string): ProfileField | null {
   const l = norm(label);
+  // A yes/no question that mentions a place ("Will you ... require sponsorship for a visa to remain in your
+  // current location?", GitLab 2026-11-19) asks about the applicant, not for a profile detail: its "No" must
+  // never become their city.
+  if (YES_NO_QUESTION.test(l)) return null;
   return PROFILE_RULES.find(([re]) => re.test(l))?.[3] ?? null;
 }
 
@@ -141,7 +147,7 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     const chosen = pick(f.options, "Mobile") ?? f.options?.find((o) => /mobile|cell/i.test(o)) ?? null;
     if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.9, note: "Your phone number is a mobile." };
   }
-  for (const [re, get, conf, kind] of PROFILE_RULES) {
+  for (const [re, get, conf, kind] of YES_NO_QUESTION.test(label) ? [] : PROFILE_RULES) {
     if (!re.test(label)) continue;
     const v = get(p);
     if (!v) return { ...base, note: "Not in your profile yet." };

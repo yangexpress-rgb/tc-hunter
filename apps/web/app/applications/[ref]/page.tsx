@@ -8,6 +8,7 @@ import { TopBar } from "@/components/TopBar";
 import { BudgetLine, dateInput, day, localInput, when } from "@/components/applications/AppBits";
 import { ApplyPanel } from "@/components/applications/ApplyPanel";
 import { PacketCard } from "@/components/applications/Packet";
+import { AnswerHere, answerHereFields } from "@/components/applications/AnswerHere";
 import { DocChecklist } from "@/components/applications/DocChecklist";
 import { EmailAttach, journeyFor, reachedOf, RunRecord, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
 import { flashOf } from "@/lib/profile";
@@ -76,6 +77,9 @@ export default async function ApplicationPage(props: Props) {
   const packetCard = packet ? <PacketCard server={serverPacket} p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} /> : null;
   const packetInApplying = !!packet && !packet.outcomeUnknown && (packetActive || packet.state === "failed");
   const answers = packet ? packet.fields.length : 0;
+  // The questions the last run stopped on, asked right here (Yong, 2026-11-19).
+  const stuckHere = ["failed", "waiting", "stopped"].includes(String(applying.status)) && !sent
+    ? answerHereFields(packet, applying.stuckKeys, applying.status === "waiting" && applying.waitingFor === "answers") : [];
   const drafted = packet ? packet.fields.filter((f) => f.source === "drafted").length : 0;
   const packetDone = !!packet && !["packet_draft", "packet_ready_for_review"].includes(packet.state);
   const problem = j.tone === "problem";
@@ -95,6 +99,7 @@ export default async function ApplicationPage(props: Props) {
     params.handed_back === "1" && working && "Thanks. TC Hunter is taking over their page again.",
     params.gave_up === "1" && "Their page is closed. Choose Finish it yourself to apply on their site with your packet one tap away.",
     params.dismissed === "1" && "Noted. That email suggestion is gone.",
+    params.answered === "1" && "Saved. Check all your answers below and approve them; TC Hunter then carries on.",
   ].filter((x): x is string => typeof x === "string");
 
   return (
@@ -124,6 +129,8 @@ export default async function ApplicationPage(props: Props) {
       </StatusBlock>
 
       {notes.length ? notes.map((n) => <p key={n} className="status" role="status">{n}</p>) : null}
+
+      {packet && stuckHere.length ? <AnswerHere p={packet} fields={stuckHere} back={back} /> : null}
 
       <Stepper j={j} />
 

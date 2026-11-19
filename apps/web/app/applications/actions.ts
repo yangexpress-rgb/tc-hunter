@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, giveUpHandover, handBackHandover, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
+  acceptCalibration, acceptEmailSignal, answerAndContinue, giveUpHandover, handBackHandover, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
   resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
@@ -100,6 +100,40 @@ export async function packetAnswerAction(form: FormData) {
     await answerPacketField(pool, cfg, s, String(form.get("field") ?? ""), String(form.get("answer") ?? ""));
     await continueIfAnswered(pool, s, ref);
   }, `/applications/${ref}#packet`);
+}
+
+/**
+ * "Save and continue" on the application page: the questions the run stopped on, answered right there
+ * (Yong, 2026-11-19). Answers already approved stay approved, so TC Hunter carries on by itself; a
+ * right-to-work answer becomes the saved right-to-work answer, as on the packet.
+ */
+export async function answerHereAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const { pool, cfg } = app();
+  const back = backTo(form, `/applications/${ref}`).split("#")[0]!;
+  let target = withParam(`${back}#answer-here`, "saved", "1");
+  try {
+    const answers: Array<{ fieldId: string; text: string; keep: boolean }> = [];
+    let workAuth = false;
+    for (const id of form.getAll("field").map(String).slice(0, 100)) {
+      if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
+      const text = String(form.get(`answer_${id}`) ?? "").trim();
+      if (!text) throw Object.assign(new Error("TC_ANSWER_MISSING"), { code: "TC_ANSWER_MISSING" });
+      if (form.get(`wa_${id}`)) { await saveWorkAuthAnswer(pool, cfg, s, String(form.get(`q_${id}`) ?? ""), text); workAuth = true; continue; }
+      answers.push({ fieldId: id, text, keep: form.get(`keep_${id}`) === "1" });
+    }
+    const done = await answerAndContinue(pool, cfg, s, ref, answers);
+    if (done.approved || workAuth) {
+      await requestApply(pool, s, ref);
+      target = withParam(`${back}#applying`, "applying", "1");
+    } else target = withParam(`${back}#packet`, "answered", "1");
+  } catch (e) {
+    const code = (e as { code?: string })?.code === "TC_ANSWER_MISSING" ? "TC_ANSWER_MISSING" : errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("applications.action_failed", { code });
+    target = withParam(`${back}#answer-here`, "e", code);
+  }
+  redirect(target);
 }
 
 /** "Answer this kind of question for me from now on", from the application: a standing answer (fresh "confirm it's you"), then TC Hunter carries on. */

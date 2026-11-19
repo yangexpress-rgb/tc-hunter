@@ -160,6 +160,8 @@ export interface ApplyStatus {
   handover: Handover | null;
   /** The card offers "Finish it yourself" (the page is gone, the site turned the browser away, or the send is unclear). */
   finishYourself: boolean;
+  /** The questions the run stopped on (their form's keys), answered on the application page. */
+  stuckKeys: string[];
 }
 
 export async function applyStatus(pool: pg.Pool, session: Session, appRef: string): Promise<ApplyStatus> {
@@ -167,7 +169,7 @@ export async function applyStatus(pool: pg.Pool, session: Session, appRef: strin
     const mode = ((await c.query("SELECT mode FROM apply_setting")).rows[0]?.mode ?? DEFAULT_APPLY_MODE) as ApplyMode;
     const r = (await c.query(
       `SELECT r.* FROM apply_run r JOIN application a ON a.id = r.application_id WHERE a.public_ref = $1 ORDER BY r.created_at DESC LIMIT 1`, [appRef])).rows[0];
-    if (!r) return { runId: null, status: "none", step: null, problem: null, waitingFor: null, steps: [], shots: [], host: null, startedAt: null, finishedAt: null, mode, packetId: null, handover: null, finishYourself: false };
+    if (!r) return { runId: null, status: "none", step: null, problem: null, waitingFor: null, steps: [], shots: [], host: null, startedAt: null, finishedAt: null, mode, packetId: null, handover: null, finishYourself: false, stuckKeys: [] };
     const handover = await handoverFor(c, appRef);
     // A run silent for 10 minutes has stopped (the worker picks the work up again after a restart).
     const silent = r.status === "running" && Date.now() - new Date(r.updated_at).getTime() > 10 * 60_000;
@@ -180,6 +182,7 @@ export async function applyStatus(pool: pg.Pool, session: Session, appRef: strin
       packetId: r.packet_id ?? null,
       handover: handover ? (({ applicationId: _a, ...h }) => h)(handover) : null,
       finishYourself: r.status === "unclear" || !!r.finish_yourself,
+      stuckKeys: (r.stuck_keys as string[] | null) ?? [],
     };
   });
 }
@@ -539,6 +542,8 @@ class Run {
     // last thing it was doing ("Filling in 15 answers"), which read as if it were stuck (Yong, 2026-11-17).
     return this.set({ status, problem, waiting_for: waitingFor, finished_at: status === "waiting" || status === "handover" ? null : new Date(), ...(stepText ? { step: stepText } : {}) }, stepText ?? problem ?? undefined, !!problem && status !== "sent");
   }
+  /** The questions this run stopped on: the application page asks the applicant for these, right there. */
+  stuck(keys: string[]) { return this.set({ stuck_keys: [...new Set(keys)].slice(0, 100) }); }
   /** The card offers "Finish it yourself" for this run. */
   finishYourself() { return this.set({ finish_yourself: true }); }
   async shot(kind: "form_filled" | "after_submit" | "stopped", caption: string, page: ApplyPage | null, cfg: AppConfig) {
@@ -870,8 +875,9 @@ async function onForm(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app:
     await markFilled(pool, auto, r.packetId, results);
     const missedRequired = failed.filter((x) => r.requiredKeys.has(x.key));
     if (missedRequired.length) {
+      await run.stuck(missedRequired.map((x) => x.key));
       await run.shot("stopped", "The form where an answer didn't fit", page, deps.cfg);
-      await run.end("failed", `TC Hunter couldn't put ${missedRequired.length === 1 ? "an answer" : `${missedRequired.length} answers`} into their form (${missedRequired.map((x) => `"${r.labels.get(x.key) ?? x.key}"`).slice(0, 3).join(", ")}). Nothing was sent. Check the answer, or apply on their site yourself.`);
+      await run.end("failed", `TC Hunter couldn't put ${missedRequired.length === 1 ? "an answer" : `${missedRequired.length} answers`} into their form (${missedRequired.map((x) => `"${r.labels.get(x.key) ?? x.key}"`).join(", ")}). Nothing was sent. Check the answers below, change any that's wrong, then choose Save and continue.`);
       return "failed";
     }
     const again = await page.readForm();
@@ -903,14 +909,15 @@ async function onForm(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app:
     // Only statements the applicant makes themselves are left: their turn, on this page (Yong, 2026-11-17).
     if (empty.every((f) => personal.has(f.key))
       && await hand.pause(page, "attestation", "before_submit", { ats, labels: empty.map((f) => labels.get(f.key) ?? f.label), keys: empty.map((f) => f.key) })) return "handover";
+    await run.stuck(empty.filter((f) => f.type !== "file").map((f) => f.key));
     await run.shot("stopped", "Their form, with what's still empty", page, deps.cfg);
-    const names = empty.map((f) => `"${labels.get(f.key) ?? f.label}"`).slice(0, 3).join(", ");
+    const names = empty.map((f) => `"${labels.get(f.key) ?? f.label}"`).join(", ");
     if (empty.every((f) => personal.has(f.key))) await run.finishYourself();
     await run.end("failed", empty.some((f) => f.type === "file")
       ? `${app.employer}'s form still needs ${names}: the file didn't attach. TC Hunter stopped before pressing Submit, so nothing was sent. Choose Try again, or apply on their site yourself.`
       : empty.every((f) => personal.has(f.key))
         ? `${app.employer}'s form still needs ${names}, which only you can answer. TC Hunter stopped before pressing Submit, so nothing was sent. Choose Finish it yourself to apply on their site with your answers one tap away.`
-        : `${app.employer}'s form still needs ${names}. TC Hunter stopped before pressing Submit, so nothing was sent. Answer it below, then choose Try again.`);
+        : `${app.employer}'s form still needs ${names}. TC Hunter stopped before pressing Submit, so nothing was sent. Answer it below, then choose Save and continue.`);
     return "failed";
   }
   // The filled form: its fingerprint is what gets approved and sent.
@@ -1039,8 +1046,8 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     const personal = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && PERSONAL_STEPS.has(f.step_kind ?? ""));
     const missing = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && !(opts.canHandOver && personal.includes(f)));
     if (missing.length) {
-      return { stop: "waiting" as Status, waitingFor: "answers",
-        problem: `${missing.length === 1 ? "1 question needs" : `${missing.length} questions need`} your answer before TC Hunter can send this: ${missing.slice(0, 4).map((f) => `"${f.question_as_shown}"`).join(", ")}${missing.length > 4 ? " and more" : ""}. Answer below and TC Hunter carries on by itself.` };
+      return { stop: "waiting" as Status, waitingFor: "answers", stuck: missing.map((f) => String(f.field_key)),
+        problem: `${missing.length === 1 ? "1 question needs" : `${missing.length} questions need`} your answer before TC Hunter can send this: ${missing.map((f) => `"${f.question_as_shown}"`).join(", ")}. Answer below and TC Hunter carries on by itself.` };
     }
     if (opts.workdayPage) {
       // Workday is filled page by page before its Review page; the whole packet is approved there.
@@ -1068,6 +1075,7 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     };
   });
   if ("stop" in result && result.stop) {
+    if ((result as { stuck?: string[] }).stuck?.length) await run.stuck((result as { stuck: string[] }).stuck);
     await run.end(result.stop, result.problem ?? null, result.waitingFor, (result as { step?: string }).step);
     return { stop: result.stop };
   }
