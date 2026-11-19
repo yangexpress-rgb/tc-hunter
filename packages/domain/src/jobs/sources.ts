@@ -26,6 +26,51 @@ export function isNoFetchHost(url: string): boolean {
 }
 
 /**
+ * Sites that gather jobs from other sites (Adzuna, Jooble and the like). TC Hunter may open their
+ * links, but they aren't where anyone applies: each listing leads on to the employer's own posting
+ * (or to another job site). Applying follows that link to the employer (Yong, 2026-11-19).
+ */
+const JOB_BOARDS: Array<[string, RegExp]> = [
+  ["Adzuna", /(^|\.)adzuna\.[a-z.]+$/i],
+  ["Jooble", /(^|\.)jooble\.[a-z.]+$/i],
+  ["Remotive", /(^|\.)remotive\.(com|io)$/i],
+  ["Talent.com", /(^|\.)(talent\.com|neuvoo\.[a-z.]+)$/i],
+  ["SimplyHired", /(^|\.)simplyhired\.[a-z.]+$/i],
+  ["Careerjet", /(^|\.)careerjet\.[a-z.]+$/i],
+  ["CareerBuilder", /(^|\.)careerbuilder\.[a-z.]+$/i],
+  ["Jobrapido", /(^|\.)jobrapido\.[a-z.]+$/i],
+  ["Lensa", /(^|\.)lensa\.com$/i],
+  ["Jora", /(^|\.)jora\.com$/i],
+  ["WhatJobs", /(^|\.)whatjobs\.com$/i],
+  ["Jobijoba", /(^|\.)jobijoba\.[a-z.]+$/i],
+  ["Tallo", /(^|\.)tallo\.com$/i],
+  ["Jobcase", /(^|\.)jobcase\.com$/i],
+  ["Joblist", /(^|\.)joblist\.com$/i],
+  ["Dice", /(^|\.)dice\.com$/i],
+  ["Snagajob", /(^|\.)snagajob\.com$/i],
+  ["Built In", /(^|\.)builtin[a-z]*\.com$/i],
+  ["The Muse", /(^|\.)themuse\.com$/i],
+  ["Ladders", /(^|\.)(theladders|ladders)\.com$/i],
+  ["Recruiter.com", /(^|\.)recruiter\.com$/i],
+  ["WeAreDevelopers", /(^|\.)wearedevelopers\.com$/i],
+  ["Remote OK", /(^|\.)remoteok\.(com|io)$/i],
+  ["We Work Remotely", /(^|\.)weworkremotely\.com$/i],
+  ["Working Nomads", /(^|\.)workingnomads\.com$/i],
+  ["Jobgether", /(^|\.)jobgether\.com$/i],
+  ["Getwork", /(^|\.)getwork\.com$/i],
+];
+
+/** The job-gathering site a link belongs to ("Adzuna"), or null when it isn't one. */
+export function jobBoardName(url: string): string | null {
+  let host = "";
+  try { host = new URL(url).hostname; } catch { return null; }
+  for (const [name, re] of JOB_BOARDS) if (re.test(host)) return name;
+  return null;
+}
+
+export function isJobBoardHost(url: string): boolean { return jobBoardName(url) !== null; }
+
+/**
  * Hiring systems whose careers sites we can't read yet: their job lists are drawn by
  * scripts and they publish no public job feed. Returns the system's name, or null.
  */

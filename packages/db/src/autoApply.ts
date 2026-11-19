@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, companyKey, findOnEmployerSite, isNoFetchHost, securityCodeAsked, securityCodeLength,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
@@ -394,6 +394,8 @@ function siteName(url: string): string {
   if (/(^|\.)indeed\./.test(h)) return "Indeed";
   if (/glassdoor\./.test(h)) return "Glassdoor";
   if (/ziprecruiter\.com$/.test(h)) return "ZipRecruiter";
+  const board = jobBoardName(url);
+  if (board) return board;
   return h.replace(/^www\./, "") || "a job site";
 }
 
@@ -405,6 +407,7 @@ function siteName(url: string): string {
  */
 async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow, jobSiteUrl: string, deps: ApplyDeps, run: Run): Promise<string | null> {
   const site = siteName(jobSiteUrl);
+  const board = isJobBoardHost(jobSiteUrl);
   const posting = await withApplicant(pool, auto, async (c) => (await c.query(
     `SELECT p.id, p.title, p.location_raw, p.employer_apply_url FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as
     { id: string; title: string; location_raw: string | null; employer_apply_url: string | null });
@@ -413,11 +416,13 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
     return posting.employer_apply_url;
   }
   const giveUp = async (why: string) => {
-    await run.end("failed", `This job came from ${site}, and TC Hunter never applies there for you. It looked for the same job on ${app.employer}'s own careers site, but ${why}. Apply on ${site} yourself, then choose "I applied" here.`);
+    await run.end("failed", board
+      ? `This job came from ${site}, which only lists jobs from other sites, and its link didn't lead TC Hunter to ${app.employer}'s own posting. It looked for the same job on ${app.employer}'s own careers site, but ${why}. Open the job on ${site} and apply on the employer's site yourself, then choose "I applied" here.`
+      : `This job came from ${site}, and TC Hunter never applies there for you. It looked for the same job on ${app.employer}'s own careers site, but ${why}. Apply on ${site} yourself, then choose "I applied" here.`);
     return null;
   };
   if (!deps.fetcher) return giveUp("looking up employers' sites isn't set up on this server");
-  await run.step(`Found on ${site}, where TC Hunter never applies. Looking for the same job on ${app.employer}'s own careers site`);
+  await run.step(board ? `Looking for the same job on ${app.employer}'s own careers site` : `Found on ${site}, where TC Hunter never applies. Looking for the same job on ${app.employer}'s own careers site`);
   const key = companyKey(app.employer);
   const known = key ? await withApplicant(pool, auto, async (c) => (await c.query(
     `SELECT s.name, s.type, s.kind, s.source_key AS key, s.url FROM employer_board b JOIN job_source s ON s.id = b.job_source_id WHERE b.company_key = $1`, [key])).rows[0] as SourceSpec | undefined) : undefined;
@@ -443,6 +448,62 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   const host = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
   await run.note(`Found it on ${app.employer}'s own site (${host}): "${r.title}"${r.location ? `, ${r.location}` : ""}. Applying there`);
   return r.url;
+}
+
+/**
+ * A job found on a site that gathers jobs from others (Adzuna, Jooble…). Nobody applies on those:
+ * TC Hunter follows the listing's own link on to the employer's posting and applies there (Yong,
+ * 2026-11-19: the Siemens job from Adzuna stopped at "adzuna.com isn't a hiring site"). A link that
+ * leads to LinkedIn or Indeed is never opened; when the link doesn't reach the employer, the same job
+ * is looked up on the employer's careers site, as for a LinkedIn job. Returns the employer's address
+ * (and its page, when already open), or null when it ended the run.
+ */
+async function throughJobBoard(pool: pg.Pool, auto: RequestContext, app: AppRow, boardUrl: string, deps: ApplyDeps, run: Run): Promise<{ url: string; page: ApplyPage | null } | null> {
+  const board = jobBoardName(boardUrl) ?? siteName(boardUrl);
+  const posting = await withApplicant(pool, auto, async (c) => (await c.query(
+    `SELECT p.id, p.employer_apply_url FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as { id: string; employer_apply_url: string | null });
+  const usable = (u: string | null): u is string => !!u && /^https:\/\//i.test(u) && !isJobBoardHost(u) && !isNoFetchHost(u);
+  if (usable(posting.employer_apply_url)) {
+    await run.note(`Found on ${board}. Applying on ${app.employer}'s own site, where its link led earlier`);
+    return { url: posting.employer_apply_url, page: null };
+  }
+  await run.step(`Found on ${board}, which lists jobs from other sites. Following its link to ${app.employer}'s own posting`);
+  let page: ApplyPage | null = await deps.browser.open(boardUrl).catch((e) => {
+    applyLog.info("apply.job_board_open_failed", { board, detail: String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 160) });
+    return null;
+  });
+  for (let hop = 0; page && hop < 4; hop++) {
+    const here = page.url();
+    if (usable(here)) {
+      const host = (() => { try { return new URL(here).hostname; } catch { return here; } })();
+      await withApplicant(pool, auto, (c) => c.query("UPDATE job_posting SET employer_apply_url = $2, employer_lookup = $3 WHERE id = $1",
+        [posting.id, here, JSON.stringify({ found: true, via: board, site: here, at: new Date() })]));
+      applyLog.info("apply.job_board_followed", { board, host, hops: hop });
+      await run.note(`${board}'s link led to ${app.employer}'s own posting (${host}). Applying there`);
+      return { url: here, page };
+    }
+    if (!isJobBoardHost(here) || !page.links || !page.goto) break;
+    const next = pickEmployerLink(await page.links().catch(() => []), here);
+    if (!next) break;
+    try { await page.goto(next.href); } catch { break; }  // a link to LinkedIn or Indeed is refused by the browser itself
+  }
+  applyLog.info("apply.job_board_dead_end", { board, landed: (() => { try { return page ? new URL(page.url()).hostname : null; } catch { return null; } })() });
+  await page?.close().catch(() => {});
+  await run.note(`${board}'s link didn't lead to ${app.employer}'s own posting`);
+  const url = await employerSiteUrl(pool, auto, app, boardUrl, deps, run);
+  return url ? { url, page: null } : null;
+}
+
+/**
+ * On an employer's own job page that isn't a hiring system TC Hunter applies on, its "Apply" link
+ * may lead to one that is (a careers page sending applicants to Workday or Greenhouse).
+ */
+async function applyLinkOnward(page: ApplyPage): Promise<string | null> {
+  if (!page.links) return null;
+  const links = await page.links().catch(() => []);
+  const hit = links.find((l) => /\bapply\b|application/i.test(l.text ?? "") && /^https:\/\//i.test(l.href) && !isNoFetchHost(l.href)
+    && SERVER_APPLY_ATS.includes(detectAts(l.href)));
+  return hit?.href ?? null;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -655,9 +716,17 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
       if (ats === "workday") return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, page as WorkdayPage, () => { clicked = true; }, hand)) };
       return { status: (status = await onForm(pool, auto, deps, app, mode, run, hand, page, ats, () => { clicked = true; })) };
     }
-    // Never LinkedIn or Indeed: any link to the employer's own site first, else the same job found there.
+    // Never LinkedIn or Indeed: any link to the employer's own site first; then a job site's link
+    // followed on to the employer (Adzuna, Jooble…); else the same job found on the employer's site.
     const links = [app.apply_url, ...app.urls].filter((u): u is string => !!u);
-    let url = links.find((u) => !isNoFetchHost(u)) ?? null;
+    let url = links.find((u) => !isNoFetchHost(u) && !isJobBoardHost(u)) ?? null;
+    const boardLink = url ? null : links.find((u) => isJobBoardHost(u)) ?? null;
+    if (boardLink) {
+      const via = await throughJobBoard(pool, auto, app, boardLink, deps, run);
+      if (!via) return { status: "failed" };
+      url = via.url;
+      page = via.page;
+    }
     if (!url && links.length) {
       url = await employerSiteUrl(pool, auto, app, links[0]!, deps, run);
       if (!url) return { status: "failed" };
@@ -667,16 +736,33 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
     if (first === "linkedin" || first === "indeed") { await run.end("failed", APPLY_PROBLEM.never); return { status: "failed" }; }
     let host = "";
     try { host = new URL(url).hostname; } catch { /* checked below */ }
-    await run.step(`Opening ${app.employer}'s job page (${host})`);
+    if (page && first === "workday") { await page.close().catch(() => {}); page = null; }
+    if (!page) await run.step(`Opening ${app.employer}'s job page (${host})`);
     if (first === "workday" && deps.browser.openWorkday) {
       const wd = await deps.browser.openWorkday(url).catch(() => null);
       if (!wd) { await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
       page = wd;
       return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }, hand)) };
     }
-    page = await deps.browser.open(url).catch(() => null);
+    if (!page) page = await deps.browser.open(url).catch(() => null);
     if (!page) { await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
-    const ats = detectAts(page.url());
+    let ats = detectAts(page.url());
+    // The employer's own page, with an Apply link to a hiring system TC Hunter applies on: go there.
+    if (!SERVER_APPLY_ATS.includes(ats) && ats !== "linkedin" && ats !== "indeed" && page.goto) {
+      const onward = await applyLinkOnward(page);
+      if (onward) {
+        await run.note(`${app.employer}'s page sends applicants to ${(() => { try { return new URL(onward).hostname; } catch { return onward; } })()}. Applying there`);
+        if (detectAts(onward) === "workday" && deps.browser.openWorkday) {
+          await page.close().catch(() => {});
+          const wd = await deps.browser.openWorkday(onward).catch(() => null);
+          if (!wd) { page = null; await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
+          page = wd;
+          return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }, hand)) };
+        }
+        await page.goto(onward).catch(() => {});
+        ats = detectAts(page.url());
+      }
+    }
     const formHost = (() => { try { return new URL(page!.url()).hostname; } catch { return host; } })();
     await run.meta({ ats, form_host: formHost });
     if (ats === "linkedin" || ats === "indeed") { await run.end("failed", APPLY_PROBLEM.never); return { status: "failed" }; }
@@ -689,6 +775,11 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
     }
     if (!SERVER_APPLY_ATS.includes(ats) || ats === "workday") {
       await run.shot("stopped", "The employer's page", page, deps.cfg);
+      // Their own site is known now: "Finish it yourself" opens it, with the packet one tap away.
+      await withApplicant(pool, auto, (c) => c.query(
+        `UPDATE job_posting p SET employer_apply_url = coalesce(p.employer_apply_url, $2) FROM application a WHERE a.id = $1 AND a.job_posting_id = p.id`,
+        [app.id, /^https:\/\//i.test(page!.url()) && !isNoFetchHost(page!.url()) && !isJobBoardHost(page!.url()) ? page!.url() : null]));
+      await run.finishYourself();
       await run.end("failed", APPLY_PROBLEM.unsupported(formHost));
       return { status: "failed" };
     }
