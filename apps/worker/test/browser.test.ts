@@ -36,6 +36,20 @@ beforeAll(async () => {
       '<label for="num">Percentage you are willing to travel</label><input id="num" type="text">' +
       '<script>document.getElementById("num").addEventListener("change", function (e) { if (!/^\\d+$/.test(e.target.value)) e.target.value = ""; });' +
       'document.getElementById("pct").addEventListener("change", function (e) { if (!window.typed) { window.typed = 1; e.target.value = ""; } });</script></form>');
+    // Self-check (Yong, 2026-11-19): a radio worded longer than the answer, a list the site resets after the first pick,
+    // a search list whose choices load late, and a question the site flags as wrong.
+    if (url.startsWith("/selfcheck")) return html('<fieldset><legend>Are you authorized to work in the US?</legend>' +
+      '<input type="radio" name="auth" id="ay" value="1"><label for="ay">Yes, I am authorized to work in the US</label>' +
+      '<input type="radio" name="auth" id="an" value="0"><label for="an">No</label></fieldset>' +
+      '<label for="sp">Will you need sponsorship?</label><select id="sp"><option value="">Select</option><option value="Y">Yes</option><option value="N">No</option></select>' +
+      '<label for="late">State</label><input id="late" role="combobox" aria-controls="lb"><ul id="lb" role="listbox"></ul>' +
+      '<label for="flag">Postal code</label><input id="flag" aria-invalid="true">' +
+      '<script>var sp = document.getElementById("sp"); sp.addEventListener("change", function () { if (!window.reset) { window.reset = 1; sp.value = ""; } });' +
+      'var late = document.getElementById("late"), lb = document.getElementById("lb");' +
+      'late.addEventListener("input", function () { var t = late.value; lb.innerHTML = ""; if (!t) return; setTimeout(function () { if (late.value !== t) return;' +
+      ' ["Texas", "Tennessee"].filter(function (s) { return s.toLowerCase().indexOf(t.toLowerCase()) === 0; }).forEach(function (s) { var li = document.createElement("li"); li.setAttribute("role", "option"); li.textContent = s;' +
+      ' li.addEventListener("click", function () { late.value = s; lb.innerHTML = ""; }); lb.appendChild(li); }); }, 1500); });' +
+      'document.addEventListener("keydown", function (e) { if (e.key === "Escape") lb.innerHTML = ""; });</script>');
     // Workday's slow parts (Premier, 2026-11-17): a list that shows only "Select One" for a moment after opening,
     // and a Review page whose Submit button is drawn after its heading.
     if (url.startsWith("/slow")) return html('<div data-automation-id="formField-deg"><label>Degree*</label><button type="button" aria-haspopup="listbox" id="deg">Select One</button></div>' +
@@ -253,6 +267,19 @@ describe.skipIf(!available)("tick boxes, radio buttons and blanks drawn or reset
       // A list button already showing an answer is still named by its question, not by "No Required".
       expect(form.fields.find((f) => f.key === "#rel")?.label).toBe("Are you open to relocation?*");
       expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["#ft", "radio:travel", "#pct", "#rel", "#num"]);
+    } finally { await page.close(); }
+  });
+});
+
+describe.skipIf(!available)("checking each answer took, and trying another way when it didn't (Yong, 2026-11-19)", () => {
+  it("picks a radio worded longer than the answer, re-picks a list the site reset, waits longer for a slow list, and reads what the site flags", async () => {
+    const page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}/selfcheck`);
+    try {
+      const got = await page.fill([{ key: "radio:auth", type: "radio", value: "Yes" }, { key: "#sp", type: "select", value: "No" }, { key: "#late", type: "select", value: "Texas" }]);
+      expect(got.map((r) => r.status)).toEqual(["filled", "filled", "filled"]);
+      const form = await page.readForm();
+      expect(form.fields.filter((f) => f.hasValue).map((f) => f.key)).toEqual(["radio:auth", "#sp", "#late"]);
+      expect(await page.flagged?.()).toEqual(["#flag"]);
     } finally { await page.close(); }
   });
 });

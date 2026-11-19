@@ -107,6 +107,22 @@ function locate(page: Page, key: string): Locator {
 
 /** A general choice inside a group of a "how did you hear" list. */
 const GENERAL_SOURCE = /online|internet|general|web ?site|job (board|site|search)/i;
+/** A radio button's own words: its label, else its value. */
+const radioLabel = (el: HTMLInputElement) => {
+  const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest("label");
+  return (l?.textContent ?? el.value ?? "").replace(/\s+/g, " ").trim();
+};
+
+const errText = (e: unknown) => String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 200);
+
+/** Whether what the form shows is the answer: the choice that was picked, or the answer itself in other words. */
+export function showsAnswer(shown: string, chose: string, answer: string): boolean {
+  const s = norm(shown), c = norm(chose);
+  if (!s) return false;
+  if (c && (s === c || s.includes(c))) return true;
+  return sameAnswer(shown, answer) || !!matchChoice([shown], answer) || shown.split(/\s*,\s*/).some((p) => !!p && sameAnswer(p, answer));
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[*:?]+/g, " ").replace(/\s+/g, " ").trim();
 
 class PwPage implements ApplyPage {
@@ -180,14 +196,167 @@ class PwPage implements ApplyPage {
   async fill(items: FillItem[]): Promise<FillResult[]> {
     const out: FillResult[] = [];
     for (const it of items) {
-      try { out.push({ key: it.key, status: await this.fillOne(it) }); }
+      try { out.push({ key: it.key, status: await this.fillChecked(it) }); }
       catch (e) {
-        // Why a box couldn't be filled (the site's own words; never the answer).
-        log.info("apply.fill_error", { key: it.key.slice(0, 80), type: it.type, error: String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 200) });
+        log.info("apply.fill_error", { key: it.key.slice(0, 80), type: it.type, error: errText(e) });
         out.push({ key: it.key, status: "failed" });
       }
     }
     return out;
+  }
+
+  /** The choice's own words, as last picked from a list (they can differ from the answer: "USA" picks "United States of America"). */
+  protected chose: string | null = null;
+  /** Waits are this many times longer on a second, slower try (a list that loads its choices late). */
+  protected pace = 1;
+
+  /**
+   * Fills one question, then checks it as a person would: reads back what the form now shows. When the form
+   * doesn't show the answer, it tries the other ways a person could (Yong, 2026-11-19: "self-check when one
+   * way doesn't work, and then switch to a new way"). A list that found no matching choice gets one slower
+   * look, since its choices may load late. `again` (the site flagged this question after Next) starts with
+   * the other ways, since the first way already didn't hold.
+   */
+  protected async fillChecked(it: FillItem): Promise<FillResult["status"]> {
+    this.chose = null;
+    if (it.again && !it.file && it.value?.trim()) {
+      if (await this.otherWays(it) === "filled") return "filled";
+      this.chose = null;
+    }
+    let status: FillResult["status"];
+    try { status = await this.fillOne(it); }
+    catch (e) {
+      log.info("apply.fill_error", { key: it.key.slice(0, 80), type: it.type, error: errText(e) });
+      status = "failed";
+    }
+    if (it.file || !it.value?.trim() || status === "not_found") return status;
+    if (status === "filled" && await this.holds(it)) return "filled";
+    if (status === "no_match") {
+      if (!(await this.isSiteList(it))) return status;
+      this.pace = 3;
+      try { status = await this.fillOne(it).catch(() => "failed" as const); }
+      finally { this.pace = 1; }
+      log.info("apply.fill_switch", { key: it.key.slice(0, 80), type: it.type, way: "slower list", ok: status === "filled" });
+      if (status !== "filled") return status;
+      if (await this.holds(it)) return "filled";
+    }
+    return this.otherWays(it);
+  }
+
+  /** A list drawn by the site (not the browser's own): its choices can load late. */
+  private async isSiteList(it: FillItem): Promise<boolean> {
+    if (it.key.startsWith("radio:")) return false;
+    const loc = locate(this.pg, it.key);
+    return loc.evaluate((el) => {
+      const tag = el.tagName.toLowerCase();
+      return tag === "button" || el.getAttribute("role") === "combobox" || (tag === "select" && el.classList.contains("select2-hidden-accessible"))
+        || (tag === "input" && !!(window as any).__tcApply?.isWorkdayList(el));
+    }).catch(() => false);
+  }
+
+  /** What the form shows for this question now; null when it can't be read (then it isn't second-guessed). */
+  protected async shownFor(key: string): Promise<string | null> {
+    await this.helpers().catch(() => {});
+    return this.pg.evaluate((k) => (window as any).__tcApply?.shown(k) ?? null, key).catch(() => null) as Promise<string | null>;
+  }
+
+  /** Whether the form now shows this answer. Typed boxes count when not empty, since sites reformat ("(416) 555-0199"). */
+  protected async holds(it: FillItem): Promise<boolean> {
+    if (it.type === "checkbox") return true;  // setTick already checked the tick held
+    const shown = await this.shownFor(it.key);
+    if (shown === null) return true;
+    if (!shown.trim()) return false;
+    if (!(it.key.startsWith("radio:") || it.type === "select")) return true;
+    return showsAnswer(shown, this.chose ?? it.value ?? "", it.value ?? "");
+  }
+
+  /**
+   * The other ways a person gets an answer into a question, tried in turn, each checked by reading the form back.
+   * Logged by name, so the ways that work show up per site.
+   */
+  protected async otherWays(it: FillItem): Promise<FillResult["status"]> {
+    const loc = locate(this.pg, it.key);
+    if (!(await loc.count().catch(() => 0))) return "not_found";
+    const value = it.value ?? "";
+    const ways: [string, () => Promise<unknown>][] = [];
+    if (it.key.startsWith("radio:")) {
+      const n = await loc.count();
+      const labels: string[] = [];
+      for (let i = 0; i < n; i++) labels.push(await loc.nth(i).evaluate(radioLabel).catch(() => ""));
+      const match = matchChoice(labels.filter(Boolean), value);
+      if (!match) return "no_match";
+      const r = loc.nth(labels.indexOf(match));
+      this.chose = match;
+      ways.push(["click the choice's words", () => this.pg.getByText(match, { exact: true }).filter({ visible: true }).first().click({ timeout: 3000 })]);
+      ways.push(["click the drawn button", () => r.locator("xpath=..").click({ timeout: 3000 })]);
+      ways.push(["press Space on it", async () => { await r.focus(); await this.pg.keyboard.press("Space"); }]);
+      ways.push(["tick by script", () => r.evaluate((el: HTMLInputElement) => { el.click(); el.dispatchEvent(new Event("change", { bubbles: true })); })]);
+    } else {
+      const tag = await loc.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+      if (tag === "select") {
+        const opts = await loc.locator("option").evaluateAll((os) => os.map((o) => ({ text: (o.textContent ?? "").replace(/\s+/g, " ").trim(), value: (o as HTMLOptionElement).value })));
+        const real = opts.filter((o) => o.value !== "" && o.text);
+        const match = matchChoice(real.map((o) => o.text), value) ?? (() => { const v = matchChoice(real.map((o) => o.value), value); return real.find((o) => o.value === v)?.text ?? null; })();
+        if (!match) return "no_match";
+        const opt = real.find((o) => o.text === match)!;
+        this.chose = match;
+        ways.push(["choose by the site's code", () => loc.selectOption({ value: opt.value }, { force: true, timeout: 3000 })]);
+        ways.push(["choose by script", () => loc.evaluate((el: HTMLSelectElement, v: string) => {
+          el.value = v;
+          for (const t of ["input", "change"]) el.dispatchEvent(new Event(t, { bubbles: true }));
+          (window as any).jQuery?.(el).trigger("change");
+        }, opt.value)]);
+        ways.push(["type it on the keyboard", async () => { await loc.focus(); await this.pg.keyboard.type(match.slice(0, 12), { delay: 40 }); await this.pg.keyboard.press("Enter"); }]);
+        ways.push(["use the site's drawn list", async () => {
+          const drawn = loc.locator("xpath=following-sibling::*[1] | ..").filter({ visible: true }).first();
+          if (await drawn.count()) await this.pickFromList(drawn, match, true);
+        }]);
+      } else if (tag === "input" || tag === "textarea" || tag === "button") {
+        const list = tag === "button" || await this.isSiteList(it);
+        if (list) {
+          ways.push(["type, then pick the first match", async () => {
+            for (const term of searchTermsFor(value)) {
+              await loc.click({ timeout: 3000 });
+              if (tag !== "button") await loc.fill(term).catch(() => loc.pressSequentially(term, { delay: 30 }));
+              else await this.pg.keyboard.type(term, { delay: 30 });
+              await this.pg.waitForTimeout(1500);
+              const option = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible, .select2-results__option:visible").first();
+              const text = ((await option.textContent().catch(() => "")) ?? "").replace(/\s+/g, " ").trim();
+              if (text && matchChoice([text], value)) { this.chose = text; await option.click({ timeout: 3000 }); return; }
+              await this.pg.keyboard.press("Escape").catch(() => {});
+            }
+          }]);
+          ways.push(["arrow down and Enter", async () => {
+            await loc.click({ timeout: 3000 });
+            if (tag !== "button") await loc.fill(searchTermsFor(value)[0] ?? value).catch(() => {});
+            await this.pg.waitForTimeout(1500);
+            await this.pg.keyboard.press("ArrowDown");
+            await this.pg.keyboard.press("Enter");
+          }]);
+        } else {
+          ways.push(["set it the way the page's own code does", () => loc.evaluate((el: HTMLInputElement | HTMLTextAreaElement, v: string) => {
+            const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+            Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, v);
+            for (const t of ["input", "change", "blur"]) el.dispatchEvent(new Event(t, { bubbles: true }));
+          }, value)]);
+          ways.push(["type it slowly", async () => { await loc.click({ timeout: 3000 }); await loc.press("ControlOrMeta+a"); await loc.pressSequentially(value, { delay: 60 }); await loc.press("Tab"); }]);
+        }
+      }
+    }
+    for (const [way, run] of ways) {
+      await run().catch(() => {});
+      await this.pg.waitForTimeout(400);
+      const ok = await this.holds(it);
+      log.info("apply.fill_switch", { key: it.key.slice(0, 80), type: it.type, way, ok });
+      if (ok) return "filled";
+    }
+    return ways.length ? "failed" : "no_match";
+  }
+
+  /** The questions the site marks as wrong or missing now. */
+  async flagged(): Promise<string[]> {
+    await this.helpers().catch(() => {});
+    return this.pg.evaluate(() => (window as any).__tcApply?.flagged() ?? []).catch(() => []) as Promise<string[]>;
   }
 
   /**
@@ -249,15 +418,21 @@ class PwPage implements ApplyPage {
     const value = it.value ?? "";
     if (it.key.startsWith("radio:")) {
       const n = await loc.count();
+      const labels: string[] = [];
       for (let i = 0; i < n; i++) {
         const r = loc.nth(i);
-        const label = await r.evaluate((el: HTMLInputElement) => {
-          const l = (el.id && (el.getRootNode() as Document).querySelector(`label[for="${el.id}"]`)) || el.closest("label");
-          return (l?.textContent ?? el.value ?? "").replace(/\s+/g, " ").trim();
-        });
-        if (norm(label) === norm(value) || sameAnswer(label, value) || norm(await r.getAttribute("value") ?? "") === norm(value)) return (await this.setTick(r, true)) ? "filled" : "failed";
+        const label = await r.evaluate(radioLabel);
+        labels.push(label);
+        if (norm(label) === norm(value) || sameAnswer(label, value) || norm(await r.getAttribute("value") ?? "") === norm(value)) {
+          this.chose = label;
+          return (await this.setTick(r, true)) ? "filled" : "failed";
+        }
       }
-      return "no_match";
+      // Worded a little differently ("Yes" for "Yes, I am authorized to work in the US").
+      const near = matchChoice(labels.filter(Boolean), value);
+      if (!near) return "no_match";
+      this.chose = near;
+      return (await this.setTick(loc.nth(labels.indexOf(near)), true)) ? "filled" : "failed";
     }
     const tag = await loc.evaluate((el) => el.tagName.toLowerCase());
     const type = (await loc.getAttribute("type"))?.toLowerCase() ?? "";
@@ -266,6 +441,7 @@ class PwPage implements ApplyPage {
       const options = await loc.locator("option").allTextContents();
       const match = matchChoice(options.filter((o) => o.trim()), value);
       if (!match) return "no_match";
+      this.chose = match;
       await loc.selectOption({ label: match.trim() }).catch(async () => { await loc.selectOption({ label: match }); });
       return "filled";
     }
@@ -306,10 +482,10 @@ class PwPage implements ApplyPage {
     for (const term of terms) {
       await loc.click();
       if (!isButton) { await loc.fill(term).catch(() => loc.pressSequentially(term)); }
-      await this.pg.waitForTimeout(700);
+      await this.pg.waitForTimeout(700 * this.pace);
       const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
       // Workday's search lists look the typed words up only on Enter (the list shown before that is just its first few choices).
-      if (enterSearches && term) { await loc.press("Enter").catch(() => {}); await this.pg.waitForTimeout(1500); }
+      if (enterSearches && term) { await loc.press("Enter").catch(() => {}); await this.pg.waitForTimeout(1500 * this.pace); }
       const n = await options.count();
       const texts: string[] = [];
       for (let i = 0; i < n; i++) texts.push(((await options.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
@@ -318,6 +494,7 @@ class PwPage implements ApplyPage {
       if (match) at = texts.indexOf(match);
       if (at < 0 && agreeing) at = texts.findIndex((t) => AGREE_OPTION.test(t));
       if (at >= 0) {
+        this.chose = texts[at] ?? null;
         await options.nth(at).click();
         await this.pg.waitForTimeout(500);
         // Workday's grouped lists ("How Did You Hear About Us?"): a group opens its own list
@@ -330,6 +507,7 @@ class PwPage implements ApplyPage {
         const leaf = matchChoice(inner.filter(Boolean), value) ?? inner.find((t) => /^other\b|\bother$/i.test(t))
           ?? inner.find((t) => GENERAL_SOURCE.test(t));
         if (leaf) {
+          this.chose = leaf;
           await options.nth(inner.indexOf(leaf)).click();
           await this.pg.waitForTimeout(300);
           return "filled";
@@ -1078,9 +1256,10 @@ class AvaturePw extends PwPage implements WorkdayPage {
       const search = this.pg.locator(".select2-container--open .select2-search__field").filter({ visible: true }).first();
       if (term && await search.count()) { await search.fill(term).catch(() => search.pressSequentially(term)); }
       let opts: string[] = [];
-      for (let i = 0; i < 10 && !opts.length; i++) { await this.pg.waitForTimeout(400); opts = await this.select2Options(); }
+      for (let i = 0; i < 10 * this.pace && !opts.length; i++) { await this.pg.waitForTimeout(400); opts = await this.select2Options(); }
       const match = matchChoice(opts, value);
       if (match) {
+        this.chose = match;
         await this.pg.locator(".select2-container--open .select2-results__option").filter({ hasText: match }).first().click({ timeout: 5000 }).catch(() => {});
         await this.pg.waitForTimeout(300);
         const has = await this.pg.locator(`[id="${it.key.slice(1).replace(/"/g, '\\"')}"]`).evaluate((el: HTMLSelectElement) => el.multiple ? el.selectedOptions.length > 0 : !!el.value).catch(() => false);

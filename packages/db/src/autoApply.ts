@@ -848,6 +848,8 @@ async function onForm(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app:
   }
   // Answer, approve (as the setting allows), fill; read the form again, since answers can bring up more questions.
   const filledKeys = new Set<string>();
+  /** What went into each question, for a second pass on any the form still shows empty. */
+  const sent = new Map<string, FillItem>();
   let labels = new Map<string, string>();
   let personal = new Set<string>();
   const canHand = hand.possible(page);
@@ -860,6 +862,7 @@ async function onForm(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app:
     }
     await run.step(`Filling in ${r.fill.length} answers${r.fill.some((f) => f.file) ? " and attaching your documents" : ""}`);
     const results = await page.fill(r.fill);
+    for (const f of r.fill) sent.set(f.key, f);
     const failed = results.filter((x) => x.status !== "filled");
     for (const x of results) if (x.status === "filled") filledKeys.add(x.key);
     labels = new Map([...labels, ...r.labels]);
@@ -884,8 +887,18 @@ async function onForm(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app:
   }
   // Last look before sending: every required question has an answer in their form and every
   // required file is attached. Anything missing stops it here, before Submit, so nothing is sent.
-  const check = await page.readForm();
-  const empty = check.fields.filter((f) => f.required && f.hasValue === false && (f.type === "file" || !filledKeys.has(f.key)));
+  let check = await page.readForm();
+  const stillEmpty = () => check.fields.filter((f) => f.required && f.hasValue === false && (f.type === "file" || !filledKeys.has(f.key)));
+  let empty = stillEmpty();
+  // A question that took its answer and then showed empty (or the site flags): once more, another way, before giving up.
+  const flagged = new Set(await page.flagged?.().catch(() => []) ?? []);
+  const redo = [...new Set([...empty.map((f) => f.key), ...flagged])].map((k) => sent.get(k)).filter((x): x is FillItem => !!x && !personal.has(x.key));
+  if (redo.length) {
+    applyLog.info("apply.refill", { run: run.id, questions: redo.length, flagged: flagged.size });
+    for (const x of await page.fill(redo.map((i) => ({ ...i, again: true })))) if (x.status === "filled") filledKeys.add(x.key);
+    check = await page.readForm();
+    empty = stillEmpty();
+  }
   if (empty.length) {
     // Only statements the applicant makes themselves are left: their turn, on this page (Yong, 2026-11-17).
     if (empty.every((f) => personal.has(f.key))
@@ -1531,8 +1544,10 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     // Their form says an answer that went in isn't there (a date, a tick box): put this page's answers in once more,
     // then try Next again before asking the applicant (Huron, 2026-11-19).
     if (!next.moved && next.errors.length && items.length) {
-      applyLog.info("workday.refill", { run: run.id, page: n, errors: next.errors.slice(0, 3).join(" | ").slice(0, 400) });
-      await wd.fill(items);
+      // The questions the site flagged go in another way this time (Yong, 2026-11-19: switch to a new way and try again).
+      const flagged = new Set(await wd.flagged?.().catch(() => []) ?? []);
+      applyLog.info("workday.refill", { run: run.id, page: n, flagged: flagged.size, errors: next.errors.slice(0, 3).join(" | ").slice(0, 400) });
+      await wd.fill(items.map((i) => (flagged.has(i.key) ? { ...i, again: true } : i)));
       next = await wd.next();
     }
     if (!next.moved) {

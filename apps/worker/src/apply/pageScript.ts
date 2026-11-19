@@ -180,6 +180,58 @@ export const PAGE_SCRIPT = String.raw`
     return { url: location.href, fields: out, captcha: captchaVisible() };
   }
 
+  /** The element a key names (as keyOf made it). */
+  function byKey(key) {
+    var v = key.slice(key.indexOf(key.charAt(0) === "#" ? "#" : ":") + 1);
+    if (key.charAt(0) === "#") return deepAll('[id="' + esc(v) + '"]')[0] || null;
+    if (key.indexOf("radio:") === 0) return deepAll('input[type=radio][name="' + esc(v) + '"]')[0] || null;
+    if (key.indexOf("name:") === 0) return deepAll('[name="' + esc(v) + '"]')[0] || null;
+    if (key.indexOf("wd:") === 0) return deepAll('[data-automation-id="' + esc(v) + '"]')[0] || null;
+    return null;
+  }
+
+  /** What a person sees as the answer to a question now: the chosen item's words, the box's text, "" when empty. */
+  function shown(key) {
+    var el = byKey(key); if (!el) return null;
+    var tag = el.tagName.toLowerCase();
+    if (key.indexOf("radio:") === 0) {
+      var on = deepAll('input[type=radio][name="' + esc(el.name) + '"]', rootOf(el)).filter(function (r) { return r.checked; })[0];
+      return on ? (labelOf(on) || on.value || "") : "";
+    }
+    if (tag === "select") {
+      if (el.multiple) return Array.prototype.map.call(el.selectedOptions, function (o) { return clean(o.textContent); }).join(", ");
+      var o = el.selectedOptions && el.selectedOptions[0];
+      return o && o.value !== "" ? clean(o.textContent) : "";
+    }
+    if (el.type === "checkbox") return el.checked ? "checked" : "";
+    if (tag === "button") { var t = clean(el.textContent); return /^select( one)?$|^choose|^-+$/i.test(t) ? "" : t; }
+    if (tag === "input" && isWorkdayList(el)) {
+      var fb = el.closest("[data-automation-id^='formField']") || el.parentElement;
+      return fb ? Array.prototype.map.call(fb.querySelectorAll("[data-automation-id='selectedItem'], [data-automation-id='selectedItemList'] li"), function (x) { return clean(x.textContent); }).join(", ") : "";
+    }
+    if (el.getAttribute("role") === "combobox") {
+      var ctl = el.closest("[class*='control' i], [class*='container' i]");
+      var sv = ctl && ctl.querySelector("[class*='single-value' i], [class*='singleValue' i], [class*='multi-value' i]");
+      return (sv && clean(sv.textContent)) || clean(el.value);
+    }
+    return clean(el.value);
+  }
+
+  /** The questions the site marks as wrong or missing now (aria-invalid, or an error message in the question's own box). */
+  function flagged() {
+    var out = {};
+    deepAll("input, select, textarea, button[aria-haspopup='listbox']").forEach(function (el) {
+      if (!visible(el) && el.type !== "radio") return;
+      var bad = el.getAttribute("aria-invalid") === "true";
+      if (!bad) {
+        var box = el.closest("[data-automation-id^='formField'], fieldset, .form-group, .field, [class*='question' i]");
+        bad = !!(box && box.querySelector("[data-automation-id='errorMessage'], [data-automation-id='inputAlert'], .error-message, .field-error, .invalid-feedback, [role=alert]"));
+      }
+      var k = bad && (el.type === "radio" && el.name ? "radio:" + el.name : keyOf(el)); if (k) out[k] = 1;
+    });
+    return Object.keys(out).slice(0, 40);
+  }
+
   /** Error messages the page shows now (a field the site says is missing or wrong). */
   function errors() {
     var sel = "[role=alert], .error, .error-message, .field-error, .invalid-feedback, [data-automation-id='errorMessage'], [data-automation-id='inputAlert'], [class*='error' i][id*='error' i]";
@@ -220,6 +272,6 @@ export const PAGE_SCRIPT = String.raw`
     return { dialog: mask(dialog).slice(0, 400), invalid: invalid.join(" | "), errors: mask(parts.join(" | ")).slice(0, 600), buttons: mask(buttons.join(" | ")), text: mask(txt(main)).slice(0, 500) };
   }
 
-  window.__tcApply = { isWorkdayList: isWorkdayList, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible, stuck: stuck };
+  window.__tcApply = { isWorkdayList: isWorkdayList, shown: shown, flagged: flagged, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible, stuck: stuck };
 })();
 `;

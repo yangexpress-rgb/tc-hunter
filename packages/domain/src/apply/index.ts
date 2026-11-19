@@ -61,7 +61,11 @@ export const STANDING_ANSWERS: Array<{ kind: StandingKind; title: string; does: 
 // ---------------------------------------------------------------------------
 
 export interface PageForm { url: string; fields: FormField[]; captcha: boolean; humanCheck: boolean }
-export interface FillItem { key: string; type: FieldType; value: string | null; file?: { name: string; mime: string; bytes: Uint8Array } | null }
+export interface FillItem {
+  key: string; type: FieldType; value: string | null; file?: { name: string; mime: string; bytes: Uint8Array } | null;
+  /** The site flagged this question after the first fill: put the answer in another way this time. */
+  again?: boolean;
+}
 export interface FillResult { key: string; status: "filled" | "not_found" | "no_match" | "failed" }
 export interface PageNow { url: string; text: string; errors: string[]; humanCheck: boolean }
 
@@ -70,7 +74,10 @@ export interface ApplyPage {
   /** Gets to the application form from the job page (presses that system's Apply button when the form isn't shown yet). */
   openForm(ats: Ats): Promise<PageForm>;
   readForm(): Promise<PageForm>;
+  /** Fills each question, reads it back, and tries other ways when the form doesn't show the answer. */
   fill(items: FillItem[]): Promise<FillResult[]>;
+  /** The questions the site marks as wrong or missing now (by key). */
+  flagged?(): Promise<string[]>;
   /** A fingerprint of the form exactly as it is filled now (every value, tick and file name). */
   filledHash(): Promise<string>;
   /** Presses the Submit button once. False if there was no such button to press. */
