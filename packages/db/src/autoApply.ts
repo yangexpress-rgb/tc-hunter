@@ -1527,7 +1527,11 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
       }
       p = r2 as Prepared;
       const keys = new Set(added.map((f) => f.key));
-      results.push(...await wd.fill(p.fill.filter((f) => f.key.startsWith(prefix) && keys.has(f.key.slice(prefix.length))).map((f) => ({ ...f, key: f.key.slice(prefix.length) }))));
+      const more = p.fill.filter((f) => f.key.startsWith(prefix) && keys.has(f.key.slice(prefix.length))).map((f) => ({ ...f, key: f.key.slice(prefix.length) }));
+      // Kept with the page's answers, so the second pass after Next covers them too (Workday's own site, 2026-11-19:
+      // page 1's questions all arrived this way, and the second pass had nothing to put back).
+      items.push(...more);
+      results.push(...await wd.fill(more));
     }
     // What the page asked and what happened to each question (labels and statuses only, no answers).
     applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, fields: pg.form.fields.map((f) => {

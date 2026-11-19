@@ -123,6 +123,9 @@ export function showsAnswer(shown: string, chose: string, answer: string): boole
   return sameAnswer(shown, answer) || !!matchChoice([shown], answer) || shown.split(/\s*,\s*/).some((p) => !!p && sameAnswer(p, answer));
 }
 
+/** A list's prompt rather than a choice. */
+const PLACEHOLDER = /^(select( one)?|choose( one)?|please select|no options|no items\.?|loading)\b/i;
+
 const norm = (s: string) => s.toLowerCase().replace(/[*:?]+/g, " ").replace(/\s+/g, " ").trim();
 
 class PwPage implements ApplyPage {
@@ -142,6 +145,15 @@ class PwPage implements ApplyPage {
   }
 
   protected async helpers() { await this.pg.evaluate(PAGE_SCRIPT); }
+
+  /**
+   * Their cookie notice can sit over the form and take the clicks meant for it (Workday's own careers site,
+   * 2026-11-19: a list's click timed out under it): decline what isn't needed.
+   */
+  protected async cookies() {
+    const no = this.pg.getByRole("button", { name: /^\s*(reject( all)?( cookies)?|decline( all)?|only (necessary|essential))\s*$/i }).filter({ visible: true }).first();
+    if (await no.count().catch(() => 0)) { await no.click({ timeout: 3000 }).catch(() => {}); await this.pg.waitForTimeout(500); }
+  }
 
   async readForm(): Promise<PageForm> {
     await this.helpers();
@@ -237,8 +249,10 @@ class PwPage implements ApplyPage {
       try { status = await this.fillOne(it).catch(() => "failed" as const); }
       finally { this.pace = 1; }
       log.info("apply.fill_switch", { key: it.key.slice(0, 80), type: it.type, way: "slower list", ok: status === "filled" });
-      if (status !== "filled") return status;
-      if (await this.holds(it)) return "filled";
+      if (status === "filled" && await this.holds(it)) return "filled";
+      // Still nothing: type it in and take what the list offers, the way a person would.
+      const other = await this.otherWays(it);
+      return other === "filled" ? other : "no_match";
     }
     return this.otherWays(it);
   }
@@ -476,6 +490,7 @@ class PwPage implements ApplyPage {
   /** Drop-downs drawn by the site (React selects, Workday's lists): open, choose the matching choice. */
   protected async pickFromList(loc: Locator, value: string, isButton: boolean, enterSearches = false): Promise<FillResult["status"]> {
     const agreeing = AGREEING.test(value.trim());
+    let seen: string[] = [];
     // Typing filters the list. Try the answer, then its other names ("USA" finds "United States");
     // for an agreement the site's wording may differ, so look at the whole list.
     const terms = isButton || agreeing ? [""] : [...searchTermsFor(value), ""];
@@ -486,9 +501,14 @@ class PwPage implements ApplyPage {
       const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
       // Workday's search lists look the typed words up only on Enter (the list shown before that is just its first few choices).
       if (enterSearches && term) { await loc.press("Enter").catch(() => {}); await this.pg.waitForTimeout(1500 * this.pace); }
-      const n = await options.count();
-      const texts: string[] = [];
-      for (let i = 0; i < n; i++) texts.push(((await options.nth(i).textContent()) ?? "").replace(/\s+/g, " ").trim());
+      // A list can show only "Select One" or "Loading" for a while after opening: wait for real choices (up to 4s, longer on a slow try).
+      let texts: string[] = [];
+      for (let w = 0; w < 10 * this.pace; w++) {
+        texts = (await options.allTextContents().catch(() => [])).map((t) => t.replace(/\s+/g, " ").trim());
+        if (texts.some((t) => t && !PLACEHOLDER.test(t))) break;
+        await this.pg.waitForTimeout(400);
+      }
+      seen = texts.filter(Boolean);
       let at = -1;
       const match = matchChoice(texts.filter(Boolean), value);
       if (match) at = texts.indexOf(match);
@@ -518,6 +538,8 @@ class PwPage implements ApplyPage {
       await this.pg.keyboard.press("Escape").catch(() => {});
     }
     if (!isButton) await loc.fill("").catch(() => {});
+    // The choices it saw (the site's own words, never the answer), so a list that won't take an answer can be explained.
+    log.info("apply.list_no_match", { count: seen.length, choices: seen.slice(0, 12).join(" / ").slice(0, 400) });
     return "no_match";
   }
 
@@ -769,6 +791,7 @@ class WorkdayPw extends PwPage implements WorkdayPage {
   }
 
   async start(): Promise<"sign_in" | "form" | "human_check" | "closed"> {
+    await this.cookies();
     const t = await this.text();
     if (humanCheckIn(t)) return "human_check";
     if (/no longer (available|accepting)|job (posting )?(is )?(closed|not available)|page you are looking for (doesn't|does not) exist/i.test(t)) return "closed";
@@ -984,6 +1007,7 @@ class WorkdayPw extends PwPage implements WorkdayPage {
 
   async page(): Promise<{ title: string; review: boolean; form: PageForm }> {
     await settle(this.pg, 5000);
+    await this.cookies();
     const title = ((await this.id("progressBarActiveStep").textContent().catch(() => null)) ?? (await this.pg.locator("h2").first().textContent().catch(() => "")) ?? "")
       .replace(/^current step \d+ of \d+/i, "").replace(/\s+/g, " ").trim();
     const nextText = (await this.pg.locator("[data-automation-id='pageFooterNextButton'], [data-automation-id='bottom-navigation-next-button']").first().textContent().catch(() => "")) ?? "";
@@ -1087,11 +1111,6 @@ class AvaturePw extends PwPage implements WorkdayPage {
   private async visible(sel: string) { return this.pg.locator(sel).filter({ visible: true }).count().then((n) => n > 0).catch(() => false); }
   private saveButton() { return this.pg.locator("button[name=save], button[id$='-save']").filter({ visible: true }).first(); }
 
-  /** Their cookie notice covers the page: decline what isn't needed. */
-  private async cookies() {
-    const no = this.pg.getByRole("button", { name: /^\s*(reject( all)?( cookies)?|decline( all)?|only (necessary|essential))\s*$/i }).filter({ visible: true }).first();
-    if (await no.count().catch(() => 0)) { await no.click({ timeout: 3000 }).catch(() => {}); await this.pg.waitForTimeout(500); }
-  }
   private async closedPage(): Promise<boolean> {
     if (/\/Error(\/|$|\?)/.test(new URL(this.pg.url()).pathname)) return true;
     return /page not found|this (job|position) is no longer (available|open)|no longer accepting applications|job (has been )?closed/i.test((await this.text()).slice(0, 3000));
