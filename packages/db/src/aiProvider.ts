@@ -44,7 +44,7 @@ export const AI_PROVIDER_REFUSALS = {
   need_anthropic_key: "Add your Anthropic key first (ANTHROPIC_API_KEY on Railway).",
   no_vault: "The server's vault isn't set up (TC_VAULT_DIR), so a key can't be kept safely here.",
   remove_active: "Switch the AI provider to Claude before removing the OpenAI key.",
-  key_format: "That doesn't look like an OpenAI key (it starts with sk-).",
+  key_format: "That doesn't look like an OpenAI secret key. Use the one OpenAI shows once when you press Create new secret key: it starts with sk-proj- or sk-. Not the key's name, the project ID (proj_) or the organization ID (org-).",
   key_rejected: "OpenAI didn't accept that key. Check it in your OpenAI account (platform.openai.com).",
   key_unreachable: "Couldn't reach OpenAI to check the key. Try again in a minute.",
 } as const;
@@ -84,12 +84,14 @@ export const checkOpenAiKey: OpenAiKeyCheck = async (key) => {
  */
 export async function saveOpenAiKey(pool: pg.Pool, vault: SecretStore | undefined, session: Session, value: string, check: OpenAiKeyCheck = checkOpenAiKey): Promise<void> {
   if (!vault) throw new AiProviderRefused("no_vault");
-  const key = value.trim();
+  // A pasted key often carries spaces, a line break or quotes from where it was copied: those never belong in a key.
+  const key = value.replace(/[\s"'`]+/g, "");
   const row = await readRow(pool);
   if (!key) {
     if (row.provider === "openai") throw new AiProviderRefused("remove_active");
   } else {
-    if (!/^sk-[A-Za-z0-9_-]{20,300}$/.test(key)) throw new AiProviderRefused("key_format");
+    // Only a light shape check (OpenAI's key formats change); OpenAI itself says whether the key works.
+    if (!/^sk-[\x21-\x7e]{20,1000}$/.test(key)) throw new AiProviderRefused("key_format");
     const ok = await check(key);
     if (ok === "rejected") throw new AiProviderRefused("key_rejected");
     if (ok === "unreachable") throw new AiProviderRefused("key_unreachable");
