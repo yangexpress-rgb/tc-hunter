@@ -74,6 +74,8 @@ export default async function ApplicationPage(props: Props) {
   const serverPacket = !!packet && !!applying.packetId && applying.packetId === packet.id;
   const canApply = preApplied && resume?.status === "approved" && !["queued", "running"].includes(applying.status);
   const confirmation = typeof params.confirmation === "string" && /^[A-Za-z0-9#:/._ -]{1,100}$/.test(params.confirmation) ? params.confirmation : "";
+  // While TC Hunter is working on their form, its live progress sits right under the stepper (Yong, 2026-11-19).
+  const runActive = ["queued", "running", "waiting", "handover"].includes(String(applying.status));
   const live = ["queued", "running", "waiting", "handover"].includes(String(applying.status)) || (applying.status === "failed" || applying.status === "stopped") && at <= 2;
   const sent = packet?.state === "submitted" || !!a.applied_at || at >= 4;
   const packetCard = packet ? <PacketCard server={serverPacket} p={packet} back={`${back}#packet`} timeZone={tz} budget={budget} confirmation={confirmation} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} /> : null;
@@ -128,6 +130,8 @@ export default async function ApplicationPage(props: Props) {
 
       <Stepper j={j} />
 
+      {runActive ? <ApplyPanel appRef={a.public_ref} employer={a.employer_canonical} initial={applying} canApply={canApply} problemShown={problem} /> : null}
+
       {/* Stage panels, in journey order, each only when it's relevant. */}
       {at <= 3 ? (
         <section className="card stage-panel" id="stage-getting_ready" aria-label="Your documents">
@@ -180,7 +184,7 @@ export default async function ApplicationPage(props: Props) {
 
       {at === 2 || (live && at <= 2) || packetInApplying ? (
         <section className="stage-panel" id="stage-applying" aria-label="Applying">
-          {live || applying.status === "sent" ? <ApplyPanel appRef={a.public_ref} employer={a.employer_canonical} initial={applying} canApply={canApply} problemShown={problem} /> : null}
+          {(live || applying.status === "sent") && !runActive ? <ApplyPanel appRef={a.public_ref} employer={a.employer_canonical} initial={applying} canApply={canApply} problemShown={problem} /> : null}
           {packetInApplying ? packetCard : null}
         </section>
       ) : <Anchor s="applying" />}
