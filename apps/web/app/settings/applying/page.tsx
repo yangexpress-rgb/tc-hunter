@@ -35,8 +35,12 @@ export default async function ApplyingSettingsPage(props: PageProps) {
     key_saved: "OpenAI key saved. OpenAI checked it and it works.",
     key_removed: "OpenAI key removed.",
   };
+  const refusal = (note: string | null) => (note && note in AI_PROVIDER_REFUSALS ? AI_PROVIDER_REFUSALS[note as AiProviderRefusal] : note === "failed" ? "That didn't work. Try again in a minute." : null);
+  // The switch and the key are separate (Yong, 2026-11-18): each card shows only its own messages.
   const aiNote = typeof params.ai === "string" ? params.ai : null;
-  const aiRefused = aiNote && aiNote in AI_PROVIDER_REFUSALS ? AI_PROVIDER_REFUSALS[aiNote as AiProviderRefusal] : aiNote === "failed" ? "That didn't work. Try again in a minute." : null;
+  const aiRefused = refusal(aiNote);
+  const keyNote = typeof params.aikey === "string" ? params.aikey : null;
+  const keyRefused = refusal(keyNote);
   const h = await headers();
   const origin = process.env.TC_PUBLIC_ORIGIN || `${h.get("x-forwarded-proto") ?? "http"}://${h.get("host") ?? "localhost"}`;
   return (
@@ -59,21 +63,6 @@ export default async function ApplyingSettingsPage(props: PageProps) {
           </fieldset>
           {fresh ? <button>Save</button> : <NeedsConfirm what="Changing this" />}
         </form>
-        <Details summary="OpenAI key">
-          <p className="small">Paste a key from your OpenAI account (platform.openai.com). TC Hunter checks it with OpenAI, then locks it in the server&apos;s vault. It is never shown again, here or anywhere.</p>
-          {fresh ? (
-            <>
-              <form action={openAiKeyAction} className="inline-form">
-                <label className="small">OpenAI key<input name="key" type="password" autoComplete="off" placeholder={ai.connected.openai ? "Connected: paste a new key to replace it" : "sk-..."} /></label>
-                <button className="small">Save key</button>
-              </form>
-              {ai.connected.openai ? (
-                <form action={openAiKeyAction} className="inline-form"><input type="hidden" name="remove" value="1" /><button className="small secondary">Remove the OpenAI key</button></form>
-              ) : null}
-            </>
-          ) : <NeedsConfirm what="Adding a key" />}
-          <p className="muted small">The Claude key stays where it is today: ANTHROPIC_API_KEY on Railway.</p>
-        </Details>
         <Details summary="Which model each kind of work uses">
           <table>
             <thead><tr><th scope="col">Work</th><th scope="col">Claude</th><th scope="col">OpenAI</th></tr></thead>
@@ -83,6 +72,25 @@ export default async function ApplyingSettingsPage(props: PageProps) {
             </tbody>
           </table>
         </Details>
+      </section>
+      <section className="card" id="openai-key">
+        <h2>OpenAI key {ai.connected.openai ? <span className="ok small">Connected</span> : <span className="error small">Not connected</span>}</h2>
+        <p className="small">Saving a key doesn&apos;t switch anything: TC Hunter keeps using the provider picked above until you change it there.</p>
+        {keyNote && aiDone[keyNote] ? <Status>{aiDone[keyNote]}</Status> : null}
+        {keyRefused ? <p className="error">{keyRefused}</p> : null}
+        <p className="small">On platform.openai.com, press <strong>Create new secret key</strong> and copy the whole key it shows (it starts with sk-proj- and is shown only once). TC Hunter checks it with OpenAI, then locks it in the server&apos;s vault. It is never shown again, here or anywhere.</p>
+        {fresh ? (
+          <>
+            <form action={openAiKeyAction} className="inline-form">
+              <label className="small">OpenAI key<input name="key" type="password" autoComplete="off" placeholder={ai.connected.openai ? "Connected: paste a new key to replace it" : "sk-proj-..."} /></label>
+              <button className="small">Save key</button>
+            </form>
+            {ai.connected.openai ? (
+              <form action={openAiKeyAction} className="inline-form"><input type="hidden" name="remove" value="1" /><button className="small secondary">Remove the OpenAI key</button></form>
+            ) : null}
+          </>
+        ) : <NeedsConfirm what="Adding a key" />}
+        <p className="muted small">The Claude key stays where it is today: ANTHROPIC_API_KEY on Railway.</p>
       </section>
       <section className="card" id="applying">
         <h2>Applying for you</h2>
