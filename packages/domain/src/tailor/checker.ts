@@ -1,7 +1,7 @@
 import { canonicalSkill, findSkills, lexiconNames } from "../jobs/skills";
 import { containsPhrase, STOPWORDS } from "../jobs/text";
 import type { Proficiency } from "../resume/types";
-import type { BlockReason, TailorPosting, TailorProfile, Transform } from "./types";
+import type { BlockReason, LetterSource, ResumeSource, TailorPosting, TailorProfile, Transform } from "./types";
 
 /**
  * The claim checker (risk 3, layer 3). Deterministic: a line passes only when every
@@ -259,16 +259,83 @@ export function checkLine(rawText: string, factIds: string[], ctx: CheckContext)
   return { ok: true, transform, text };
 }
 
+/** One phrase the export check stopped: the words as the document writes them, and the skill they name. */
+export interface ExportLeak { term: string; skill: string }
+/** Where a leak sits in the draft, so the page can say exactly what to change. */
+export interface ExportLeakSpot extends ExportLeak { where: string; anchor: string; text: string }
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The employer and job title the document is for are its subject, not a claim: "Dear GitLab hiring team"
+ * doesn't say the applicant knows GitLab (the lexicon spells Git as "gitlab" too). They are blanked out
+ * before the export check, the same allowance checkLine gives them (allowNames).
+ */
+export function maskNames(text: string, names: string[]): string {
+  return [...new Set(names.map((n) => n.trim()).filter((n) => n.length >= 2))]
+    .sort((a, b) => b.length - a.length)
+    .reduce((t, n) => t.replace(new RegExp(`(^|[^A-Za-z0-9])${escapeRe(n)}(?=$|[^A-Za-z0-9])`, "gi"), "$1 · "), text);
+}
+
+/** Everything the applicant's own profile says, in any row: a term found here is theirs to use. */
+function ownText(profile: TailorProfile): string {
+  return [
+    profile.about?.text ?? "",
+    ...profile.experience.flatMap((e) => [e.title, e.employer ?? "", ...e.bullets.filter((b) => b.verified).map((b) => b.text)]),
+    ...profile.skills.filter((s) => s.verified).flatMap((s) => [s.name, ...s.aliases]),
+    ...profile.education.filter((e) => e.verified).flatMap((e) => [e.institution, e.degree ?? "", e.field ?? ""]),
+    ...profile.credentials.filter((c) => c.verified).flatMap((c) => [c.name, c.issuer ?? ""]),
+    ...profile.answers.filter((a) => a.approved).map((a) => a.text),
+    ...profile.stories.filter((s) => s.approved).map((s) => s.text),
+  ].join("\n");
+}
+
+/** The gap terms in a text, each with the words as written there and the gap skill it is a name for. */
+export function exportLeakDetails(exportedText: string, profile: TailorProfile, gapSkills: string[], allowNames: string[] = []): ExportLeak[] {
+  const text = maskNames(exportedText, allowNames);
+  const own = ownText(profile);
+  const out: ExportLeak[] = [];
+  for (const skill of [...new Set(gapSkills)]) {
+    for (const g of [...new Set([skill, ...lexiconNames(skill)])]) {
+      if (!containsPhrase(text, g) || containsPhrase(own, g)) continue;
+      const m = new RegExp(`(?:^|[^A-Za-z0-9])(${escapeRe(g)})(?=$|[^A-Za-z0-9])`, "i").exec(text);
+      const term = m?.[1] ?? g;
+      if (!out.some((o) => o.term.toLowerCase() === term.toLowerCase())) out.push({ term, skill });
+    }
+  }
+  return out;
+}
+
 /**
  * Layer 5: the same rule over text pulled back out of an exported PDF or Word file.
  * Returns the gap-skill names that leaked (any one fails the export).
  */
-export function exportLeaks(exportedText: string, profile: TailorProfile, gapSkills: string[]): string[] {
-  const own = [
-    ...profile.experience.flatMap((e) => [e.title, e.employer ?? "", ...e.bullets.filter((b) => b.verified).map((b) => b.text)]),
-    ...profile.skills.filter((s) => s.verified).flatMap((s) => [s.name, ...s.aliases]),
-    ...profile.answers.filter((a) => a.approved).map((a) => a.text),
-    ...profile.stories.filter((s) => s.approved).map((s) => s.text),
-  ].join("\n");
-  return gapTermsFor(gapSkills).filter((g) => containsPhrase(exportedText, g) && !containsPhrase(own, g));
+export function exportLeaks(exportedText: string, profile: TailorProfile, gapSkills: string[], allowNames: string[] = []): string[] {
+  const own = ownText(profile);
+  const text = maskNames(exportedText, allowNames);
+  return gapTermsFor(gapSkills).filter((g) => containsPhrase(text, g) && !containsPhrase(own, g));
+}
+
+/**
+ * The export check run part by part over a draft (only the parts that are switched on), so the page can name
+ * the phrase, the paragraph or line it is in, and point at that part's Edit and Leave out buttons.
+ */
+export function exportLeakSpots(source: ResumeSource | LetterSource, profile: TailorProfile, gapSkills: string[], allowNames: string[] = []): ExportLeakSpot[] {
+  const names = [...allowNames, source.target.employer, source.target.title];
+  const parts: Array<{ where: string; anchor: string; text: string }> = [];
+  if (source.kind === "letter") {
+    source.paragraphs.forEach((p, i) => { if (p.included) parts.push({ where: `paragraph ${i + 1}`, anchor: `para-${i}`, text: p.text }); });
+  } else {
+    if (source.summary?.included) parts.push({ where: "the Summary", anchor: "summary", text: source.summary.text });
+    source.experience.forEach((it, ii) => {
+      if (!it.included) return;
+      parts.push({ where: `the ${it.title} heading`, anchor: `item-${ii}`, text: [it.title, it.employer ?? ""].join(" ") });
+      it.lines.forEach((l, li) => { if (l.included) parts.push({ where: `a line under ${it.title}`, anchor: `line-${ii}-${li}`, text: l.text }); });
+    });
+    const skills = source.skills.filter((k) => k.included).map((k) => k.name).join(", ");
+    if (skills) parts.push({ where: "the Skills list", anchor: "skills", text: skills });
+    source.education.forEach((e) => parts.push({ where: "Education", anchor: "education", text: [e.institution, e.degree, e.field].filter(Boolean).join(" ") }));
+    source.credentials.forEach((c) => parts.push({ where: "Certifications", anchor: "credentials", text: c.name }));
+  }
+  return parts.flatMap((p) => exportLeakDetails(p.text, profile, gapSkills, names).map((l) => ({ ...l, ...p })));
 }

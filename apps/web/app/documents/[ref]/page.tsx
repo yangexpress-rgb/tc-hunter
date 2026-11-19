@@ -65,10 +65,13 @@ export default async function DocumentPage(props: Props) {
   return (
     <>
       <TopBar signedIn />
-      <p><a href={`/jobs/${d.job.ref}`}>← {d.job.title}</a></p>
+      {/* Review starts from and returns to the application's tracker page (Yong, 2026-11-19); the job page when there's no application yet. */}
+      <p>{d.applicationRef
+        ? <a href={`/applications/${d.applicationRef}#stage-getting_ready`}>← Back to your application: {d.job.title}</a>
+        : <a href={`/jobs/${d.job.ref}#stage-getting_ready`}>← Back to {d.job.title}</a>}</p>
       <h1>{KIND_LABEL[d.kind]} for {d.job.title}</h1>
       <p className="job-meta">{d.job.employer} · Version {d.version} · {STATUS_LABEL[d.status]}</p>
-      <Flash saved={saved || params.approved === "1"} error={error} />
+      {draft && d.leaks.length ? <LeakBanner d={d} stopped={params.e === "TC_EXPORT_LEAK"} /> : <Flash saved={saved || params.approved === "1"} error={error} />}
       {params.approved === "1" ? <p className="status" role="status">Approved. You can download it below.</p> : null}
       {revising ? <><meta httpEquiv="refresh" content="4" /><p className="status" role="status">{d.source.kind === "resume" && d.source.experience.length === 0
         ? "This draft was made before your work history was in it. Claude is writing it again from your whole profile now. This page moves to it when it's ready."
@@ -114,6 +117,43 @@ export default async function DocumentPage(props: Props) {
   );
 }
 
+const leakAt = (d: DocumentView, anchor: string) => d.leaks.some((l) => l.anchor === anchor);
+
+/** The words around a phrase, so the banner shows it in place. */
+function around(text: string, term: string): string {
+  const i = text.toLowerCase().indexOf(term.toLowerCase());
+  if (i < 0) return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+  const from = Math.max(0, text.lastIndexOf(" ", Math.max(0, i - 60)));
+  const to = text.indexOf(" ", Math.min(text.length, i + term.length + 60));
+  return `${from > 0 ? "…" : ""}${text.slice(from, to < 0 ? undefined : to).trim()}${to < 0 ? "" : "…"}`;
+}
+
+/**
+ * The export check's findings, phrase by phrase, at the top in red (Yong, 2026-11-19: never a vague "something").
+ * Shown before Approve is pressed too, so it never comes as a surprise.
+ */
+function LeakBanner({ d, stopped }: { d: DocumentView; stopped: boolean }) {
+  const box = d.kind === "letter" ? "paragraph" : "line";
+  return (
+    <section className="error leak-banner" role="alert">
+      <p><strong>{stopped ? "Approve was stopped, and nothing was saved." : "This version can't be approved yet."}</strong>{" "}
+        {d.leaks.length === 1 ? "One phrase" : `${d.leaks.length} phrases`} would claim something your profile doesn&apos;t show:</p>
+      <ul>
+        {d.leaks.map((l, i) => (
+          <li key={i}>
+            <a href={`#${l.anchor}`}>“{l.term}” in {l.where}</a>: “{around(l.text, l.term)}”.{" "}
+            {l.kind === "gap"
+              ? <>This job asks for {l.term.toLowerCase() === l.skill.toLowerCase() ? l.skill : `${l.skill} (“${l.term}” is a name for it)`}, and your profile doesn&apos;t show it.</>
+              : <>Your profile doesn&apos;t mention “{l.term}”, so it was held back once already.</>}
+          </li>
+        ))}
+      </ul>
+      <p>To fix it, open <strong>Edit</strong> under that {box} and take the phrase out, or press <strong>Leave out</strong> to drop the {box}.
+        If you really do have this, add it to <a href="/profile">your profile</a> with proof, then make a new version.</p>
+    </section>
+  );
+}
+
 /** The other choice next to Approve (Yong, 2026-11-15): tell Claude what to change, and get the next version. */
 function ReviseBox({ d }: { d: DocumentView }) {
   return (
@@ -136,6 +176,7 @@ function ApproveBar({ d, here }: { d: DocumentView; here: string }) {
         {d.diffViewedAt ? (
           <form action={approveAction}>
             <input type="hidden" name="doc" value={d.id} /><input type="hidden" name="back" value={`/documents/${d.ref}`} />
+            <input type="hidden" name="kind" value={d.kind} />
             <button>Approve this version</button>
             <span className="muted"> Approved versions are locked. You can still make a new one later.</span>
           </form>
@@ -178,12 +219,12 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
       <SummaryBlock d={d} s={s} here={here} editable={editable} />
       <h2>Experience</h2>
       {s.experience.map((it, ii) => (
-        <article key={it.itemId} className={`doc-item${it.included ? "" : " is-off"}`}>
+        <article key={it.itemId} id={`item-${ii}`} className={`doc-item${it.included ? "" : " is-off"}${leakAt(d, `item-${ii}`) ? " has-leak" : ""}`}>
           <div className="doc-role"><strong>{it.title}</strong><span className="muted">{monthYear(it.start)} – {monthYear(it.end)}</span></div>
           {it.employer || it.location ? <div className="muted">{[it.employer, it.location].filter(Boolean).join(", ")}</div> : null}
           <ul className="doc-lines">
             {it.lines.map((l, li) => (
-              <li key={li} className={l.included ? "" : "is-off"}>
+              <li key={li} id={`line-${ii}-${li}`} className={`${l.included ? "" : "is-off"}${leakAt(d, `line-${ii}-${li}`) ? " has-leak" : ""}`}>
                 <span>{l.text}</span>
                 {l.transform === "rephrased" ? <span className="chip">Reworded</span> : null}
                 {editable ? (
@@ -209,7 +250,7 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
           ) : null}
         </article>
       ))}
-      <h2>Skills</h2>
+      <h2 id="skills">Skills</h2>
       <ul className="chips plain">
         {s.skills.map((k) => (
           <li key={k.skillId} className={k.included ? "" : "is-off"}>
@@ -221,8 +262,8 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
         ))}
       </ul>
       {editable ? <p className="hint">Tap a skill to show or hide it. Only skills from your profile can be listed.</p> : null}
-      {s.education.length ? (<><h2>Education</h2><ul>{s.education.map((e) => <li key={e.id}>{[e.degree, e.field].filter(Boolean).join(", ")}{e.degree || e.field ? ", " : ""}{e.institution}{e.end ? ` (${monthYear(e.end)})` : ""}</li>)}</ul></>) : null}
-      {s.credentials.length ? (<><h2>Certifications</h2><ul>{s.credentials.map((c) => <li key={c.id}>{[c.name, c.issuer].filter(Boolean).join(", ")}</li>)}</ul></>) : null}
+      {s.education.length ? (<><h2 id="education">Education</h2><ul>{s.education.map((e) => <li key={e.id}>{[e.degree, e.field].filter(Boolean).join(", ")}{e.degree || e.field ? ", " : ""}{e.institution}{e.end ? ` (${monthYear(e.end)})` : ""}</li>)}</ul></>) : null}
+      {s.credentials.length ? (<><h2 id="credentials">Certifications</h2><ul>{s.credentials.map((c) => <li key={c.id}>{[c.name, c.issuer].filter(Boolean).join(", ")}</li>)}</ul></>) : null}
     </section>
   );
 }
@@ -234,7 +275,7 @@ function SummaryBlock({ d, s, here, editable }: { d: DocumentView; s: ResumeSour
     return editable ? <p className="muted">No summary at the top: your profile has no About yet. <a href="/profile#about">Add your About</a>, then make a new version.</p> : null;
   }
   return (
-    <div className={`doc-para${sum.included ? "" : " is-off"}`}>
+    <div id="summary" className={`doc-para${sum.included ? "" : " is-off"}${leakAt(d, "summary") ? " has-leak" : ""}`}>
       <h2>Summary</h2>
       {sum.text.split(/\n+/).filter((x) => x.trim()).map((p, i) => <p key={i}>{p}</p>)}
       {sum.transform === "rephrased" ? <span className="chip">Written for this job</span> : sum.transform === "selected" ? <span className="chip">First part of your About</span> : null}
@@ -260,7 +301,7 @@ function LetterPane({ d, s, here, editable, name }: { d: DocumentView; s: Letter
     <section className="doc-preview" aria-label="This version">
       <p>Dear {s.target.employer} hiring team,</p>
       {s.paragraphs.map((p, i) => (
-        <div key={i} className={`doc-para${p.included ? "" : " is-off"}`}>
+        <div key={i} id={`para-${i}`} className={`doc-para${p.included ? "" : " is-off"}${leakAt(d, `para-${i}`) ? " has-leak" : ""}`}>
           <p>{p.text}</p>
           {editable ? (
             <span className="line-tools">

@@ -224,7 +224,7 @@ export const L1 = {
   "error.claim.proficiency_raise": "That wording makes your level sound higher than you said. Change your level in your profile if it's wrong.",
   "error.claim.unverified_fact": "That line rests on a row you haven't checked yet. Check it in your profile first.",
   "error.claim.unconfirmed_alias": "That's a new name for one of your skills. Confirm it under \"Not added\" first.",
-  "error.export_leak": "We stopped this export because it contained something your profile doesn't show. Nothing was saved.",
+  "error.export_leak": "Approve was stopped, and nothing was saved: a phrase in this version claims something your profile doesn't show. Open What changed to see what was held back, then edit or leave out that part.",
   "error.document_not_approved": "Approve this version before you download it.",
   "error.document_empty": "This version has nothing in it yet. Turn on at least one line.",
   "error.email_not_set_up": "Connecting email isn't set up on this server yet. The setup guide explains how.",

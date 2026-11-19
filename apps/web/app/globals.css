@@ -45,6 +45,10 @@ button.secondary { background: transparent; color: var(--text); border: 1px soli
 .muted { color: var(--muted); }
 .status { font-weight: 600; }
 .error { color: var(--error); font-weight: 600; }
+section.leak-banner { background: color-mix(in srgb, var(--error) 10%, transparent); border: 1px solid var(--error); border-left-width: 4px; border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+section.leak-banner p, section.leak-banner li { font-weight: 500; }
+section.leak-banner a { color: inherit; font-weight: 600; }
+.has-leak { outline: 2px solid var(--error); outline-offset: 4px; border-radius: 6px; }
 p.error { background: color-mix(in srgb, var(--error) 10%, transparent); border: 1px solid var(--error); border-left-width: 4px; border-radius: 8px; padding: 10px 14px; }
 form.stack { display: grid; gap: 12px; max-width: 380px; }
 label { display: grid; gap: 4px; font-weight: 600; font-size: 14px; }

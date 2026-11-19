@@ -4,10 +4,10 @@ import { approveDocument, confirmAlias, editDocument, newVersion, requestTailor,
 import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
-/** Only ever send people back to a Documents or Jobs page. */
+/** Only ever send people back to a Documents, Jobs or Applications page. */
 function backTo(form: FormData, fallback: string): string {
   const b = String(form.get("back") ?? "");
-  return /^\/(documents|jobs)(\/[A-Za-z0-9-]*)?(\?[a-z=&0-9_-]*)?(#[a-z0-9-]*)?$/.test(b) ? b : fallback;
+  return /^\/(documents|jobs|applications)(\/[A-Za-z0-9-]*)?(\?[a-z=&0-9_-]*)?(#[a-z0-9-]*)?$/.test(b) ? b : fallback;
 }
 const withParam = (path: string, k: string, v: string) => {
   const [base, hash] = path.split("#");
@@ -60,7 +60,18 @@ export async function editAction(form: FormData) {
 export async function approveAction(form: FormData) {
   const s = await requireSession();
   const { pool, cfg } = app();
-  await act(form, () => approveDocument(pool, cfg, s, String(form.get("doc"))), "/documents", "approved");
+  // Approving finishes the review: go back to the application's tracker page (Yong, 2026-11-19), where
+  // "Your documents" shows it ticked off and the next step. Without an application, stay on the document.
+  let target = withParam(backTo(form, "/documents"), "approved", "1");
+  try {
+    const appRef = await approveDocument(pool, cfg, s, String(form.get("doc")));
+    if (appRef) target = `/applications/${appRef}?doc_approved=${form.get("kind") === "letter" ? "letter" : "resume"}#stage-getting_ready`;
+  } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("documents.action_failed", { code });
+    target = withParam(backTo(form, "/documents"), "e", code);
+  }
+  redirect(target);
 }
 
 export async function newVersionAction(form: FormData) {
