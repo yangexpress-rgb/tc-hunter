@@ -39,7 +39,15 @@ export function AnswerHere({ p, fields, back }: { p: Packet; fields: Field[]; ba
                     {f.options.map((o) => <option key={o}>{o}</option>)}
                   </select>
                 ) : f.type === "textarea" ? (
-                  <textarea id={`answer_${f.id}`} name={`answer_${f.id}`} rows={4} maxLength={10000} required defaultValue={f.answer ?? ""} />
+                  <>
+                    <textarea id={`answer_${f.id}`} name={`answer_${f.id}`} rows={4} maxLength={10000} required={!(f.essay && p.stories.length)} defaultValue={f.answer ?? ""} />
+                    {/* A written answer: theirs to write, or one of their stories word for word (Yong, 2026-11-19). */}
+                    {f.essay && p.stories.length ? (
+                      <label className="small">Or use one of your stories, word for word
+                        <select name={`story_${f.id}`} defaultValue=""><option value="">Write my own</option>{p.stories.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}</select>
+                      </label>
+                    ) : null}
+                  </>
                 ) : (
                   <input id={`answer_${f.id}`} name={`answer_${f.id}`} maxLength={1000} required defaultValue={f.answer ?? ""} />
                 )}

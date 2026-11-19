@@ -5,7 +5,7 @@ import {
   removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveSummary, fillAboutFromResume, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
   verifyAll, verifyFact, verifyRole, requestScan, type FactTable,
 } from "@tc-hunter/db";
-import { ANSWER_PRESETS, ClaudeAboutFinder, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
+import { aiIsOff, ANSWER_PRESETS, ClaudeAboutFinder, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -13,8 +13,11 @@ import { app, log, requireSession } from "@/lib/server";
 const resumeReader = (names: string[], instructions?: string | null) =>
   (resumeReaderName() === "claude" ? new ClaudeResumeParser(undefined, names, instructions ?? null) : new RulesResumeParser());
 
-/** Claude looks for the resume's summary when the built-in rules can't find it (same switch as the resume reader). */
-const aboutFinder = () => (resumeReaderName() === "claude" ? new ClaudeAboutFinder() : undefined);
+/**
+ * Claude looks for the resume's summary when the built-in rules can't find it (same switch as the resume
+ * reader). Never in No AI mode (Yong, 2026-11-19): the built-in rules only, word for word.
+ */
+const aboutFinder = async () => (resumeReaderName() === "claude" && !(await aiIsOff()) ? new ClaudeAboutFinder() : undefined);
 
 /** Only ever send people back to a profile page (never an outside address). */
 function backTo(form: FormData, fallback = "/profile"): string {
@@ -127,7 +130,7 @@ export async function saveSummaryAction(form: FormData) {
 export async function fillAboutAction(form: FormData) {
   const s = await requireSession();
   await act(form, async () => {
-    if (!(await fillAboutFromResume(app().pool, app().cfg, s, { finder: aboutFinder(), force: true }))) throw new Error("TC_NO_ABOUT_IN_RESUME");
+    if (!(await fillAboutFromResume(app().pool, app().cfg, s, { finder: await aboutFinder(), force: true }))) throw new Error("TC_NO_ABOUT_IN_RESUME");
   }, "/profile#about");
 }
 
@@ -139,6 +142,9 @@ export async function importAction(form: FormData) {
   const file = form.get("file");
   if (!(file instanceof File) || file.size === 0) redirect("/profile/import?e=TC_RESUME_UNREADABLE");
   if (file.size > MAX_RESUME_BYTES) redirect("/profile/import?e=TC_RESUME_TOO_BIG");
+  // No AI mode (Yong, 2026-11-19): a resume can't be read automatically, and isn't kept to be read by AI
+  // later. A LinkedIn data download (.zip) is sorted by LinkedIn itself, so it still comes in.
+  if (!/\.zip$/i.test(file.name) && await aiIsOff()) redirect("/profile/import?e=TC_NO_AI_RESUME");
   const bytes = new Uint8Array(await file.arrayBuffer());
   let target: string;
   try {
@@ -189,6 +195,8 @@ export async function saveLinkedInAction(form: FormData) {
     redirect(`/profile/import?e=${errorCode(e) ?? "TC_LINKEDIN_URL"}#linkedin`);
   }
   if (!url) redirect("/profile/import?saved=1#linkedin");
+  // No AI mode: the link is kept, but the profile isn't read (Yong, 2026-11-19).
+  if (await aiIsOff()) redirect("/profile/import?li=no_ai#linkedin");
   const read = await readLinkedInProfile(url, new PoliteFetcher({ perHostMs: 0, timeoutMs: 15000 }));
   log.info("profile.linkedin_read", { ok: read.ok, reason: read.ok ? null : read.reason });
   if (!read.ok) redirect(`/profile/import?li=${read.reason}#linkedin`);

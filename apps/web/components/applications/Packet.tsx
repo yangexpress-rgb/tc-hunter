@@ -5,7 +5,7 @@ import { Details } from "@/components/Layers";
 import { BudgetLine, day } from "@/components/applications/AppBits";
 import { packetAnswerAction, packetApproveAction, standingFromAppAction, workAuthAnswerAction, resolveOutcomeAction, sendApproveAction, serverSendApproveAction, submittedAction } from "@/app/applications/actions";
 import { stepUpAction } from "@/app/settings/vault-actions";
-import { STANDING_ANSWERS, standingKindFor, type StepKind } from "@tc-hunter/domain";
+import { NO_AI_PACKET_LINE, STANDING_ANSWERS, standingKindFor, type StepKind } from "@tc-hunter/domain";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 
@@ -113,7 +113,7 @@ export function PacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa
         <ul className="plain packet-fields">
           {p.fields.map((f) => (
             <li key={f.id} className={f.step ? "packet-field yours" : "packet-field"}>
-              <div className="packet-q">{f.label}</div>
+              <div className="packet-q">{f.label}{f.required && !f.willFill && !f.step ? <> <span className="error small">Needs you</span></> : null}</div>
               {f.step ? (
                 <div className="muted">{STEP[f.step] ?? "Always your step"}. You answer this on their site.{f.note ? <div>{f.note}</div> : null}</div>
               ) : f.willFill ? (
@@ -224,6 +224,29 @@ function AnswerForm({ p, f, back, label }: { p: Packet; f: Packet["fields"][numb
   );
 }
 
+/** A written answer still open: one of the applicant's approved stories, used word for word (Yong, 2026-11-19). */
+function StoryPicker({ p, f, back }: { p: Packet; f: Packet["fields"][number]; back: string }) {
+  if (!f.essay || f.willFill || f.step || !p.stories.length) return null;
+  return (
+    <Details summary="Use one of your stories">
+      <ul className="plain">
+        {p.stories.map((s) => (
+          <li key={s.id}>
+            <form action={packetAnswerAction} className="stack">
+              <Hidden appRef={p.appRef} back={back} />
+              <input type="hidden" name="field" value={f.id} />
+              <input type="hidden" name="story" value={s.id} />
+              <strong>{s.title}</strong>
+              <span className="small">{s.text}</span>
+              <button className="secondary small">Use this story as written</button>
+            </form>
+          </li>
+        ))}
+      </ul>
+    </Details>
+  );
+}
+
 /**
  * A statement, consent, signature or personal question the form requires: answered right here,
  * as a standing answer (with what the applicant takes on), so no later form asks again.
@@ -279,6 +302,8 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
           <p><a href={`/applications/${p.appRef}/receipt`}>Download your receipt (PDF)</a></p>
         </>
       ) : null}
+      {/* No AI mode (Yong, 2026-11-19): plainly, where these answers came from. */}
+      {p.noAi && p.state !== "submitted" ? <p className="status" role="status">{NO_AI_PACKET_LINE}</p> : null}
       {missing.length && review ? <p className="error">{missing.length === 1 ? "1 required question needs" : `${missing.length} required questions need`} your answer. Answer below and TC Hunter carries on by itself.</p> : null}
       {standing.length && p.state !== "submitted" ? (
         <p className="warn">{standing.length === 1 ? "1 answer comes" : `${standing.length} answers come`} from your standing answers in Settings (statements, consents, signatures or personal questions you let TC Hunter answer). Check them: you are responsible for what they say. <a href="/settings/applying">Change in Settings</a></p>
@@ -339,6 +364,7 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
                 <div>
                   {f.note ? <div className={f.required ? "error small" : "muted"}>{f.note}{f.required ? " Required." : " Optional: left blank unless you answer."}</div> : null}
                   {review && f.type !== "file" ? <AnswerForm p={p} f={f} back={back} label="Use this answer" /> : null}
+                  {review ? <StoryPicker p={p} f={f} back={back} /> : null}
                 </div>
               )}
             </li>

@@ -1,5 +1,5 @@
 import { coachNudges, fillAboutFromResume, getProfile, listGoals, listResumeFiles, profileDuplicates, resumeReaderName } from "@tc-hunter/db";
-import { ABOUT_GUIDE, ClaudeAboutFinder, t } from "@tc-hunter/domain";
+import { ABOUT_GUIDE, aiIsOff, ClaudeAboutFinder, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -21,7 +21,7 @@ export default async function ProfilePage(props: PageProps) {
   const { pool, cfg } = app();
   // An empty About fills itself from the uploaded resume, once per file (Yong, 2026-11-17: "I have content in my initial resume").
   try {
-    await fillAboutFromResume(pool, cfg, session, { finder: resumeReaderName() === "claude" ? new ClaudeAboutFinder() : undefined });
+    await fillAboutFromResume(pool, cfg, session, { finder: resumeReaderName() === "claude" && !(await aiIsOff()) ? new ClaudeAboutFinder() : undefined });
   } catch { /* the page still shows; the button below tries again */ }
   const [{ saved, error, params }, profile, nudges, goals, copies, files] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
     listGoals(pool, session), profileDuplicates(pool, session), listResumeFiles(pool, session)]);

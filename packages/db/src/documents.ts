@@ -37,6 +37,18 @@ const STORY_PARTS = ["situation", "task", "action", "result"] as const;
  * (Yong, 2026-11-15: "the app should always look at whatever is the latest from the profile";
  * revising is up to him). The rules against invented text still apply to every line.
  */
+/**
+ * The applicant's approved stories, word for word (title and text), for the story picker on a written
+ * answer (Yong, 2026-11-19: in No AI mode the applicant writes it or uses one of their stories as it is).
+ */
+export async function approvedStories(c: pg.PoolClient, dk: Buffer): Promise<Array<{ id: string; title: string; text: string }>> {
+  const rows = (await c.query("SELECT id, title, story_enc, status, last_reviewed_at FROM story_bank_item WHERE status = 'approved' ORDER BY updated_at DESC")).rows;
+  return rows.filter((s) => !isStale(s.last_reviewed_at) && s.story_enc).map((s) => {
+    const star = JSON.parse(decryptField(dk, "story_bank_item.story", s.story_enc)) as Record<string, string>;
+    return { id: String(s.id), title: String(s.title), text: STORY_PARTS.map((k) => star[k]).filter(Boolean).join(" ") };
+  }).filter((s) => s.text.trim());
+}
+
 export async function loadTailorProfile(c: pg.PoolClient, dk: Buffer): Promise<TailorProfile> {
   const q = async (sql: string) => (await c.query(sql)).rows;
   // pg reads a DATE as local midnight, so take the local parts (toISOString could shift the day).
@@ -173,6 +185,7 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
     const revised = from ? { feedback: payload.feedback, revised_from: from.public_ref } : {};
     const pages = (await c.query("SELECT tailor_target_pages FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.tailor_target_pages ?? 2;
     const made: Array<{ kind: DocKind; ref: string; version: number; blocked: number }> = [];
+    const skipped: DocKind[] = [];
     // Counts only (never content), so the worker log shows what the profile gave the writer.
     const counts = { roles: profile.experience.length, lines: profile.experience.reduce((n, e) => n + e.bullets.length, 0), skills: profile.skills.length,
       education: profile.education.length, credentials: profile.credentials.length };
@@ -189,6 +202,9 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: d.blocked.length } });
       } else {
         const { proposal: first, meta } = await deps.letter.propose(profile, posting, opts);
+        // No AI mode with no saved letter (Yong, 2026-11-19): none is generated. The application goes
+        // without one where the employer allows it; a form that requires one asks the applicant.
+        if (meta.skipped && !first.paragraphs.length) { skipped.push(kind); continue; }
         const pr = deps.proofread ? await proofreadLetter(first, profile, posting, deps.proofread) : null;
         const d = buildLetter(profile, posting, pr?.proposal ?? first);
         d.blocked.push(...(pr?.blocked ?? []));
@@ -197,7 +213,7 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: d.blocked.length } });
       }
     }
-    return { jobRef: posting.ref, documents: made, ...counts };
+    return { jobRef: posting.ref, documents: made, ...(skipped.length ? { skipped } : {}), ...counts };
   });
 }
 

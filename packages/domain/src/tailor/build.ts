@@ -70,7 +70,7 @@ function ownSummary(text: string): { text: string; trimmed: boolean } {
  * The About at the top of the resume: Claude's version for this job when it passes the checker,
  * otherwise the applicant's own About (its first paragraph). Nothing when there is neither.
  */
-export function buildSummary(profile: TailorProfile, proposal: Pick<ResumeProposal, "summary">, ctx: CheckContext, blocked: Blocked[]): ResumeSummary | null {
+export function buildSummary(profile: TailorProfile, proposal: Pick<ResumeProposal, "summary" | "asIs">, ctx: CheckContext, blocked: Blocked[]): ResumeSummary | null {
   const about = profile.about?.text.trim() ? profile.about : null;
   const p = proposal.summary;
   if (p && p.text?.trim()) {
@@ -79,6 +79,8 @@ export function buildSummary(profile: TailorProfile, proposal: Pick<ResumePropos
     blocked.push({ text: r.text, factIds: p.fact_ids ?? [], reason: r.reason, terms: r.terms });
   }
   if (!about) return null;
+  // No AI mode: the saved About, word for word.
+  if ((proposal as Pick<ResumeProposal, "asIs">).asIs) return { factIds: [about.id], text: about.text.trim(), original: about.text, transform: "verbatim", included: true };
   const own = ownSummary(about.text);
   return { factIds: [about.id], text: own.text, original: about.text, transform: own.trimmed ? "selected" : "verbatim", included: true };
 }
@@ -106,7 +108,7 @@ export function buildResume(profile: TailorProfile, posting: TailorPosting, prop
     const lines = e.bullets.filter((b) => b.verified).map((b, i) => {
       const p = proposed.get(b.id);
       const line: ResumeLine = p ? { ...p, original: b.text } : { factIds: [b.id], text: b.text, original: b.text, transform: "verbatim", included: true };
-      return { line, i, score: relevance(line.text, posting) };
+      return { line, i, score: proposal.asIs ? 0 : relevance(line.text, posting) };
     }).sort((a, b) => b.score - a.score || a.i - b.i).map((x, pos) => {
       if (x.line.transform === "verbatim" && pos !== x.i) x.line.transform = "reordered";
       return x.line;
@@ -124,8 +126,10 @@ export function buildResume(profile: TailorProfile, posting: TailorPosting, prop
       : posting.requirements.nice_to_have.some((r) => sameSkill(s.name, r, s.aliases)) ? 1 : 2;
     return 1000 + req * 100 + (s.evidenceIds.length ? 0 : 50);
   };
-  const skills = usable.map((s) => ({ s, r: rank(s) })).sort((a, b) => a.r - b.r)
-    .map(({ s }, i) => ({ skillId: s.id, name: s.name, included: i < 14 }));
+  const skills = proposal.asIs
+    ? usable.map((s) => ({ skillId: s.id, name: s.name, included: true }))
+    : usable.map((s) => ({ s, r: rank(s) })).sort((a, b) => a.r - b.r)
+      .map(({ s }, i) => ({ skillId: s.id, name: s.name, included: i < 14 }));
 
   const education = profile.education.filter((e) => e.verified).sort(byRecent)
     .map((e) => ({ id: e.id, institution: e.institution, degree: e.degree, field: e.field, end: e.end, honours: e.honours }));
@@ -142,6 +146,8 @@ export function buildResume(profile: TailorProfile, posting: TailorPosting, prop
   // Fit the target length by selection: every role keeps its best line, then the most relevant lines until the pages are full.
   const shownItems = items.filter((it) => it.included);
   let budget = targetPages * LINES_PER_PAGE - 6 - 4 - (summary ? 3 + lineCost(summary.text) : 0) - (education.length ? 3 + education.length * 2 : 0) - (credentials.length ? 3 + credentials.length : 0) - shownItems.length * 3;
+  // No AI mode: the master resume as it is, every line in; the applicant selects by hand.
+  if (proposal.asIs) budget = Number.POSITIVE_INFINITY;
   for (const it of items) for (const l of it.lines) l.included = false;
   // Lines the feedback left out stay in the list, switched off, so they can be switched back on.
   for (const it of shownItems) { const first = it.lines.find((l) => !leftOut(l)); if (first && budget > 0) { first.included = true; budget -= lineCost(first.text); } }
