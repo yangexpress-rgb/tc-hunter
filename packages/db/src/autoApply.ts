@@ -435,7 +435,7 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   }
   await withApplicant(pool, auto, async (c) => {
     await c.query("UPDATE job_posting SET employer_apply_url = $2, employer_lookup = $3 WHERE id = $1",
-      [posting.id, r.found ? r.url : null, JSON.stringify(r.found ? { found: true, title: r.title, location: r.location, site: r.spec.url, at: new Date() } : { found: false, reason: r.reason, site: r.spec?.url ?? null, at: new Date() })]);
+      [posting.id, r.found ? r.url : null, JSON.stringify(r.found ? { found: true, title: r.title, location: r.location, site: r.spec?.url ?? r.url, at: new Date() } : { found: false, reason: r.reason, site: r.spec?.url ?? null, at: new Date() })]);
     // A board found by this lookup is remembered for the employer, as discovery does.
     if (r.spec && !known && key) {
       const id = await upsertSource(c, r.spec);

@@ -1,7 +1,8 @@
 import { findBoard, type CareersLookup } from "../jobs/discover";
 import { SourceRefusedError, type Fetcher } from "../jobs/fetcher";
 import { fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem } from "../jobs/sources";
-import { detectAts } from "../packet/adapters";
+import { detectAts, isAvature } from "../packet/adapters";
+import { htmlToText } from "../jobs/text";
 import type { RawPosting, SourceSpec } from "../jobs/types";
 
 /**
@@ -16,7 +17,7 @@ import type { RawPosting, SourceSpec } from "../jobs/types";
 export interface EmployerJobQuery { employer: string; title: string; location: string | null }
 
 export type EmployerJobResult =
-  | { found: true; url: string; title: string; location: string | null; score: number; spec: SourceSpec }
+  | { found: true; url: string; title: string; location: string | null; score: number; spec: SourceSpec | null }
   | { found: false; reason: string; spec: SourceSpec | null };
 
 const SHORT: Record<string, string> = {
@@ -95,11 +96,15 @@ const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "w
 export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: { known?: SourceSpec | null; lookup?: CareersLookup } = {}): Promise<EmployerJobResult> {
   let spec: SourceSpec | null = opts.known && SUPPORTED.has(opts.known.kind) && !isNoFetchHost(opts.known.url) ? opts.known : null;
   let system: string | null = null;
+  let careersUrl: string | null = opts.known?.kind === "careers_page" ? opts.known.url : null;
+  // An Avature careers site (Siemens) is searched directly: its job list isn't a feed TC Hunter reads otherwise.
+  if (careersUrl && isAvature(careersUrl)) return findOnAvature(q, careersUrl, f);
   try {
     if (!spec) spec = await findBoard({ name: q.employer }, f);
     if (!spec && opts.lookup) {
       const idea = await opts.lookup.find(q.employer).catch(() => null);
       if (idea) {
+        careersUrl = idea.careersUrl ?? careersUrl;
         system = idea.careersUrl ? unreadableCareersSystem(idea.careersUrl) : null;
         spec = await findBoard({ name: q.employer, boards: idea.boards, careersUrl: idea.careersUrl }, f);
       }
@@ -107,6 +112,10 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
   } catch (e) {
     if (e instanceof SourceRefusedError) return { found: false, reason: `${q.employer}'s careers site turned it away`, spec: null };
     throw e;
+  }
+  if ((!spec || spec.kind === "careers_page") && careersUrl) {
+    const base = await avatureBase(careersUrl, f).catch(() => null);
+    if (base) return findOnAvature(q, base, f);
   }
   if (!spec) {
     return { found: false, spec: null, reason: system
@@ -160,4 +169,96 @@ export function pickEmployerLink(links: PageLink[], here: string): { href: strin
   if (apply) return { href: apply.href, leaves: true };
   const onward = ok.find((l) => isJobBoardHost(l.href) && APPLY_WORDS.test(l.text) && hostOfUrl(l.href) === hostOfUrl(here));
   return onward ? { href: onward.href, leaves: false } : null;
+}
+
+// Avature careers sites (Siemens' jobs.siemens.com, Yong 2026-11-19) ----------------------------------
+
+const AV_PATH = /\/([a-z]{2}_[A-Z]{2})\/([A-Za-z0-9_-]+)\/(?:SearchJobs|JobDetail|FolderDetail)\b/;
+
+/**
+ * Where an Avature site's job search lives ("https://jobs.siemens.com/en_US/externaljobs"), from one of
+ * its addresses or from a careers page that links to it (that page, then its site's front page).
+ */
+export async function avatureBase(url: string, f: Fetcher): Promise<string | null> {
+  const fromUrl = (u: string) => {
+    try {
+      const x = new URL(u);
+      const m = AV_PATH.exec(x.pathname) ?? /^\/([a-z]{2}_[A-Z]{2})\/([A-Za-z0-9_-]+)\/(?:ApplicationMethods|Register|Login|Error)\b/.exec(x.pathname);
+      return m ? `${x.origin}/${m[1]}/${m[2]}` : null;
+    } catch { return null; }
+  };
+  const direct = fromUrl(url);
+  if (direct) return direct;
+  const pages = [url];
+  try { const root = new URL(url).origin + "/"; if (root !== url) pages.push(root); } catch { return null; }
+  for (let i = 0; i < pages.length && i < 4; i++) {
+    const p = pages[i]!;
+    if (isNoFetchHost(p)) continue;
+    const r = await f.get(p, { kind: "page" }).catch(() => null);
+    if (!r) continue;
+    const landed = fromUrl(r.url);
+    if (landed) return landed;
+    for (const m of r.text.matchAll(/href="([^"]+)"/g)) {
+      let href: string;
+      try { href = new URL(m[1]!.replace(/&amp;/g, "&"), r.url).href; } catch { continue; }
+      const b = AV_PATH.test(new URL(href).pathname) ? fromUrl(href) : null;
+      if (b && !isNoFetchHost(b)) return b;
+    }
+    // A company page that links to its jobs site ("jobs.siemens.com"): that site's front page next.
+    const site = (h: string) => h.split(".").slice(-2).join(".");
+    const here = new URL(r.url).hostname;
+    for (const m of r.text.matchAll(/href="(https:\/\/(?:jobs|careers)\.[^"/]+)\/?[^"]*"/g)) {
+      try { const h = new URL(m[1]!).hostname; if (h !== here && site(h) === site(here) && !pages.includes(`${m[1]}/`)) { pages.push(`${m[1]}/`); break; } } catch { /* next */ }
+    }
+  }
+  return null;
+}
+
+/** The jobs on an Avature search page: title, address and place, as each result card shows them. */
+export function avatureResults(html: string, pageUrl: string, employer: string): RawPosting[] {
+  const out: RawPosting[] = [];
+  const seen = new Set<string>();
+  const add = (href: string, title: string, place: string | null) => {
+    let url: string;
+    try { url = new URL(href.replace(/&amp;/g, "&"), pageUrl).href; } catch { return; }
+    const t = htmlToText(title).replace(/\s+/g, " ").trim();
+    if (!t || /^(learn more|apply|share|view)$/i.test(t) || seen.has(url)) return;
+    seen.add(url);
+    const id = /JobDetail\/(?:[^/?#]*\/)?(\d+)/.exec(url)?.[1] ?? url;
+    out.push({ externalId: `avature:${id}`, url, employer, title: t, locationRaw: place, workplaceType: null, descriptionText: "", salary: null, postedAt: null, applyUrl: null, atsType: "avature" });
+  };
+  const cards = html.split(/<article\b[^>]*article--result/i).slice(1);
+  for (const c of cards) {
+    const a = /<a\b[^>]*href="([^"]*\/JobDetail\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/i.exec(c);
+    if (!a) continue;
+    // The card's line under the title: "Peachtree Corners, Georgia, United States of America • Job ID: 529223 • …".
+    const after = htmlToText(c.slice(a.index + a[0].length, a.index + a[0].length + 1500)).replace(/\s+/g, " ").trim();
+    const place = after.split(/\s*(?:•|Job ID)/)[0]!.replace(/\s+,/g, ",").trim().slice(0, 120) || null;
+    add(a[1]!, a[2]!, place);
+  }
+  if (!out.length) for (const m of html.matchAll(/<a\b[^>]*href="([^"]*\/JobDetail\/[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)) add(m[1]!, m[2]!, null);
+  return out;
+}
+
+/** The same job on an Avature careers site, by searching it for the title. */
+async function findOnAvature(q: EmployerJobQuery, base: string, f: Fetcher): Promise<EmployerJobResult> {
+  const b = /\/(SearchJobs|JobDetail|FolderDetail|ApplicationMethods|Register|Login|Error)\b/.test(base) ? (await avatureBase(base, f).catch(() => null)) ?? base : base;
+  const where = hostOf(b);
+  const search = `${b.replace(/\/$/, "")}/SearchJobs/?search=${encodeURIComponent(q.title)}`;
+  let postings: RawPosting[];
+  try {
+    const r = await f.get(search, { kind: "page" });
+    postings = avatureResults(r.text, r.url, q.employer);
+  } catch (e) {
+    if (e instanceof SourceRefusedError) return { found: false, spec: null, reason: `${q.employer}'s careers site (${where}) didn't let it search its jobs` };
+    throw e;
+  }
+  const pick = pickSameJob(q, postings);
+  if (!pick.posting) {
+    const reason = pick.why === "several" ? `${q.employer}'s careers site (${where}) lists more than one "${q.title}" job and it can't tell which one this is`
+      : pick.why === "elsewhere" ? `${q.employer}'s careers site (${where}) lists ${pick.near}, which isn't in ${q.location}`
+      : `"${q.title}" isn't on ${q.employer}'s careers site (${where}) now${pick.near ? `; the closest is "${pick.near}"` : ""}. It may be closed, or listed only on the job site`;
+    return { found: false, spec: null, reason };
+  }
+  return { found: true, url: pick.posting.url, title: pick.posting.title, location: pick.posting.locationRaw, score: pick.score, spec: null };
 }
