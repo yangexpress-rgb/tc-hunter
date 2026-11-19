@@ -90,6 +90,8 @@ export interface ApplyPage {
 
 /** Workday's own steps: an account, then a form over several pages. */
 export interface WorkdayPage extends ApplyPage {
+  /** Which multi-step system this is; Workday when absent. */
+  system?: "workday" | "avature";
   /** From the job page to the sign-in or first form page. */
   start(): Promise<"sign_in" | "form" | "human_check" | "closed">;
   signIn(email: string, password: string): Promise<"ok" | "wrong" | "unverified" | "human_check" | "site_error">;
@@ -111,6 +113,8 @@ export interface WorkdayPage extends ApplyPage {
 export interface ApplyBrowser {
   open(url: string): Promise<ApplyPage>;
   openWorkday?(url: string): Promise<WorkdayPage>;
+  /** An Avature careers site (Siemens): an account, then the application over several steps, driven like Workday. */
+  openAvature?(url: string): Promise<WorkdayPage>;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,13 +136,24 @@ export function formUrlFor(ats: Ats, url: string): string {
 }
 
 /** Which hiring system pages TC Hunter's own browser applies on. */
-export const SERVER_APPLY_ATS: readonly Ats[] = ["greenhouse", "lever", "ashby", "smartrecruiters", "workday"];
+export const SERVER_APPLY_ATS: readonly Ats[] = ["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "avature"];
 
 /** Workday's Submit and thank-you signs. */
 export const WORKDAY = {
   submit: "[data-automation-id='pageFooterNextButton'], [data-automation-id='bottom-navigation-next-button']",
   confirmed: /application (has been |was )?(successfully )?submitted|thank(s| you) for (applying|your application)|we('ve| have) received your application/i,
 };
+
+/** Avature careers sites: each step's button (Continue / Submit), and their thank-you words. */
+export const AVATURE = {
+  submit: "button[name=save][id$='-save'], button[type=submit][id$='-save']",
+  confirmed: /application (has been |was )?(successfully )?(submitted|sent|received|completed)|thank(s| you) for (applying|your application|your interest)|we('ve| have) received your application|successfully applied/i,
+};
+
+/** Did a multi-step system (Workday, Avature) show its thank-you? */
+export function multiStepConfirmed(ats: string, text: string): boolean {
+  return ats === "avature" ? AVATURE.confirmed.test(text) : WORKDAY.confirmed.test(text);
+}
 
 /** A strong password for a new employer-site account: 20 characters with every kind most sites ask for. */
 export function newSitePassword(): string {

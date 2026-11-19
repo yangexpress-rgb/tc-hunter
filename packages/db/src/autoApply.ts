@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  ADAPTERS, APPLY_PROBLEM, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
+  ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
   checkContext, checkEssay, essayLimit, isEssayQuestion, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec,
@@ -494,6 +494,13 @@ async function throughJobBoard(pool: pg.Pool, auto: RequestContext, app: AppRow,
   return url ? { url, page: null } : null;
 }
 
+/** How the server's browser opens a hiring system driven over several steps (Workday, Avature), if it is one. */
+function multiOpener(browser: ApplyBrowser, ats: Ats): ((url: string) => Promise<WorkdayPage>) | null {
+  if (ats === "workday" && browser.openWorkday) return (u) => browser.openWorkday!(u);
+  if (ats === "avature" && browser.openAvature) return (u) => browser.openAvature!(u);
+  return null;
+}
+
 /**
  * On an employer's own job page that isn't a hiring system TC Hunter applies on, its "Apply" link
  * may lead to one that is (a careers page sending applicants to Workday or Greenhouse).
@@ -713,7 +720,7 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
     if (pre) return { status: (status = pre) };
     if (page && hand.taken) {
       const ats = hand.taken.ats as Ats;
-      if (ats === "workday") return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, page as WorkdayPage, () => { clicked = true; }, hand)) };
+      if (ats === "workday" || ats === "avature") return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, page as WorkdayPage, () => { clicked = true; }, hand)) };
       return { status: (status = await onForm(pool, auto, deps, app, mode, run, hand, page, ats, () => { clicked = true; })) };
     }
     // Never LinkedIn or Indeed: any link to the employer's own site first; then a job site's link
@@ -736,10 +743,11 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
     if (first === "linkedin" || first === "indeed") { await run.end("failed", APPLY_PROBLEM.never); return { status: "failed" }; }
     let host = "";
     try { host = new URL(url).hostname; } catch { /* checked below */ }
-    if (page && first === "workday") { await page.close().catch(() => {}); page = null; }
+    const opener = multiOpener(deps.browser, first);
+    if (page && opener) { await page.close().catch(() => {}); page = null; }
     if (!page) await run.step(`Opening ${app.employer}'s job page (${host})`);
-    if (first === "workday" && deps.browser.openWorkday) {
-      const wd = await deps.browser.openWorkday(url).catch(() => null);
+    if (opener) {
+      const wd = await opener(url).catch(() => null);
       if (!wd) { await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
       page = wd;
       return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }, hand)) };
@@ -752,9 +760,10 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
       const onward = await applyLinkOnward(page);
       if (onward) {
         await run.note(`${app.employer}'s page sends applicants to ${(() => { try { return new URL(onward).hostname; } catch { return onward; } })()}. Applying there`);
-        if (detectAts(onward) === "workday" && deps.browser.openWorkday) {
+        const onwardOpener = multiOpener(deps.browser, detectAts(onward));
+        if (onwardOpener) {
           await page.close().catch(() => {});
-          const wd = await deps.browser.openWorkday(onward).catch(() => null);
+          const wd = await onwardOpener(onward).catch(() => null);
           if (!wd) { page = null; await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
           page = wd;
           return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }, hand)) };
@@ -766,14 +775,15 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
     const formHost = (() => { try { return new URL(page!.url()).hostname; } catch { return host; } })();
     await run.meta({ ats, form_host: formHost });
     if (ats === "linkedin" || ats === "indeed") { await run.end("failed", APPLY_PROBLEM.never); return { status: "failed" }; }
-    if (ats === "workday" && deps.browser.openWorkday) {
+    const landedOpener = multiOpener(deps.browser, ats);
+    if (landedOpener) {
       await page.close().catch(() => {});
-      const wd = await deps.browser.openWorkday(page.url()).catch(() => null);
+      const wd = await landedOpener(page.url()).catch(() => null);
       if (!wd) { page = null; await run.end("failed", APPLY_PROBLEM.unreachable); return { status: "failed" }; }
       page = wd;
       return { status: (status = await runWorkday(pool, auto, app, mode, payload, deps, run, wd, () => { clicked = true; }, hand)) };
     }
-    if (!SERVER_APPLY_ATS.includes(ats) || ats === "workday") {
+    if (!SERVER_APPLY_ATS.includes(ats) || ats === "workday" || ats === "avature") {
       await run.shot("stopped", "The employer's page", page, deps.cfg);
       // Their own site is known now: "Finish it yourself" opens it, with the packet one tap away.
       await withApplicant(pool, auto, (c) => c.query(
@@ -1140,7 +1150,7 @@ async function watchForThanks(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
   while (Date.now() < until2) {
     await sleep(deps.pollMs ?? 1500);
     try { last = await page.now(); } catch { continue; }
-    const ok = ats === "workday" ? WORKDAY.confirmed.test(last.text) : looksConfirmed(ats, last.url, last.text);
+    const ok = ats === "workday" || ats === "avature" ? multiStepConfirmed(ats, last.text) : looksConfirmed(ats, last.url, last.text);
     if (ok) {
       const found = confirmationIn(last.text);
       const conf = found && CONF_RE.test(found) ? found : null;
@@ -1234,10 +1244,11 @@ async function settleAfterClickError(pool: pg.Pool, auto: RequestContext, app: A
 // Workday: an account on the employer's site, then a form over several pages
 // ---------------------------------------------------------------------------
 
-async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, wd: WorkdayPage, tenant: string, hand: Hand): Promise<"ok" | Status> {
+async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, run: Run, wd: WorkdayPage, sys: Steps, hand: Hand): Promise<"ok" | Status> {
+  const tenant = sys.tenant;
   /** Signing in failed in a way only the applicant can fix on the site: their turn to sign in there, else the usual message. */
   const theirSignIn = async (fallback: () => Promise<"ok" | Status>): Promise<"ok" | Status> =>
-    (await hand.pause(wd, "sign_in", "before_submit", { ats: "workday" })) ? "handover" : fallback();
+    (await hand.pause(wd, "sign_in", "before_submit", { ats: sys.ats })) ? "handover" : fallback();
   const info = await withApplicant(pool, auto, async (c) => {
     const dk = await dataKeyFor(c, deps.cfg, auto.applicantId);
     const a = (await c.query("SELECT email_enc FROM applicant WHERE id = app_applicant_id()")).rows[0];
@@ -1246,32 +1257,32 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     const mail = (await c.query("SELECT vault_ref FROM email_connection WHERE status = 'connected'")).rows[0]?.vault_ref ?? null;
     return { email: a?.email_enc ? decryptField(dk, "applicant.email", a.email_enc) : null, acct, standing: !!standing, mail };
   });
-  if (!info.email) { await run.end("waiting", "Add your email address to your profile (About you). Workday sites need it for an account.", "site_account"); return "waiting"; }
-  if (!deps.vault) { await run.end("waiting", `${app.employer}'s Workday site needs an account, and the locked vault for site passwords isn't set up on this server.`, "site_account"); return "waiting"; }
+  if (!info.email) { await run.end("waiting", `Add your email address to your profile (About you). ${sys.ats === "workday" ? "Workday sites need" : `${app.employer}'s careers site needs`} it for an account.`, "site_account"); return "waiting"; }
+  if (!deps.vault) { await run.end("waiting", `${app.employer}'s ${sys.site} needs an account, and the locked vault for site passwords isn't set up on this server.`, "site_account"); return "waiting"; }
 
   const signIn = async (password: string, mayCreate: boolean): Promise<"ok" | Status> => {
-    await run.step(`Signing in to ${app.employer}'s Workday site`);
+    await run.step(`Signing in to ${app.employer}'s ${sys.site}`);
     const r = await wd.signIn(info.email!, password);
     if (r === "ok") {
       await withApplicant(pool, auto, (c) => c.query("UPDATE site_account SET verified_at = coalesce(verified_at, now()), updated_at = now() WHERE site_host = $1", [tenant]));
       return "ok";
     }
-    if (r === "human_check") { return hand.personCheck(wd, "workday"); }
+    if (r === "human_check") { return hand.personCheck(wd, sys.ats); }
     if (r === "site_error") {
       // Signed in, but Workday's own page failed ("Something went wrong") even after refreshing. Not the
       // password: wait a minute and open the job again, once. Nothing was sent.
       if (!siteRetried && wd.reopen) {
         siteRetried = true;
-        await run.step(`${app.employer}'s Workday site showed an error; trying again in a minute`);
+        await run.step(`${app.employer}'s ${sys.site} showed an error; trying again in a minute`);
         await new Promise((res) => setTimeout(res, deps.siteRetryMs ?? 60_000));
         const again = await wd.reopen();
         if (again === "form") return "ok";
         if (again === "sign_in") return signIn(password, mayCreate);
-        if (again === "human_check") { return hand.personCheck(wd, "workday"); }
+        if (again === "human_check") { return hand.personCheck(wd, sys.ats); }
         // "closed" here means neither the form nor sign-in showed: still the error page.
       }
-      await run.shot("stopped", "Workday's error page", wd, deps.cfg);
-      await run.end("waiting", `${app.employer}'s Workday site keeps showing its own error ("Something went wrong") after signing in. Nothing was sent. Choose Continue to try again later, or apply there yourself.`, "sign_in");
+      await run.shot("stopped", `${sys.short}'s error page`, wd, deps.cfg);
+      await run.end("waiting", `${app.employer}'s ${sys.site} keeps showing its own error ("Something went wrong") after signing in. Nothing was sent. Choose Continue to try again later, or apply there yourself.`, "sign_in");
       return "waiting";
     }
     if (r === "unverified") {
@@ -1279,7 +1290,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
       if (v !== ("verified" as Status)) return v;
       if (++verifiedTries <= 2) return signIn(password, false);
       await run.shot("stopped", "The sign-in page", wd, deps.cfg);
-      await run.end("waiting", `${app.employer}'s Workday site still asks to confirm the account after its email link was opened. Open the link yourself, then choose Continue here.`, "email_link");
+      await run.end("waiting", `${app.employer}'s ${sys.site} still asks to confirm the account after its email link was opened. Open the link yourself, then choose Continue here.`, "email_link");
       return "waiting";
     }
     if (mayCreate) return "create" as Status;
@@ -1298,7 +1309,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     if (!recovering) { recovering = true; return recover(password); }
     return theirSignIn(async () => {
       await run.shot("stopped", "The sign-in page", wd, deps.cfg);
-      await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
+      await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s ${sys.site} didn't work. Reset it on their site, or apply there yourself this time.`, "sign_in");
       return "waiting";
     });
   };
@@ -1321,21 +1332,21 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
           await withApplicant(pool, auto, (c) => c.query("UPDATE site_account SET verified_at = now(), updated_at = now() WHERE site_host = $1", [tenant]));
           return "ok";
         }
-        if (r === "human_check") { return hand.personCheck(wd, "workday"); }
+        if (r === "human_check") { return hand.personCheck(wd, sys.ats); }
       }
     }
     if (!info.mail || !wd.forgotPassword || !wd.setPassword) return theirSignIn(async () => {
       await run.shot("stopped", "The sign-in page", wd, deps.cfg);
-      await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s Workday site didn't work. ${info.mail ? "Reset it on their site" : "Connect Gmail in Settings and TC Hunter resets it for you, or reset it on their site"}, or apply there yourself this time.`, "sign_in");
+      await run.end("waiting", `The password TC Hunter keeps for ${app.employer}'s ${sys.site} didn't work. ${info.mail ? "Reset it on their site" : "Connect Gmail in Settings and TC Hunter resets it for you, or reset it on their site"}, or apply there yourself this time.`, "sign_in");
       return "waiting";
     });
-    await run.step(`Resetting the password on ${app.employer}'s Workday site ("Forgot your password?")`);
+    await run.step(`Resetting the password on ${app.employer}'s ${sys.site} ("Forgot your password?")`);
     const fresh = newSitePassword();
     const asked = await wd.forgotPassword(info.email!);
-    if (asked === "human_check") { return hand.personCheck(wd, "workday"); }
+    if (asked === "human_check") { return hand.personCheck(wd, sys.ats); }
     if (asked === "failed") {
       await run.shot("stopped", "The password reset page", wd, deps.cfg);
-      await run.end("waiting", `TC Hunter couldn't ask ${app.employer}'s Workday site for a password reset. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
+      await run.end("waiting", `TC Hunter couldn't ask ${app.employer}'s ${sys.site} for a password reset. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
       return "waiting";
     }
     await run.step(`Looking in your Gmail for ${app.employer}'s password reset email`);
@@ -1354,7 +1365,7 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
     await run.step("Setting a new password with the link from your email");
     if (!(await wd.setPassword(link, fresh))) return theirSignIn(async () => {
       await run.shot("stopped", "The new password page", wd, deps.cfg);
-      await run.end("waiting", `TC Hunter couldn't set a new password on ${app.employer}'s Workday site. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
+      await run.end("waiting", `TC Hunter couldn't set a new password on ${app.employer}'s ${sys.site}. Nothing was sent. Reset it on their site, or apply there yourself this time.`, "sign_in");
       return "waiting";
     });
     return signIn(fresh, false);
@@ -1388,22 +1399,22 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
   };
   const create = async (password: string, fresh: boolean): Promise<"ok" | Status> => {
     if (!info.standing) {
-      await run.end("waiting", `${app.employer} uses Workday, which needs an account first. Turn on "Create accounts on employer hiring sites for me" in Settings and TC Hunter makes it, or apply on their site yourself.`, "site_account");
+      await run.end("waiting", `${app.employer} uses ${sys.uses}, which needs an account first. Turn on "Create accounts on employer hiring sites for me" in Settings and TC Hunter makes it, or apply on their site yourself.`, "site_account");
       return "waiting";
     }
-    await run.step(`Creating your account on ${app.employer}'s Workday site`);
+    await run.step(`Creating your account on ${app.employer}'s ${sys.site}`);
     if (fresh) await keepPassword(password);
     createdThisRun = true;
     const made = await wd.createAccount(info.email!, password);
-    if (made === "human_check") { return hand.personCheck(wd, "workday"); }
+    if (made === "human_check") { return hand.personCheck(wd, sys.ats); }
     if (made === "exists") {
       if (!recovering) { recovering = true; return recover(password); }
-      await run.end("waiting", `You already have an account on ${app.employer}'s Workday site, and its password reset email hasn't arrived yet. Choose Try again in a few minutes and TC Hunter looks again.`, "email_link");
+      await run.end("waiting", `You already have an account on ${app.employer}'s ${sys.site}, and its password reset email hasn't arrived yet. Choose Try again in a few minutes and TC Hunter looks again.`, "email_link");
       return "waiting";
     }
     if (made === "failed" || made === "no_terms_box") {
       await run.shot("stopped", "The create-account page", wd, deps.cfg);
-      await run.end("failed", `TC Hunter couldn't create an account on ${app.employer}'s Workday site. Nothing was sent. Apply there yourself, or try again later.`);
+      await run.end("failed", `TC Hunter couldn't create an account on ${app.employer}'s ${sys.site}. Nothing was sent. Apply there yourself, or try again later.`);
       return "failed";
     }
     if (made === "verify_email") {
@@ -1415,13 +1426,23 @@ async function workdayAccount(pool: pg.Pool, auto: RequestContext, deps: ApplyDe
 
   if (info.acct) {
     const secret = await deps.vault.get(auto.applicantId, info.acct.vault_ref);
-    if (!secret) return theirSignIn(async () => { await run.end("waiting", `TC Hunter lost the password for ${app.employer}'s Workday site. Reset it on their site, or apply there yourself.`, "sign_in"); return "waiting"; });
+    if (!secret) return theirSignIn(async () => { await run.end("waiting", `TC Hunter lost the password for ${app.employer}'s ${sys.site}. Reset it on their site, or apply there yourself.`, "sign_in"); return "waiting"; });
     // An account TC Hunter kept a password for but never saw confirmed may not exist yet: making it is the next try.
     const r = await signIn(secret.reveal(), !info.acct.verified_at);
     if (r === ("create" as Status)) return create(secret.reveal(), false);
     return r;
   }
   return create(newSitePassword(), true);
+}
+
+/** A hiring system TC Hunter drives over several steps, after an account: Workday, or an Avature careers site (Siemens). */
+interface Steps { ats: "workday" | "avature"; tenant: string; site: string; short: string; uses: string; page: string; form: string; submit: string }
+function stepsFor(wd: WorkdayPage): Steps {
+  if (wd.system === "avature") {
+    const host = (() => { try { return new URL(wd.url()).hostname.toLowerCase(); } catch { return "avature"; } })();
+    return { ats: "avature", tenant: host, site: "careers site", short: "Their site", uses: `its own careers site (${host})`, page: "Application step", form: "application", submit: AVATURE.submit };
+  }
+  return { ats: "workday", tenant: workdayTenant(wd.url()) ?? "workday", site: "Workday site", short: "Workday", uses: "Workday", page: "Workday page", form: "Workday form", submit: WORKDAY.submit };
 }
 
 async function waitForLink(deps: ApplyDeps, applicantId: string, mailRef: string | null, tenant: string,
@@ -1443,13 +1464,14 @@ async function waitForLink(deps: ApplyDeps, applicantId: string, mailRef: string
 
 async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode: ApplyMode, payload: { anyway?: boolean }, deps: ApplyDeps, run: Run, wd: WorkdayPage, onClick: () => void, hand: Hand): Promise<Status> {
   const resumedFrom = hand.taken;
-  const tenant = workdayTenant(wd.url()) ?? "workday";
-  await run.meta({ ats: "workday", form_host: tenant });
+  const sys = stepsFor(wd);
+  const tenant = sys.tenant;
+  await run.meta({ ats: sys.ats, form_host: tenant });
   const start = await wd.start();
   if (start === "closed") { await run.end("failed", APPLY_PROBLEM.closed); return "failed"; }
-  if (start === "human_check") { return hand.personCheck(wd, "workday"); }
+  if (start === "human_check") { return hand.personCheck(wd, sys.ats); }
   if (start === "sign_in") {
-    const a = await workdayAccount(pool, auto, deps, app, run, wd, tenant, hand);
+    const a = await workdayAccount(pool, auto, deps, app, run, wd, sys, hand);
     if (a !== "ok") return a;
   }
   // Page by page: every page's questions go into one packet (keys carry the page number).
@@ -1458,13 +1480,13 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
   const inferCache: InferCache = new Map();
   for (let n = 1; n <= 12; n++) {
     const pg = await wd.page();
-    if (pg.form.humanCheck || pg.form.captcha) { return hand.personCheck(wd, "workday"); }
+    if (pg.form.humanCheck || pg.form.captcha) { return hand.personCheck(wd, sys.ats); }
     if (pg.review) break;
-    await run.step(`Workday page ${n}: ${pg.title || "questions"}`);
+    await run.step(`${sys.page} ${n}: ${pg.title || "questions"}`);
     const prefix = `p${n}|`;
     all.push(...pg.form.fields.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
     for (const f of pg.form.fields) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
-    const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache, canHandOver: hand.possible(wd) });
+    const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, sys.ats, { workdayPage: true, prefilled: prefilledAll, inferCache, canHandOver: hand.possible(wd) });
     if ("stop" in r && r.stop) {
       // What the page asked, with the site's own choices, so a stop can be explained from the logs (no answers).
       applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, stopped: true, fields: pg.form.fields.map((f) =>
@@ -1485,7 +1507,7 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
       all.push(...added.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
       for (const f of added) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
       applyLog.info("workday.follow_up", { run: run.id, page: n, asked: added.map((f) => f.label.slice(0, 80)).join(" | ").slice(0, 600) });
-      const r2 = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, "workday", { workdayPage: true, prefilled: prefilledAll, inferCache, canHandOver: hand.possible(wd) });
+      const r2 = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, sys.ats, { workdayPage: true, prefilled: prefilledAll, inferCache, canHandOver: hand.possible(wd) });
       if ("stop" in r2 && r2.stop) {
         applyLog.info("workday.page", { run: run.id, page: n, title: pg.title, stopped: true, fields: added.map((f) => `${f.label} [${f.type}]`).join(" | ").slice(0, 3000) });
         return r2.stop;
@@ -1502,10 +1524,10 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     await markFilled(pool, auto, p.packetId, results, prefix);
     // Statements on this page only the applicant may make: their turn, on this page, before moving on.
     const theirs = pg.form.fields.filter((f) => p.personalKeys.has(`${prefix}${f.key}`));
-    if (theirs.length && await hand.pause(wd, "attestation", "before_submit", { ats: "workday", labels: theirs.map((f) => f.label), keys: theirs.map((f) => f.key) })) return "handover";
+    if (theirs.length && await hand.pause(wd, "attestation", "before_submit", { ats: sys.ats, labels: theirs.map((f) => f.label), keys: theirs.map((f) => f.key) })) return "handover";
     let next = await wd.next();
     // A page with no questions and no way on: Workday's page didn't load. That's their site; the usual retry follows.
-    if (!next.moved && !pg.form.fields.length) throw new Error(`Workday page ${n} showed no questions and no Next button`);
+    if (!next.moved && !pg.form.fields.length) throw new Error(`${sys.page} ${n} showed no questions and no Next button`);
     // Their form says an answer that went in isn't there (a date, a tick box): put this page's answers in once more,
     // then try Next again before asking the applicant (Huron, 2026-11-19).
     if (!next.moved && next.errors.length && items.length) {
@@ -1514,8 +1536,8 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
       next = await wd.next();
     }
     if (!next.moved) {
-      await run.shot("stopped", `Workday page ${n}, where it stopped`, wd, deps.cfg);
-      await run.end("waiting", `${app.employer}'s Workday form wants more on "${pg.title || `page ${n}`}"${next.errors.length ? `: ${next.errors.slice(0, 3).map((e) => `"${e}"`).join(", ")}` : ""}. Add these to your profile or saved answers, then choose Continue. Workday keeps what's filled so far.`, "answers");
+      await run.shot("stopped", `${sys.page} ${n}, where it stopped`, wd, deps.cfg);
+      await run.end("waiting", `${app.employer}'s ${sys.form} wants more on "${pg.title || `page ${n}`}"${next.errors.length ? `: ${next.errors.slice(0, 3).map((e) => `"${e}"`).join(", ")}` : ""}. Add these to your profile or saved answers, then choose Continue. ${sys.short} keeps what's filled so far.`, "answers");
       return "waiting";
     }
   }
@@ -1536,17 +1558,17 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     return "ok";
   });
   if (fin === "approve") {
-    await run.end("waiting", null, "approve_answers", "Their Workday form is filled in up to Review. Check the answers below and approve; TC Hunter then sends it.");
+    await run.end("waiting", null, "approve_answers", `Their ${sys.form} is filled in up to Review. Check the answers below and approve; TC Hunter then sends it.`);
     return "waiting";
   }
-  const filled = sha(`workday|${(await wd.now()).text}`);
+  const filled = sha(`${sys.ats}|${(await wd.now()).text}`);
   const ready = await readyForSend(pool, auto, deps.cfg, app, mode, await wd.filledHash().catch(() => filled), run);
-  await run.shot("form_filled", "Their Workday Review page, before sending", wd, deps.cfg);
+  await run.shot("form_filled", `Their ${sys.form} at Review, before sending`, wd, deps.cfg);
   if (ready !== "go") {
-    if (ready === "waiting") hand.keepForApproval(wd, "workday", resumedFrom);
+    if (ready === "waiting") hand.keepForApproval(wd, sys.ats, resumedFrom);
     return ready;
   }
-  return pressSubmit(pool, auto, deps, app, run, wd, "workday", WORKDAY.submit, onClick, hand);
+  return pressSubmit(pool, auto, deps, app, run, wd, sys.ats, sys.submit, onClick, hand);
 }
 
 

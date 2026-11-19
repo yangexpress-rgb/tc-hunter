@@ -8,10 +8,10 @@ import { willFill } from "./map";
  * Everything else, and any form that doesn't look exactly as expected, stays Assisted Fill:
  * the applicant presses Submit themselves.
  */
-export type Ats = "greenhouse" | "lever" | "ashby" | "smartrecruiters" | "workday" | "icims" | "taleo" | "linkedin" | "indeed" | "other";
+export type Ats = "greenhouse" | "lever" | "ashby" | "smartrecruiters" | "workday" | "avature" | "icims" | "taleo" | "linkedin" | "indeed" | "other";
 export const TIER1: readonly Ats[] = ["greenhouse", "lever", "ashby", "smartrecruiters"];
 /** Never automated (design 5.5): Workday, iCIMS and Taleo are Assisted Fill only; LinkedIn and Indeed are not automated at all. */
-export const ASSISTED_ONLY: readonly Ats[] = ["workday", "icims", "taleo", "linkedin", "indeed", "other"];
+export const ASSISTED_ONLY: readonly Ats[] = ["workday", "avature", "icims", "taleo", "linkedin", "indeed", "other"];
 
 export interface AtsAdapter {
   ats: Ats;
@@ -62,11 +62,24 @@ export function detectAts(url: string): Ats {
   try { host = new URL(url).hostname.toLowerCase(); } catch { return "other"; }
   for (const a of Object.values(ADAPTERS)) if (a.hosts.test(host)) return a.ats;
   if (/myworkdayjobs\.com$|workday\.com$/.test(host)) return "workday";
+  if (isAvature(url)) return "avature";
   if (/icims\.com$/.test(host)) return "icims";
   if (/taleo\.net$|oraclecloud\.com$/.test(host)) return "taleo";
   if (/(^|\.)linkedin\.com$/.test(host)) return "linkedin";
   if (/(^|\.)indeed\.[a-z.]+$/.test(host)) return "indeed";
   return "other";
+}
+
+/**
+ * An Avature careers site (Siemens' jobs.siemens.com, Yong 2026-11-19): its own host, but Avature's
+ * addresses, /{locale}/{portal}/JobDetail/{id} and the steps after it, or an avature.net host.
+ */
+export function isAvature(url: string): boolean {
+  try {
+    const u = new URL(url);
+    if (/(^|\.)avature\.net$/i.test(u.hostname)) return true;
+    return /^\/[a-z]{2}_[A-Z]{2}\/[A-Za-z0-9_-]+\/(JobDetail|FolderDetail|ApplicationMethods|Register|ApplicationForm|Login|Error)(\/|$)/.test(u.pathname);
+  } catch { return false; }
 }
 
 const normLabel = (s: string) => s.toLowerCase().replace(/[*:?]+/g, " ").replace(/\s+/g, " ").trim();

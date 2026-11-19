@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium } from "playwright-core";
-import type { ApplyPage, WorkdayPage } from "@tc-hunter/domain";
+import { AVATURE, detectAts, multiStepConfirmed, type ApplyPage, type WorkdayPage } from "@tc-hunter/domain";
 import { ServerBrowser } from "../src/apply/browser";
 
 /**
@@ -18,6 +18,7 @@ const fixture = (f: string) => readFileSync(join(__dirname, "fixtures", f), "utf
 let server: Server;
 let base = "";
 const submits: string[] = [];
+const avature: string[] = [];
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -48,6 +49,33 @@ beforeAll(async () => {
       '<p>A verification code was sent to you. Enter the 8-character code to confirm you are a human.</p><fieldset><legend>Security code</legend>' +
       [0, 1, 2, 3, 4, 5, 6, 7].map((i) => `<input id="security-input-${i}" maxlength="1" aria-label="Security code ${i + 1}">`).join("") + '</fieldset>' +
       '<script>document.querySelectorAll("input[maxlength=\'1\']").forEach(function (b, i, all) { b.addEventListener("input", function () { if (b.value && all[i + 1]) all[i + 1].focus(); }); });</script>');
+    // An Avature careers site shaped like Siemens' (jobs.siemens.com, 2026-11-19).
+    if (url.startsWith("/en_US/careers/")) {
+      const step = (body: string) => html(fixture("avature.html").replace("<!--STEP-->", body));
+      const bar = (n: number) => `<ol class="steps"><li>Login / Registration</li><li>Profile information</li><li>Global questions</li><li>Country questions</li></ol><p class="sr">${["Login / Registration", "Profile information", "Global questions", "Country questions"][n - 1]}, step ${n} of 4</p>`;
+      if (url.startsWith("/en_US/careers/JobDetail/1")) return step('<h1>Digital Transformation Expert</h1><a href="/en_US/careers/ApplicationMethods?folderId=1">Apply</a>');
+      if (url.startsWith("/en_US/careers/JobDetail/2")) return step('<h2>Error</h2><p>An error has occurred</p><p>Page not found</p>');
+      if (url.startsWith("/en_US/careers/ApplicationMethods")) return step(bar(1) + '<h2>Already registered?</h2><form method="post" action="/en_US/careers/Login"><label for="username">Email</label><input id="username" name="username" type="text">' +
+        '<label for="password">Password</label><input id="password" name="password" type="password"><button id="login" name="login" type="submit">Login</button></form>' +
+        '<a href="/en_US/careers/Register?folderId=1">Self-complete</a>');
+      if (url.startsWith("/en_US/careers/Register") && req.method === "POST") {
+        let body = ""; req.on("data", (c) => { body += c; }); req.on("end", () => { avature.push(body); res.writeHead(302, { location: "/en_US/careers/ApplicationForm?step=3" }).end(); });
+        return;
+      }
+      if (url.startsWith("/en_US/careers/Register")) return step(bar(2) + '<form method="post" action="/en_US/careers/Register?folderId=1">' +
+        '<label id="42326-label" for="42326">Email *</label><input type="email" id="42326" name="42326" required>' +
+        '<label id="42327-label" for="42327">First Name *</label><input type="text" id="42327" name="42327" required>' +
+        '<label id="42331-label">Country/Region of citizenship *</label><select id="42331" name="42331" class="select2-hidden-accessible" data-required="true" data-choices=\'["Germany","United Kingdom","United States of America"]\'><option value=""></option></select>' +
+        '<label id="42358-label" for="42358">Password *</label><input type="password" id="42358" name="42358" required>' +
+        '<label for="42359">Password confirmation *</label><input type="password" id="42359" name="42359" required>' +
+        '<button type="reset" name="cancel" id="42363-cancel">Cancel</button><button type="submit" name="save" id="42363-save">Continue &gt;</button></form>');
+      if (url.startsWith("/en_US/careers/ApplicationForm?step=3") && req.method === "GET") return step(bar(3) + '<form method="post" action="/en_US/careers/ApplicationForm?step=4"><label for="q1">Years of experience *</label><input id="q1" name="q1" required>' +
+        '<button type="submit" name="save" id="50000-save">Continue &gt;</button></form>');
+      if (url.startsWith("/en_US/careers/ApplicationForm?step=4") && req.method === "POST") { res.writeHead(302, { location: "/en_US/careers/ApplicationForm?step=4" }).end(); return; }
+      if (url.startsWith("/en_US/careers/ApplicationForm?step=4")) return step(bar(4) + '<form method="post" action="/en_US/careers/Done"><label for="q2">Do you need sponsorship? *</label><select id="q2" name="q2" required><option value="">Select an option</option><option>Yes</option><option>No</option></select>' +
+        '<button type="submit" name="save" id="50001-save">Submit</button></form>');
+      if (url.startsWith("/en_US/careers/Done")) { avature.push("sent"); return html("<h1>Thank you for applying!</h1><p>We have received your application.</p>"); }
+    }
     res.writeHead(404).end();
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()));
@@ -249,5 +277,61 @@ describe.skipIf(!available)("Greenhouse's emailed security code", () => {
       expect(await pg.locator("input[maxlength='1']").evaluateAll((els) => els.map((e) => (e as HTMLInputElement).value).join(""))).toBe("aB3dE9fG");
       expect(await pg.locator("#zip").inputValue()).toBe("27513");
     } finally { await page.close(); }
+  });
+});
+
+describe.skipIf(!available)("the server's browser on an Avature careers site (Siemens, 2026-11-19)", () => {
+  let av: WorkdayPage;
+  afterAll(async () => { await av?.close(); });
+
+  it("knows Avature by its addresses", () => {
+    expect(detectAts("https://jobs.siemens.com/en_US/externaljobs/JobDetail/529223")).toBe("avature");
+    expect(detectAts("https://jobs.siemens.com/en_US/externaljobs/Error")).toBe("avature");
+    expect(detectAts("https://jobs.example.com/careers/123")).toBe("other");
+  });
+
+  it("an expired job (their error page) counts as closed", async () => {
+    const gone = await new ServerBrowser({ timeoutMs: 15_000 }).openAvature!(`${base}/en_US/careers/JobDetail/2`);
+    expect(await gone.start()).toBe("closed");
+    await gone.close();
+  });
+
+  it("job page → Apply → a new account in the profile step, its searchable list picked, the password typed in both boxes", async () => {
+    av = await new ServerBrowser({ timeoutMs: 15_000 }).openAvature!(`${base}/en_US/careers/JobDetail/1`);
+    expect(av.system).toBe("avature");
+    expect(await av.start()).toBe("sign_in");
+    expect(await av.createAccount("yong@example.test", "Pw-123456789abcdefg!")).toBe("created");
+    expect(await av.signIn("yong@example.test", "Pw-123456789abcdefg!")).toBe("ok");
+    const p = await av.page();
+    expect(p.title).toBe("Profile information");
+    expect(p.review).toBe(false);
+    expect(p.form.fields.find((f) => f.key === "#42331")).toMatchObject({ label: "Country/Region of citizenship *", type: "select", required: true, options: ["Germany", "United Kingdom", "United States of America"] });
+    expect(p.form.fields.some((f) => f.type === "password")).toBe(false);
+    const r = await av.fill([{ key: "#42327", type: "text", value: "Yong" }, { key: "#42331", type: "select", value: "United States" }]);
+    expect(r.map((x) => x.status)).toEqual(["filled", "filled"]);
+    expect(await av.next()).toEqual({ moved: true, errors: [] });
+    const sent = new URLSearchParams(avature.at(-1)!);
+    expect(sent.get("42326")).toBe("yong@example.test");
+    expect(sent.get("42331")).toBe("United States of America");
+    expect(sent.get("42358")).toBe("Pw-123456789abcdefg!");
+    expect(sent.get("42359")).toBe("Pw-123456789abcdefg!");
+  });
+
+  it("walks the steps; the last step's Submit isn't pressed until the one Submit press", async () => {
+    let p = await av.page();
+    expect(p.title).toBe("Global questions");
+    await av.fill([{ key: "#q1", type: "text", value: "12" }]);
+    expect((await av.next()).moved).toBe(true);
+    p = await av.page();
+    expect(p.title).toBe("Country questions");
+    expect(p.review).toBe(false);
+    await av.fill([{ key: "#q2", type: "select", value: "No" }]);
+    expect((await av.next()).moved).toBe(true);
+    expect((await av.page()).review).toBe(true);
+    expect(avature).not.toContain("sent");
+    expect(await av.submit(AVATURE.submit)).toBe(true);
+    await new Promise((ok) => setTimeout(ok, 1500));
+    expect(multiStepConfirmed("avature", (await av.now()).text)).toBe(true);
+    expect(avature).toContain("sent");
   });
 });
