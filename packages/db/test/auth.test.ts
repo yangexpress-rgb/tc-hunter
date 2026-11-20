@@ -137,6 +137,21 @@ describe("sign-in on a public host", () => {
     expect(r.status).toBe("ok");
   });
 
+  it("when two-step isn't required, sign-in skips an authenticator set up earlier and removes it", async () => {
+    const a = await withMfa("Leftover");
+    const loose = { ...cfg, requireMfa: false };
+    const r = await signIn(pool, loose, a.email, PW);
+    expect(r.status).toBe("ok");
+    const s = await getSession(pool, loose, (r as { token: string }).token);
+    expect(s?.mfaEnabled).toBe(false);
+    const row = (await ownerQuery("SELECT mfa_enabled, mfa_secret_enc FROM user_account WHERE email = $1", [a.email])).rows[0];
+    expect(row).toEqual({ mfa_enabled: false, mfa_secret_enc: null });
+    expect(Number((await ownerQuery("SELECT count(*) AS n FROM mfa_recovery_code r JOIN user_account u ON u.id = r.user_account_id WHERE u.email = $1", [a.email])).rows[0].n)).toBe(0);
+    // When it is required, a code is still asked.
+    const b = await withMfa("Strict");
+    expect((await signIn(pool, cfg, b.email, PW)).status).toBe("code_required");
+  });
+
   it("sign-up needs the household code when one is set", async () => {
     const c = { ...cfg, signupCode: "family-only-7731" };
     expect(await signUp(pool, c, { email: "stranger@example.test", password: "a perfectly fine passphrase", preferredName: "S" }))

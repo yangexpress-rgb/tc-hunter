@@ -9,7 +9,7 @@ export const AUDIT_ALLOWED_KEYS = {
   "session.signed_out": [],
   "session.step_up": ["method"],
   "mfa.enabled": [],
-  "mfa.disabled": [],
+  "mfa.disabled": ["reason"],
   "mfa.recovery_codes_made": [],
   "mfa.moved": [],
   "session.locked": ["minutes"],

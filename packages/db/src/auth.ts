@@ -166,9 +166,17 @@ export async function signIn(pool: pg.Pool, cfg: AppConfig, emailRaw: string, pa
       await noteFailure(c, row.id);
       return { status: "failed" as const };
     }
-    const token = await createSession(c, cfg, row.id, !row.mfa_enabled, device);
+    // Two-step sign-in is off for everyone while the app doesn't require it (Yong,
+    // 2026-11-20): an authenticator set up earlier is removed here, so no code is asked.
+    let mfaOn: boolean = row.mfa_enabled;
+    if (mfaOn && !cfg.requireMfa) {
+      await clearMfa(c, row.id);
+      await auditAsAccount(c, row.id, "mfa.disabled", { reason: "not_required" });
+      mfaOn = false;
+    }
+    const token = await createSession(c, cfg, row.id, !mfaOn, device);
     // With two-step on, the count is cleared only once the code is right too.
-    if (row.mfa_enabled) return { status: "code_required" as const, token };
+    if (mfaOn) return { status: "code_required" as const, token };
     await c.query("UPDATE user_account SET failed_sign_ins = 0 WHERE id = $1", [row.id]);
     await auditAsAccount(c, row.id, "session.signed_in", { mfa_used: false });
     return { status: "ok" as const, token };
@@ -226,7 +234,7 @@ export async function pendingSignIn(pool: pg.Pool, token: string | undefined): P
     (await c.query("SELECT 1 FROM user_session WHERE token_hash = $1 AND expires_at > now() AND NOT mfa_passed", [tokenHash(token)])).rowCount === 1);
 }
 
-export async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out" | "session.step_up" | "session.locked" | "session.remembered" | "session.ended_elsewhere", payload: Record<string, unknown>) {
+export async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out" | "session.step_up" | "session.locked" | "session.remembered" | "session.ended_elsewhere" | "mfa.disabled", payload: Record<string, unknown>) {
   const a = await c.query("SELECT id FROM applicant WHERE user_account_id = $1", [accountId]);
   if (!a.rows[0]) return;
   await c.query("SELECT set_config('app.applicant_id', $1, true)", [a.rows[0].id]);
@@ -363,12 +371,15 @@ export async function disableMfa(pool: pg.Pool, cfg: AppConfig, session: Session
   if (!hasFreshStepUp(session, cfg)) throw new Error("TC_STEP_UP_REQUIRED");
   const ctx = { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" as const };
   await withApplicant(pool, ctx, async (c) => {
-    await c.query(
-      `UPDATE user_account SET mfa_enabled = false, mfa_secret_enc = NULL, mfa_pending_secret_enc = NULL WHERE id = $1`,
-      [session.userAccountId]);
-    await c.query("DELETE FROM mfa_recovery_code WHERE user_account_id = $1", [session.userAccountId]);
+    await clearMfa(c, session.userAccountId);
     await recordAudit(c, "mfa.disabled", { objectType: "applicant", objectId: session.applicantId });
   });
+}
+
+async function clearMfa(c: pg.PoolClient, accountId: string): Promise<void> {
+  await c.query(
+    `UPDATE user_account SET mfa_enabled = false, mfa_secret_enc = NULL, mfa_pending_secret_enc = NULL WHERE id = $1`, [accountId]);
+  await c.query("DELETE FROM mfa_recovery_code WHERE user_account_id = $1", [accountId]);
 }
 
 async function replaceRecoveryCodes(c: pg.PoolClient, accountId: string): Promise<string[]> {
