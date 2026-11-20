@@ -8,7 +8,7 @@ import { ago } from "@/components/jobs/JobBits";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { followSourceAction, refreshAction, saveScheduleAction, searchSourceAction, unfollowSourceAction } from "../actions";
+import { followManySourcesAction, followSourceAction, refreshAction, saveScheduleAction, searchSourceAction, unfollowSourceAction } from "../actions";
 import { ScheduleForm } from "@/components/jobs/ScheduleForm";
 import { DesktopReader } from "@/components/jobs/DesktopReader";
 
@@ -275,6 +275,15 @@ export default async function SourcesPage(props: PageProps) {
           <label>Jobs page address<input name="address" type="url" required placeholder="https://jobs.example.com/careers" /></label>
           <label>Company name (optional)<input name="name" maxLength={120} /></label>
           <button>Follow</button>
+        </form>
+        <h3>Add many at once</h3>
+        {params.added ? <p className="status" role="status">{params.added === "1" ? "Added 1 company. It's being searched now." : `Added ${params.added} companies. They're being searched now.`}</p> : null}
+        {params.notadded ? <p className="error" role="alert">Not added: {params.notadded}. Each line needs a jobs page address we can read.</p> : null}
+        <form action={followManySourcesAction} className="stack">
+          <label>One company per line: its name, then its jobs page address
+            <textarea name="list" rows={8} required placeholder={"Medtronic, https://medtronic.wd1.myworkdayjobs.com/MedtronicCareers\nJohnson & Johnson, https://jj.wd5.myworkdayjobs.com/JJ"} />
+          </label>
+          <button>Follow all</button>
         </form>
       </section>
 
