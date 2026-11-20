@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
-import { errorCode } from "@tc-hunter/domain";
+import { errorCode, parseSourceList } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 import { TIMES, ZONES } from "@/lib/schedule";
 import { JOBS_VIEWS } from "@/lib/jobsView";
@@ -49,6 +49,31 @@ export async function followSourceAction(form: FormData) {
     const id = await followSource(app().pool, s, String(form.get("address") ?? ""), String(form.get("name") ?? "") || undefined);
     await requestSourceScan(app().pool, s, id);
   }, "/jobs/sources");
+}
+
+/**
+ * Many companies at once (Yong, 2026-11-20): one per line, name and address. Each is followed like a
+ * single one (a link for a company already listed replaces its old row) and read right away; lines
+ * that can't be followed are named back, so nothing is dropped silently.
+ */
+export async function followManySourcesAction(form: FormData) {
+  const s = await requireSession();
+  const { items, bad } = parseSourceList(String(form.get("list") ?? ""));
+  let added = 0;
+  const failed = [...bad];
+  for (const it of items) {
+    try {
+      const id = await followSource(app().pool, s, it.url, it.name);
+      await requestSourceScan(app().pool, s, id);
+      added++;
+    } catch (e) {
+      log.warn("jobs.follow_many_failed", { code: errorCode(e) ?? "TC_UNKNOWN" });
+      failed.push(it.name ? `${it.name} (${it.url})` : it.url);
+    }
+  }
+  let target = withParam("/jobs/sources", "added", String(added));
+  if (failed.length) target = withParam(target, "notadded", failed.join(" · ").slice(0, 1200));
+  redirect(`${target}#add`);
 }
 
 /** "Search again" on one row of Where we look: just that source, now (Yong, 2026-11-17). */

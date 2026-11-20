@@ -237,6 +237,31 @@ export const WORKDAY_WAIT_MS = 45_000;
 
 const titleCase = (s: string) => s.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
+/**
+ * Many companies pasted at once in Where we look (Yong, 2026-11-20: "there are a lot of companies in
+ * healthcare, pharma etc."): one per line, a name and its jobs page address in any order, e.g.
+ * "Medtronic, https://medtronic.wd1.myworkdayjobs.com/MedtronicCareers". Lines without an address are
+ * returned as not understood, so nothing is dropped without a word.
+ */
+export function parseSourceList(text: string): { items: Array<{ url: string; name?: string }>; bad: string[] } {
+  const items: Array<{ url: string; name?: string }> = [];
+  const bad: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of text.split(/\r?\n/).slice(0, 300)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = /https?:\/\/[^\s,|;<>"']+/i.exec(line);
+    if (!m) { bad.push(line.slice(0, 120)); continue; }
+    const url = m[0].replace(/[.)\]]+$/, "");
+    const name = (line.slice(0, m.index) + " " + line.slice(m.index + m[0].length))
+      .replace(/[,|;:\t]+/g, " ").replace(/\s[-–—]\s/g, " ").replace(/^[\s\-–—*•]+|[\s\-–—]+$/g, "").replace(/\s+/g, " ").trim().slice(0, 120);
+    if (seen.has(url.toLowerCase())) continue;
+    seen.add(url.toLowerCase());
+    items.push(name ? { url, name } : { url });
+  }
+  return { items, bad };
+}
+
 /** A company's job board or careers page, from the address the applicant pasted. */
 export function detectSource(input: string, name?: string): SourceSpec | null {
   let url: URL;
