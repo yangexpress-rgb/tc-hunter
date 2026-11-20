@@ -51,11 +51,12 @@ export default async function SettingsPage(props: PageProps) {
           </>
         ) : (
           <>
-            {params.mfa === "off" ? <Status>{t("settings.mfa.turned_off")}</Status> : <p>{t("settings.mfa.off")}</p>}
-            <MfaSetup text={{
+            {params.mfa === "off" ? <Status>{t("settings.mfa.turned_off")}</Status>
+              : <p>{t(cfg.requireMfa ? "settings.mfa.off" : "settings.mfa.not_used")}</p>}
+            {cfg.requireMfa ? <MfaSetup text={{
               setup: t("settings.mfa.setup"), enable: t("settings.mfa.enable_cta"), confirm: t("settings.mfa.confirm_cta"),
               on: t("settings.mfa.on"), codesIntro: t("settings.mfa.codes_intro"), codesSaved: t("settings.mfa.codes_saved"),
-            }} />
+            }} /> : null}
           </>
         )}
       </section>

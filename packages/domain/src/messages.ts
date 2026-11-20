@@ -151,6 +151,7 @@ export const L1 = {
   "settings.mfa.title": "Two-step sign-in",
   "settings.mfa.off": "Two-step sign-in is off. Turn it on to protect your account.",
   "settings.mfa.on": "Two-step sign-in is on.",
+  "settings.mfa.not_used": "Two-step sign-in is off for now. You sign in with your email and password only; no authenticator code is asked.",
   "settings.mfa.setup": "Add this key to your authenticator app (or open the link on your phone), then enter the 6-digit code it shows.",
   "settings.mfa.enable_cta": "Turn on two-step sign-in",
   "settings.mfa.confirm_cta": "Confirm",
