@@ -1,11 +1,37 @@
 import type { getPacket } from "@tc-hunter/db";
 import { answerHereAction } from "@/app/applications/actions";
 import { StandingAsk } from "@/components/applications/Packet";
-import { standingKindFor, type StepKind } from "@tc-hunter/domain";
+import { datePartOf, FORM_DATE, standingKindFor, type StepKind } from "@tc-hunter/domain";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 type Field = Packet["fields"][number];
 const NO_SAY = /decline|prefer not|rather not|do not wish|don.t wish|not to (answer|disclose|say)/i;
+
+/**
+ * A date the form asks in parts ("Date: Month", "Date: Day", "Date: Year") is one question here, with one
+ * date box (Yong, 2026-11-20). Each part is still saved as its own answer; the action splits the date.
+ */
+type Item = { kind: "one"; f: Field } | { kind: "date"; question: string; parts: Array<{ f: Field; part: "month" | "day" | "year" }> };
+function group(ask: Field[]): Item[] {
+  const out: Item[] = [];
+  for (const f of ask) {
+    const d = !f.options?.length && f.type !== "checkbox" && f.type !== "textarea" ? datePartOf(f.label) : null;
+    const last = out[out.length - 1];
+    if (d && last?.kind === "date" && last.question === d.question && !last.parts.some((x) => x.part === d.part)) last.parts.push({ f, part: d.part });
+    else if (d) out.push({ kind: "date", question: d.question, parts: [{ f, part: d.part }] });
+    else out.push({ kind: "one", f });
+  }
+  // A lone part ("Year" only) stays a plain box.
+  return out.map((x) => (x.kind === "date" && x.parts.length === 1 ? { kind: "one", f: x.parts[0]!.f } : x));
+}
+const pad = (n: string | null | undefined, w: number) => (n && /^\d+$/.test(n.trim()) ? n.trim().padStart(w, "0") : null);
+/** The date box's starting value (YYYY-MM-DD) from what TC Hunter tried, or today for the form's own date. */
+function dateValue(parts: Array<{ f: Field; part: string }>, today: string, own: boolean): string {
+  const get = (k: string) => parts.find((x) => x.part === k)?.f.answer;
+  const y = pad(get("year"), 4), m = pad(get("month"), 2), d = pad(get("day"), 2);
+  if (y && m && d) return `${y}-${m}-${d}`;
+  return own ? today : "";
+}
 
 /**
  * The questions TC Hunter stopped on, answered right on the application page (Yong, 2026-11-19: "i don't
@@ -19,14 +45,15 @@ export function answerHereFields(p: Packet | null, stuckKeys: string[], waitingF
   return p.fields.filter((f) => f.type !== "file" && (stuck.has(f.key) || (waitingForAnswers && f.required && !f.willFill)));
 }
 
-export function AnswerHere({ p, fields, back, fresh, mfa }: { p: Packet; fields: Field[]; back: string; fresh: boolean; mfa: boolean }) {
+export function AnswerHere({ p, fields, back, fresh, mfa, today }: { p: Packet; fields: Field[]; back: string; fresh: boolean; mfa: boolean; today: string }) {
   const approved = p.state !== "packet_draft" && p.state !== "packet_ready_for_review";
   const theirs = fields.filter((f) => f.step && f.step !== "work_auth");
   const ask = fields.filter((f) => !f.step || f.step === "work_auth");
   // One standing answer covers every statement of its kind: ask once per kind (Accenture, 2026-11-19).
   const kinds = new Map<string, Field>();
   for (const f of theirs) { const k = standingKindFor(f.step as StepKind, f.label) ?? `own:${f.id}`; if (!kinds.has(k)) kinds.set(k, f); }
-  const total = ask.length + theirs.length;
+  const items = group(ask);
+  const total = items.length + theirs.length;
   return (
     <section className="card answer-here" id="answer-here" aria-label="Questions waiting for your answer">
       <h2>{total === 1 ? "1 question needs you" : `${total} questions need you`}</h2>
@@ -35,7 +62,23 @@ export function AnswerHere({ p, fields, back, fresh, mfa }: { p: Packet; fields:
           <input type="hidden" name="app" value={p.appRef} />
           <input type="hidden" name="back" value={back} />
           <ol className="answer-here-list">
-            {ask.map((f) => (
+            {items.map((it) => it.kind === "date" ? (
+              <li key={it.parts[0]!.f.id}>
+                {it.parts.map(({ f, part }) => (
+                  <span key={f.id} hidden>
+                    <input type="hidden" name="field" value={f.id} />
+                    <input type="hidden" name={`group_${f.id}`} value={it.parts[0]!.f.id} />
+                    <input type="hidden" name={`part_${f.id}`} value={part} />
+                  </span>
+                ))}
+                <label htmlFor={`date_${it.parts[0]!.f.id}`} className="packet-q">{it.question}{it.parts.some((x) => x.f.required) ? <span className="error"> (required)</span> : null}</label>
+                <input type="date" id={`date_${it.parts[0]!.f.id}`} name={`date_${it.parts[0]!.f.id}`} required
+                  defaultValue={dateValue(it.parts, today, FORM_DATE.test(it.question))} />
+                {FORM_DATE.test(it.question)
+                  ? <span className="small muted">The date you sign their form: today. TC Hunter fills this by itself from now on.</span>
+                  : <label className="check small"><input type="checkbox" name={`keep_${it.parts[0]!.f.id}`} value="1" defaultChecked /> Use this answer on future applications too</label>}
+              </li>
+            ) : (({ f }) => (
               <li key={f.id}>
                 <input type="hidden" name="field" value={f.id} />
                 <label htmlFor={`answer_${f.id}`} className="packet-q">{f.label.replace(/\s*\*\s*$/, "")}{f.required ? <span className="error"> (required)</span> : null}</label>
@@ -63,7 +106,7 @@ export function AnswerHere({ p, fields, back, fresh, mfa }: { p: Packet; fields:
                   ? <span className="small muted">Saved as your right-to-work answer and used on every form from now on.</span>
                   : <label className="check small"><input type="checkbox" name={`keep_${f.id}`} value="1" defaultChecked /> Use this answer on future applications too</label>}
               </li>
-            ))}
+            ))(it))}
           </ol>
           <button>{approved ? "Save and continue" : "Save answers"}</button>
           <p className="small muted">{approved

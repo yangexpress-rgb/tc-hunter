@@ -801,11 +801,11 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     expect(by(/^Degree/)).toMatchObject({ answer: "Master's Degree", source: "inferred", willFill: true });
     // Today where Yong lives (Toronto), not in UTC: in the evening there it is already tomorrow in UTC.
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-    expect(by(/^Date: Month/)).toMatchObject({ answer: String(+today.slice(5, 7)), source: "inferred", willFill: true });
-    expect(by(/^Date: Year/)).toMatchObject({ answer: today.slice(0, 4), source: "inferred", willFill: true });
+    expect(by(/^Date: Month/)).toMatchObject({ answer: String(+today.slice(5, 7)), source: "master_profile", willFill: true });
+    expect(by(/^Date: Year/)).toMatchObject({ answer: today.slice(0, 4), source: "master_profile", willFill: true });
     const start = startDateFrom("2 weeks from next Monday", today)!;
-    expect(by(/start employment\?: Month/)).toMatchObject({ answer: String(+start.slice(5, 7)), source: "inferred", willFill: true });
-    expect(by(/start employment\?: Year/)).toMatchObject({ answer: start.slice(0, 4), source: "inferred", willFill: true });
+    expect(by(/start employment\?: Month/)).toMatchObject({ answer: String(+start.slice(5, 7)), source: "answer_bank", willFill: true });
+    expect(by(/start employment\?: Year/)).toMatchObject({ answer: start.slice(0, 4), source: "answer_bank", willFill: true });
     // The written answer is a draft: in the box for the applicant, never typed in until they use it.
     const why = by(/Why do you want/);
     expect(why).toMatchObject({ source: "drafted", willFill: false });

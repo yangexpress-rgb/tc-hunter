@@ -1,3 +1,4 @@
+import { FORM_DATE, START_QUESTION, startDateFrom, startDatePart } from "./dates";
 import { countryForRegion, matchChoice } from "./equivalents";
 import { createHmac } from "node:crypto";
 import { canonicalJson } from "../fingerprint";
@@ -37,6 +38,8 @@ export interface PacketProfile {
   standing?: Array<{ kind: StandingKind; text: string }>;
   /** Their roles, newest first (dates as YYYY-MM-DD; no end = they work there now), for a form's work-history boxes. */
   experience?: Array<{ id: string; title: string; employer: string | null; location: string | null; start: string | null; end: string | null; description: string | null }>;
+  /** Today (YYYY-MM-DD) where the applicant lives, for a form's own date and a start date counted from today. */
+  today?: string;
 }
 
 export interface ProposedField {
@@ -302,9 +305,36 @@ function workHistory(fields: FormField[], out: ProposedField[], p: PacketProfile
   }
 }
 
+/**
+ * Dates by the calendar, in every AI mode (No AI too): the form's own date is today where the applicant
+ * lives (Workday's disability form asks "Date: Month / Day / Year"; Premier, 2026-11-20), and a start-date
+ * box their saved words would fill ("2 weeks from next Monday") gets the date those words mean.
+ */
+function calendarDates(fields: FormField[], out: ProposedField[], p: PacketProfile) {
+  if (!p.today) return;
+  for (const [i, f] of fields.entries()) {
+    if (f.type === "checkbox" || f.type === "file") continue;
+    const base = out[i]!;
+    const label = f.label.trim();
+    const put = (date: string, source: FieldSource, ref: string | null, note: string) => {
+      const value = startDatePart(label, date);
+      const answer = f.options?.length ? pick(f.options, value) : value;
+      if (answer) out[i] = { ...base, answer, source, sourceRefId: ref, confidence: 0.95, step: null, standingKind: null, note };
+    };
+    if (FORM_DATE.test(label)) {
+      // Always today: an answer saved for "Date: Month" on an earlier form is that day, not this one.
+      put(p.today, "master_profile", null, `Today's date (${p.today}), the date this form is signed.`);
+    } else if (START_QUESTION.test(label) && base.source === "answer_bank" && base.answer && !/^[\d\s/.-]+$/.test(base.answer)) {
+      const date = startDateFrom(base.answer, p.today);
+      if (date) put(date, "answer_bank", base.sourceRefId, `From your saved start date: "${base.answer.slice(0, 60)}" (${date}).`);
+    }
+  }
+}
+
 export function proposeFields(fields: FormField[], p: PacketProfile): ProposedField[] {
   const out = fields.map((f) => proposeField(f, p));
   workHistory(fields, out, p);
+  calendarDates(fields, out, p);
   const prefix = (l: string) => (l.includes(": ") ? l.slice(0, l.indexOf(": ")) : "");
   const choice = (l: string) => (l.includes(": ") ? l.slice(l.indexOf(": ") + 2) : l);
   for (let i = 0; i < fields.length; ) {

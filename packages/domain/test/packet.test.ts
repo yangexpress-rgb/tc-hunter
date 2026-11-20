@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ANSWER_PRESETS, applicantStepFor, confirmationIn, FILL_CONFIDENCE, packetHash, profileFieldFor, proposeField, proposeFields, receiptPdf, willFill, type PacketProfile } from "../src";
+import { ANSWER_PRESETS, applicantStepFor, confirmationIn, FILL_CONFIDENCE, packetHash, profileFieldFor, proposeField, proposeFields, questionNames, receiptPdf, willFill, type PacketProfile } from "../src";
 
 const preset = (k: string) => [...ANSWER_PRESETS.find((p) => p.key === k)!.patterns];
 const profile = (over: Partial<PacketProfile> = {}): PacketProfile => ({
@@ -194,5 +194,29 @@ describe("work-history boxes (Accenture Workday \"My Experience\", 2026-11-19)",
     expect(out.slice(0, 18).filter((f) => f.answer).every((f) => willFill(f))).toBe(true);
     // Outside the blocks, "City" is still their own city.
     expect(out[18]!.answer).toBe("Toronto");
+  });
+});
+
+describe("dates by the calendar, in every AI mode (Premier's disability form, 2026-11-20)", () => {
+  const parts = (q: string) => (["Month", "Day", "Year"] as const).map((x) => ({ key: `#${q}_${x}`, label: `${q}: ${x}`, type: "text" as const, required: true }));
+  it("dates the form today in parts or whole, even over an answer saved on an earlier form", () => {
+    const old = { id: "d1", key: "custom:Date: Month", patterns: ["date: month"], text: "11", approved: true, stale: false, isApplicantStep: false };
+    const out = proposeFields([...parts("Date"), { key: "#signed", label: "Date signed*", type: "text" }, { key: "#today", label: "Today's Date", type: "text" }],
+      profile({ today: "2026-12-03", answers: [old] }));
+    expect(out.map((f) => f.answer)).toEqual(["12", "3", "2026", "12/03/2026", "12/03/2026"]);
+    expect(out.every((f) => willFill(f) && f.source === "master_profile" && f.step === null)).toBe(true);
+  });
+  it("leaves the date for the applicant when today isn't known, and never fills a birth date", () => {
+    expect(proposeFields(parts("Date"), profile()).map((f) => f.answer)).toEqual([null, null, null]);
+    expect(proposeFields(parts("Date of birth"), profile({ today: "2026-12-03" })).map((f) => f.answer)).toEqual([null, null, null]);
+  });
+  it("turns saved start-date words into the date in the start-date boxes", () => {
+    const start = { id: "s1", key: "start_date", patterns: ["start date", "available to start"], text: "2 weeks from next Monday", approved: true, stale: false, isApplicantStep: false };
+    const out = proposeFields(parts("When will you be available to start employment?"), profile({ today: "2026-11-20", answers: [start] }));
+    // Friday 20 Nov: next Monday is 23 Nov, two weeks on is 7 Dec.
+    expect(out.map((f) => [f.answer, f.source, f.sourceRefId])).toEqual([["12", "answer_bank", "s1"], ["7", "answer_bank", "s1"], ["2026", "answer_bank", "s1"]]);
+  });
+  it("names a date asked in parts as one question", () => {
+    expect(questionNames(["Date: Month", "Date: Day", "Date: Year", "Notice period"])).toEqual(["Date", "Notice period"]);
   });
 });
