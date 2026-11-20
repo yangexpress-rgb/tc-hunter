@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
-  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart,
+  looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
   checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
@@ -283,8 +283,6 @@ const cacheKey = (f: FormField) => `${f.label}|${(f.options ?? []).join("/")}`;
  */
 const savedWordsForDate = (f: FormField, p: { source: string | null; answer: string | null }) =>
   p.source === "answer_bank" && f.type !== "checkbox" && !f.options?.length && START_QUESTION.test(f.label) && !/^[\d\s/.-]+$/.test(p.answer ?? "");
-/** A form's own date, whole or in parts ("Date: Month", "Today's Date*", "Date signed"). Not a start, birth or other date. */
-export const FORM_DATE = /^(today'?s date|date( signed| of signature)?)\s*\*?(:\s*(month|day|year)\s*\*?)?$/i;
 /** Kinds of question never worked out for the applicant: statements, consents, signatures, diversity. */
 const NEVER_INFER = new Set(["eeo", "signature", "consent", "attestation"]);
 
@@ -1056,7 +1054,11 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     const missing = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && !(opts.canHandOver && personal.includes(f)));
     if (missing.length) {
       return { stop: "waiting" as Status, waitingFor: "answers", stuck: missing.map((f) => String(f.field_key)),
-        problem: `${missing.length === 1 ? "1 question needs" : `${missing.length} questions need`} your answer before TC Hunter can send this: ${missing.map((f) => `"${f.question_as_shown}"`).join(", ")}. Answer below and TC Hunter carries on by itself.` };
+        problem: (() => {
+          // A date asked in parts is one question to the applicant ("Date", not "Date: Month", "Date: Day", "Date: Year").
+          const names = questionNames(missing.map((f) => String(f.question_as_shown)));
+          return `${names.length === 1 ? "1 question needs" : `${names.length} questions need`} your answer before TC Hunter can send this: ${names.map((n) => `"${n}"`).join(", ")}. Answer below and TC Hunter carries on by itself.`;
+        })() };
     }
     if (opts.workdayPage) {
       // Workday is filled page by page before its Review page; the whole packet is approved there.

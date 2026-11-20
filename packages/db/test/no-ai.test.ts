@@ -84,6 +84,10 @@ const FORM: FormField[] = [
   { key: "#notice", label: "Notice period *", type: "text", required: true },
   { key: "#why", label: "Why do you want to work here? *", type: "textarea", required: true },
   { key: "#time", label: "Tell us about a time you improved a process.", type: "textarea" },
+  // Workday's disability form dates the form in parts: today, by the calendar, even with No AI (Premier, 2026-11-20).
+  { key: "#signed_m", label: "Date: Month", type: "text", required: true },
+  { key: "#signed_d", label: "Date: Day", type: "text", required: true },
+  { key: "#signed_y", label: "Date: Year", type: "text", required: true },
   // Deliberately not saved anywhere: it must go to the applicant, never be guessed.
   { key: "#k8s", label: "How many years have you worked with Kubernetes? *", type: "text", required: true },
 ];
@@ -229,6 +233,11 @@ describe("A fixture application, end to end in No AI mode", () => {
     expect(f("Notice period")).toMatchObject({ answer: "Two weeks", source: "answer_bank", willFill: true });
     expect(f("Why do you want")).toMatchObject({ answer: "I like building reports that planners use every day.", source: "answer_bank", willFill: true });
     expect(f("How many years")).toMatchObject({ answer: null, source: null, willFill: false, required: true });
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    expect(f("Date: Month")).toMatchObject({ answer: String(+today.slice(5, 7)), source: "master_profile", willFill: true });
+    expect(f("Date: Day")).toMatchObject({ answer: String(+today.slice(8, 10)), source: "master_profile", willFill: true });
+    expect(f("Date: Year")).toMatchObject({ answer: today.slice(0, 4), source: "master_profile", willFill: true });
+    expect(s.problem).not.toMatch(/Date/);
     // The written answer isn't drafted: it's theirs, with their stories offered word for word.
     expect(f("Tell us about a time")).toMatchObject({ answer: null, essay: true, willFill: false });
     expect(p.stories.map((x) => x.title)).toEqual(["Faster supply review"]);
@@ -252,6 +261,7 @@ describe("A fixture application, end to end in No AI mode", () => {
     expect(page.values.get("#k8s")).toBe("None");
     expect(page.values.get("#notice")).toBe("Two weeks");
     expect(page.values.has("#time")).toBe(false);
+    expect(page.values.get("#signed_y")).toMatch(/^\d{4}$/);
     // "Save this answer": the bank grows, so the next form doesn't ask.
     expect(Number((await ownerQuery("SELECT count(*) AS n FROM answer_bank_item")).rows[0].n)).toBe(before + 1);
     expect((await ownerQuery("SELECT DISTINCT ai_provider FROM apply_run")).rows).toEqual([{ ai_provider: "none" }]);

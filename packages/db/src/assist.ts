@@ -13,7 +13,8 @@ import { approveSubmission, consumeSubmissionKey, DomainError, markOutcomeUnknow
 import { once } from "./requestKey";
 import { asApplicant, dataKeyFor } from "./profile";
 import { fillProfileFromResume, keepAnswer } from "./profileFill";
-import { budgetNow } from "./tracker";
+import { budgetNow, tz } from "./tracker";
+import { localDay } from "./answerFacts";
 
 /**
  * Assisted Fill (design 5.5, Phase 4b). The extension in the applicant's own browser
@@ -143,6 +144,8 @@ export async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantI
     email: dec("applicant.email", a.email_enc), phone: dec("applicant.phone", a.phone_enc), city: a.city, region: a.region, country: a.country,
     links: { linkedin: linkOf(/linkedin/i), github: linkOf(/github/i), website: linkOf(/^(website|portfolio|site|web)$/i) },
     answers, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing, experience,
+    // Today where they live, for the form's own date and a start date (by the calendar, in every AI mode).
+    today: localDay(await tz(c)),
   };
   return { profile, dk, resume, letter };
 }

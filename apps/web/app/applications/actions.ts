@@ -123,11 +123,17 @@ export async function answerHereAction(form: FormData) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) continue;
       // A story picked for a written answer is used word for word when the box is left empty.
       const story = String(form.get(`story_${id}`) ?? "");
-      const typed = String(form.get(`answer_${id}`) ?? "").trim();
+      // One part of a date asked in parts ("Date: Month"): its piece of the one date box (YYYY-MM-DD).
+      const group = String(form.get(`group_${id}`) ?? "");
+      const part = String(form.get(`part_${id}`) ?? "");
+      const date = group ? String(form.get(`date_${group}`) ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/) : null;
+      const typed = group
+        ? (date ? (part === "year" ? date[1]! : String(+(part === "month" ? date[2]! : date[3]!))) : "")
+        : String(form.get(`answer_${id}`) ?? "").trim();
       const text = typed || (story ? (await storyText(pool, cfg, s, story)).trim() : "");
       if (!text) throw Object.assign(new Error("TC_ANSWER_MISSING"), { code: "TC_ANSWER_MISSING" });
       if (form.get(`wa_${id}`)) { await saveWorkAuthAnswer(pool, cfg, s, String(form.get(`q_${id}`) ?? ""), text); workAuth = true; continue; }
-      answers.push({ fieldId: id, text, keep: form.get(`keep_${id}`) === "1" });
+      answers.push({ fieldId: id, text, keep: form.get(`keep_${group || id}`) === "1" });
     }
     const done = await answerAndContinue(pool, cfg, s, ref, answers);
     if (done.approved || workAuth) {
