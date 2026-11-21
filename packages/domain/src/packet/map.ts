@@ -116,6 +116,20 @@ export function profileFieldFor(label: string): ProfileField | null {
   return PROFILE_RULES.find(([re]) => re.test(l))?.[3] ?? null;
 }
 
+/**
+ * What a right-to-work question asks, when its meaning is plain: "work_auth" (are you authorised / eligible /
+ * legally able to work, said positively) or "sponsorship" (will you require / need sponsorship). Anything
+ * worded the other way round ("…without sponsorship", "not authorised") is left alone, so a saved "Yes" or
+ * "No" is never turned upside down.
+ */
+export function workAuthKind(label: string): "work_auth" | "sponsorship" | null {
+  const l = norm(label);
+  if (/\b(not|without|unable|cannot|can't)\b/.test(l)) return null;
+  if (/\b(sponsor\w*|visa)\b/.test(l)) return /\b(require|need)\w*\b/.test(l) ? "sponsorship" : null;
+  if (/\b(authori[sz]ed|eligible|legally (able|entitled|permitted)|right) to work\b/.test(l)) return "work_auth";
+  return null;
+}
+
 /** One question → one proposed answer (or none). Never invents: every answer is a profile row, an approved saved answer or an approved document. */
 export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   const base = { key: f.key, label: f.label, type: f.type, options: f.options, answer: null, source: null, sourceRefId: null, confidence: 0, step: null, standingKind: null, required: !!f.required, note: null } as ProposedField;
@@ -123,7 +137,11 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   const step = applicantStepFor(f);
   if (step === "work_auth") {
     // Decision 13.7: answered from the applicant's own approved saved answer, never guessed.
-    const saved = p.answers.find((a) => a.patterns.some((re) => new RegExp(re, "i").test(f.label)));
+    // By its wording first; else by what it asks, so "Are you eligible to work in the country…" (Capital One,
+    // 2026-11-21) takes the saved "authorised to work" answer, and any "require sponsorship" the saved sponsorship one.
+    const kind = workAuthKind(f.label);
+    const saved = p.answers.find((a) => a.patterns.some((re) => new RegExp(re, "i").test(f.label)))
+      ?? (kind ? p.answers.find((a) => a.key === kind) : undefined);
     if (saved?.approved && !saved.stale) {
       const chosen = pick(f.options, saved.text);
       if (chosen) return { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9, note: "From your saved right-to-work answer." };
