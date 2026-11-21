@@ -126,7 +126,7 @@ const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "w
  * TC Hunter already knows it; otherwise it tries the usual board names, then asks `lookup`.
  * Never fetches LinkedIn, Indeed or similar sites.
  */
-export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: { known?: SourceSpec | null; lookup?: CareersLookup; workdaySearch?: WorkdaySearch } = {}): Promise<EmployerJobResult> {
+export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: { known?: SourceSpec | null; lookup?: CareersLookup; workdaySearch?: WorkdaySearch; browse?: () => SiteBrowser; hints?: string[] } = {}): Promise<EmployerJobResult> {
   let spec: SourceSpec | null = opts.known && SUPPORTED.has(opts.known.kind) && !isNoFetchHost(opts.known.url) ? opts.known : null;
   let system: string | null = null;
   let careersUrl: string | null = opts.known?.kind === "careers_page" ? opts.known.url : null;
@@ -158,6 +158,13 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
   if ((!spec || spec.kind === "careers_page") && careersUrl) {
     const base = await avatureBase(careersUrl, f).catch(() => null);
     if (base) return findOnAvature(q, base, f);
+  }
+  // Still nothing: look around the employer's own website in a real browser, as a person would
+  // (Yong, 2026-11-21: "the right link should be searched … automatically").
+  if (!spec && !system && opts.browse) {
+    const home = tokenGuesses(q.employer)[0];
+    const starts = [...(opts.hints ?? []), ...(careersUrl ? [careersUrl] : []), ...(home ? [`https://www.${home}.com/`] : []), ...careersGuesses(q.employer)];
+    spec = await hiringSiteByBrowsing(starts, q.employer, opts.browse()).catch(() => null);
   }
   if (!spec) {
     return { found: false, spec: null, reason: system
@@ -309,4 +316,85 @@ async function findOnAvature(q: EmployerJobQuery, base: string, f: Fetcher): Pro
     return { found: false, spec: null, reason };
   }
   return { found: true, url: pick.posting.url, title: pick.posting.title, location: pick.posting.locationRaw, score: pick.score, spec: null };
+}
+
+// Searching the employer's own website in a real browser (Yong, 2026-11-21) ---------------------------
+
+/** A browser TC Hunter can look around an employer's website with: open a page, read its links, go on. */
+export interface SiteBrowser {
+  /** Opens this address (in the same window when one is open); false when it can't be reached. */
+  visit(url: string): Promise<boolean>;
+  /** Where the window is now (after any redirect). */
+  here(): string;
+  links(): Promise<PageLink[]>;
+  close(): Promise<void>;
+}
+
+const CAREER_WORDS = /\b(careers?|jobs?|job (search|openings|opportunities)|open (positions|roles)|join (us|our team)|work (with|at|for) us|search (all )?jobs|view (all )?(jobs|openings|positions)|current openings)\b/i;
+const CAREER_PATH = /(^|[/.-])(careers?|jobs|join-us|work-with-us|opportunities)([/.?-]|$)/i;
+const siteOf = (h: string) => h.toLowerCase().split(".").slice(-2).join(".");
+
+/** A hiring system TC Hunter can apply on, from one address. */
+function boardAt(url: string, name: string): SourceSpec | null {
+  const spec = detectSource(url, name);
+  return spec && spec.kind !== "careers_page" && SUPPORTED.has(spec.kind) ? spec : null;
+}
+
+/**
+ * The employer's own website addresses a job posting's text mentions ("Learn more at wiley.com"),
+ * the ones that look like the employer's (its name in the address) first. Never job sites.
+ */
+export function employerSites(text: string, name: string): string[] {
+  const words = titleWords(name).filter((w) => w.length >= 4);
+  const joined = words.join("");
+  const hosts = new Set<string>();
+  for (const m of (text ?? "").matchAll(/\b(?:https?:\/\/)?((?:[a-z0-9-]+\.)+(?:com|org|net|io|co|us|ai|edu))\b/gi)) {
+    const h = m[1]!.toLowerCase().replace(/^www\./, "");
+    if (isNoFetchHost(`https://${h}/`) || isJobBoardHost(`https://${h}/`)) continue;
+    hosts.add(h);
+  }
+  const mine = [...hosts].filter((h) => { const s = siteOf(h).split(".")[0]!; return (joined && s.includes(joined)) || words.some((w) => s.includes(w)); });
+  return mine.slice(0, 3).map((h) => `https://${h.split(".").length === 2 ? `www.${h}` : h}/`);
+}
+
+/**
+ * Looks around the employer's own website in a real browser, as a person would: its front page,
+ * then the links that say Careers, Jobs, Join us…, until a page leads to a hiring system TC Hunter
+ * applies on (Workday, Greenhouse, Lever, Ashby, SmartRecruiters). Stays on the employer's own site
+ * (and its careers subdomains), never more than `maxPages` pages. Pages drawn by scripts are read too.
+ */
+export async function hiringSiteByBrowsing(starts: string[], name: string, browser: SiteBrowser, maxPages = 8): Promise<SourceSpec | null> {
+  const queue: string[] = [...new Set(starts)];
+  const seen = new Set<string>();
+  const sites = new Set<string>();
+  let pages = 0;
+  try {
+    while (queue.length && pages < maxPages) {
+      const url = queue.shift()!;
+      const key = url.replace(/[#?].*$/, "").replace(/\/$/, "");
+      if (seen.has(key) || isNoFetchHost(url) || isJobBoardHost(url)) continue;
+      seen.add(key);
+      if (!(await browser.visit(url).catch(() => false))) continue;
+      pages++;
+      const now = browser.here();
+      const landed = boardAt(now, name);
+      if (landed) return landed;
+      let host: string;
+      try { host = new URL(now).hostname; } catch { continue; }
+      sites.add(siteOf(host));
+      const links = await browser.links().catch(() => [] as PageLink[]);
+      // A link straight to a hiring system: the one most links point to.
+      const found = boardFromLinks(links.map((l) => l.href).filter((h) => /^https:\/\//i.test(h)), name);
+      if (found) return found;
+      // Then the careers links on the same company's site, the ones that say so first.
+      const next = links
+        .filter((l) => { try { const u = new URL(l.href); return u.protocol === "https:" && sites.has(siteOf(u.hostname)) && (CAREER_WORDS.test(l.text ?? "") || CAREER_PATH.test(`${u.hostname}${u.pathname}`)); } catch { return false; } })
+        .sort((a, b) => Number(CAREER_WORDS.test(b.text ?? "")) - Number(CAREER_WORDS.test(a.text ?? "")))
+        .map((l) => l.href);
+      queue.unshift(...next.slice(0, 3).filter((h) => !seen.has(h.replace(/[#?].*$/, "").replace(/\/$/, ""))));
+    }
+    return null;
+  } finally {
+    await browser.close().catch(() => {});
+  }
 }

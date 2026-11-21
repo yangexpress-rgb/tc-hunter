@@ -3,8 +3,8 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, boardFromLinks, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
-  type CareersLookup, type Fetcher, type SourceSpec, type WorkdaySearch,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
+  type CareersLookup, type Fetcher, type SiteBrowser, type SourceSpec, type WorkdaySearch,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
@@ -136,7 +136,10 @@ export async function applyAfterApproval(c: pg.PoolClient, applicationId: string
 
 /** The schedule tick: hands-free applications with an approved resume that the browser hasn't tried yet. */
 export async function enqueueDueApplies(pool: pg.Pool): Promise<number> {
-  return (await pool.query("SELECT enqueue_due_applies() AS n")).rows[0].n as number;
+  const due = (await pool.query("SELECT enqueue_due_applies() AS n")).rows[0].n as number;
+  // Jobs whose employer's careers site wasn't found look again by themselves (Yong, 2026-11-21).
+  const again = (await pool.query("SELECT enqueue_employer_site_retries() AS n")).rows[0].n as number;
+  return due + again;
 }
 
 // ---------------------------------------------------------------------------
@@ -415,18 +418,23 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   const site = siteName(jobSiteUrl);
   const board = isJobBoardHost(jobSiteUrl);
   const posting = await withApplicant(pool, auto, async (c) => (await c.query(
-    `SELECT p.id, p.title, p.location_raw, p.employer_apply_url FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as
-    { id: string; title: string; location_raw: string | null; employer_apply_url: string | null });
+    `SELECT p.id, p.title, p.location_raw, p.employer_apply_url, p.employer_lookup, left(p.description_text, 20000) AS description FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as
+    { id: string; title: string; location_raw: string | null; employer_apply_url: string | null; employer_lookup: { found?: boolean; tries?: number } | null; description: string | null });
+  // How many times the careers site has been looked for without luck, this time included.
+  const tries = (posting.employer_lookup?.found === false ? (posting.employer_lookup.tries ?? 1) : 0) + 1;
   if (posting.employer_apply_url) {
     await run.note(`Found on ${site}. Applying on ${app.employer}'s own site instead, where TC Hunter found the same job earlier`);
     return posting.employer_apply_url;
   }
-  const giveUp = async (why: string) => {
+  const giveUp = async (why: string, again = false) => {
+    const or = again ? "Or, to apply now, " : "";
     await run.end("failed", board
-      ? `This job came from ${site}, which only lists jobs from other sites, and its link didn't lead TC Hunter to ${app.employer}'s own posting. It looked for the same job on ${app.employer}'s own careers site, but ${why}. Open the job on ${site} and apply on the employer's site yourself, then choose "I applied" here.`
-      : `This job came from ${site}, and TC Hunter never applies there for you. It looked for the same job on ${app.employer}'s own careers site, but ${why}. Apply on ${site} yourself, then choose "I applied" here.`);
+      ? `This job came from ${site}, which only lists jobs from other sites, and its link didn't lead TC Hunter to ${app.employer}'s own posting. It looked for the same job on ${app.employer}'s own careers site, but ${why}. ${or}${or ? "open" : "Open"} the job on ${site} and apply on the employer's site yourself, then choose "I applied" here.`
+      : `This job came from ${site}, and TC Hunter never applies there for you. It looked for the same job on ${app.employer}'s own careers site, but ${why}. ${or}${or ? "apply" : "Apply"} on ${site} yourself, then choose "I applied" here.`);
     return null;
   };
+  // Not found yet: TC Hunter looks again by itself and starts applying when it finds the job (Yong, 2026-11-21).
+  const lookAgain = (why: string) => `${why}. TC Hunter looks again by itself in about ${tries * tries} hour${tries > 1 ? "s" : ""} and starts applying there when it finds the job, still asking you before anything is sent`;
   if (!deps.fetcher) return giveUp("looking up employers' sites isn't set up on this server");
   await run.step(board ? `Looking for the same job on ${app.employer}'s own careers site` : `Found on ${site}, where TC Hunter never applies. Looking for the same job on ${app.employer}'s own careers site`);
   const key = companyKey(app.employer);
@@ -444,26 +452,61 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   if (fromOthers) await run.note(`Found ${app.employer}'s own hiring site from its other jobs in TC Hunter (${(() => { try { return new URL(fromOthers.url).hostname; } catch { return fromOthers.url; } })()})`);
   let r: Awaited<ReturnType<typeof findOnEmployerSite>>;
   try {
-    r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw }, deps.fetcher, { known: known ?? fromOthers, lookup: deps.careers, workdaySearch: workdaySearchIn(deps.browser) });
+    r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw }, deps.fetcher, {
+      known: known ?? fromOthers, lookup: deps.careers, workdaySearch: workdaySearchIn(deps.browser),
+      // Last, its own website in TC Hunter's browser, starting from any address the job's text gives.
+      browse: () => { void run.step(`Searching ${app.employer}'s own website for its careers site`); return siteBrowserIn(deps.browser); },
+      hints: employerSites(posting.description ?? "", app.employer),
+    });
   } catch (e) {
     applyLog.warn("apply.employer_site_error", { detail: String((e as Error)?.message ?? e).slice(0, 200) });
     return giveUp("its site couldn't be reached just now. Try again later");
   }
   await withApplicant(pool, auto, async (c) => {
     await c.query("UPDATE job_posting SET employer_apply_url = $2, employer_lookup = $3 WHERE id = $1",
-      [posting.id, r.found ? r.url : null, JSON.stringify(r.found ? { found: true, title: r.title, location: r.location, site: r.spec?.url ?? r.url, at: new Date() } : { found: false, reason: r.reason, site: r.spec?.url ?? null, at: new Date() })]);
+      [posting.id, r.found ? r.url : null, JSON.stringify(r.found ? { found: true, title: r.title, location: r.location, site: r.spec?.url ?? r.url, at: new Date() } : { found: false, reason: r.reason, site: r.spec?.url ?? null, at: new Date(), tries })]);
     // A board found by this lookup is remembered for the employer, as discovery does.
     if (r.spec && !known && key) {
       const id = await upsertSource(c, r.spec);
       await c.query(`INSERT INTO employer_board (company_key, name, job_source_id, note, checked_at) VALUES ($1, $2, $3, NULL, now())
         ON CONFLICT (company_key) DO UPDATE SET job_source_id = coalesce(employer_board.job_source_id, EXCLUDED.job_source_id), note = CASE WHEN employer_board.job_source_id IS NULL THEN NULL ELSE employer_board.note END`, [key, app.employer, id]);
     }
+    // The site is known now: this employer's other jobs that stopped for want of it start again by themselves.
+    if (r.spec && !known && key) {
+      const stuck = (await c.query(
+        `SELECT a.id, p.employer_canonical AS employer FROM application a JOIN job_posting p ON p.id = a.job_posting_id
+          WHERE a.id <> $1 AND a.stage = 'ready_to_apply' AND p.employer_apply_url IS NULL AND p.employer_lookup ->> 'found' = 'false' AND p.employer_canonical ILIKE $2
+            AND (SELECT r.status FROM apply_run r WHERE r.application_id = a.id ORDER BY r.created_at DESC LIMIT 1) = 'failed'`,
+        [app.id, `%${key.split(" ")[0]}%`])).rows as Array<{ id: string; employer: string }>;
+      for (const x of stuck) if (companyKey(x.employer) === key) await queueApply(c, x.id, { auto: true, retry: "employer_site" }, 30);
+    }
   });
   applyLog.info("apply.employer_site", { found: r.found, kind: r.spec?.kind ?? null });
-  if (!r.found) return giveUp(r.reason);
+  if (!r.found) return !r.spec && tries < 4 ? giveUp(lookAgain(r.reason), true) : giveUp(r.reason);
   const host = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
   await run.note(`Found it on ${app.employer}'s own site (${host}): "${r.title}"${r.location ? `, ${r.location}` : ""}. Applying there`);
   return r.url;
+}
+
+/**
+ * TC Hunter's own browser, for looking around an employer's website: one window, opened on the
+ * first address that answers and reused for the rest (Yong, 2026-11-21).
+ */
+export function siteBrowserIn(browser: ApplyBrowser): SiteBrowser {
+  let page: ApplyPage | null = null;
+  return {
+    async visit(url) {
+      try {
+        if (!page) page = await browser.open(url);
+        else if (page.goto) await page.goto(url);
+        else return false;
+        return true;
+      } catch { return false; }
+    },
+    here: () => page?.url() ?? "",
+    links: async () => (page?.links ? page.links() : []),
+    close: async () => { await page?.close().catch(() => {}); page = null; },
+  };
 }
 
 /**
