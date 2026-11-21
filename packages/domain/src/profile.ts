@@ -90,7 +90,11 @@ export const ANSWER_PRESETS = [
   // The applicant's own cover letter: used word for word in No AI mode, and typed into a form's cover-letter box (Yong, 2026-11-19).
   { key: "cover_letter", label: "Your cover letter", patterns: ["^cover letter\\b"], applicantStep: false },
   { key: "heard_about", label: "How did you hear about this job?", patterns: ["how did you (hear|learn|find out) about", "where did you (hear|find|see)", "^source\\b"], applicantStep: false },
-  { key: "work_auth", label: "Are you authorised to work in this country?", patterns: ["authori[sz]ed to work", "legally (able|eligible) to work"], applicantStep: true },
+  // Common screening questions asked in many wordings: answered once, used for every form that asks them (Yong, 2026-11-21).
+  { key: "age_18", label: "Are you 18 or older?", patterns: ["\\b(18|eighteen) (years )?(of age |years old )?or (over|older)", "at least (18|eighteen)( years)?( of age| years old)?\\b", "over the age of (18|eighteen)"], applicantStep: false },
+  { key: "essential_functions", label: "Can you perform the essential functions of the job, with or without reasonable accommodation?", patterns: ["essential (functions|duties) of the (job|position|role)"], applicantStep: false },
+  { key: "restrictive_agreement", label: "Are you under a non-compete, non-solicitation or similar agreement?", patterns: ["non-?compete", "non-?solicit", "(prohibit|restrict)\\w* you from (recruiting|hiring|soliciting|competing)"], applicantStep: false },
+  { key: "work_auth", label: "Are you authorised to work in this country?", patterns: ["authori[sz]ed to work", "legally (able|eligible|entitled|permitted) to work", "eligible to work", "right to work"], applicantStep: true },
   { key: "sponsorship", label: "Will you now or in the future require sponsorship?", patterns: ["sponsorship", "visa"], applicantStep: true },
 ] as const;
 

@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ANSWER_PRESETS, applicantStepFor, confirmationIn, FILL_CONFIDENCE, packetHash, profileFieldFor, proposeField, proposeFields, questionNames, receiptPdf, willFill, type PacketProfile } from "../src";
+import { ANSWER_PRESETS, applicantStepFor, workAuthKind, confirmationIn, FILL_CONFIDENCE, packetHash, profileFieldFor, proposeField, proposeFields, questionNames, receiptPdf, willFill, type PacketProfile } from "../src";
 
 const preset = (k: string) => [...ANSWER_PRESETS.find((p) => p.key === k)!.patterns];
 const profile = (over: Partial<PacketProfile> = {}): PacketProfile => ({
@@ -218,5 +218,42 @@ describe("dates by the calendar, in every AI mode (Premier's disability form, 20
   });
   it("names a date asked in parts as one question", () => {
     expect(questionNames(["Date: Month", "Date: Day", "Date: Year", "Notice period"])).toEqual(["Date", "Notice period"]);
+  });
+});
+
+describe("common screening questions in No AI mode (Capital One, 2026-11-21)", () => {
+  const yn = ["Yes", "No"];
+  const old = { id: "w1", key: "work_auth", patterns: ["authori[sz]ed to work", "legally (able|eligible) to work"], text: "Yes", approved: true, stale: false, isApplicantStep: true };
+  const sp = { id: "s1", key: "sponsorship", patterns: ["sponsorship", "visa"], text: "No", approved: true, stale: false, isApplicantStep: true };
+
+  it("an 'eligible to work in the country' question takes the saved right-to-work answer, even one saved with older wording", () => {
+    expect(proposeField({ key: "e", label: "Are you eligible to work in the country in which this position is located?*", type: "select", options: yn }, profile({ answers: [old, sp] })))
+      .toMatchObject({ answer: "Yes", source: "answer_bank", sourceRefId: "w1" });
+  });
+
+  it("never turns a saved answer upside down", () => {
+    expect(workAuthKind("Are you legally eligible to work in the US?")).toBe("work_auth");
+    expect(workAuthKind("Will you now or in the future require visa sponsorship?")).toBe("sponsorship");
+    expect(workAuthKind("Are you able to work without sponsorship?")).toBeNull();
+    expect(workAuthKind("Are you not authorized to work here?")).toBeNull();
+    expect(proposeField({ key: "x", label: "Can you work in the US without sponsorship?", type: "select", options: yn }, profile({ answers: [{ ...old, patterns: [] }, { ...sp, patterns: [] }] })))
+      .toMatchObject({ answer: null, step: "work_auth" });
+  });
+
+  it("age, essential functions and non-compete questions are answered once and reused in any wording; none is guessed", () => {
+    const age = { id: "g1", key: "age_18", patterns: preset("age_18"), text: "Yes", approved: true, stale: false, isApplicantStep: false };
+    const ess = { id: "f1", key: "essential_functions", patterns: preset("essential_functions"), text: "Yes", approved: true, stale: false, isApplicantStep: false };
+    const nc = { id: "n1", key: "restrictive_agreement", patterns: preset("restrictive_agreement"), text: "No", approved: true, stale: false, isApplicantStep: false };
+    const p = profile({ answers: [age, ess, nc] });
+    for (const label of ["Are you age 18 or over?*", "Are you at least 18 years of age?", "Are you over the age of 18?"]) {
+      expect(proposeField({ key: "a", label, type: "select", options: yn }, p)).toMatchObject({ answer: "Yes", sourceRefId: "g1" });
+    }
+    expect(proposeField({ key: "b", label: "Are you able to perform the essential functions of the job, with or without reasonable accommodations?*", type: "select", options: yn }, p)).toMatchObject({ answer: "Yes", sourceRefId: "f1" });
+    expect(proposeField({ key: "c", label: "Are you currently under any form of agreement or policy, with your current or previous employer(s), which would prohibit or restrict you from recruiting or hiring former colleagues or soliciting/doing business with customers?", type: "select", options: yn }, p))
+      .toMatchObject({ answer: "No", sourceRefId: "n1" });
+    expect(proposeField({ key: "d", label: "Are you bound by a non-compete agreement?", type: "select", options: yn }, p)).toMatchObject({ answer: "No", sourceRefId: "n1" });
+    // Nothing saved: left for the applicant, never guessed.
+    expect(proposeField({ key: "a", label: "Are you age 18 or over?*", type: "select", options: yn }, profile({ answers: [] }))).toMatchObject({ answer: null });
+    expect(proposeField({ key: "q", label: "Do you meet the Preferred Qualifications for this role as specified in the job description?*", type: "select", options: yn }, p)).toMatchObject({ answer: null });
   });
 });
