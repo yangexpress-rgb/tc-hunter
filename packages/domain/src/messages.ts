@@ -261,6 +261,8 @@ export const L1 = {
   "error.digest_busy": "We're still reading this file. Wait for it to finish, then try again.",
   "error.tailor_busy": "Documents for this job are being prepared right now. Wait for them to finish, then send your feedback again.",
   "error.feedback_empty": "Write what you'd like changed first.",
+  "error.letter_empty": "There's no letter to save. Paste or write your letter, or choose a file with it.",
+  "error.letter_unreadable": "We couldn't read a letter from that file. Use a PDF, a Word document (.docx) or a text file, or paste the letter in instead.",
   "error.resume_unchangeable": "Your original file is kept exactly as you uploaded it and can't be changed. Upload a new one instead.",
   "error.erase_confirm": "That email doesn't match your account, so nothing was deleted.",
 } as const;
@@ -330,6 +332,8 @@ export const ERROR_MESSAGES: Record<string, L1Key> = {
   TC_DIGEST_BUSY: "error.digest_busy",
   TC_TAILOR_BUSY: "error.tailor_busy",
   TC_FEEDBACK_EMPTY: "error.feedback_empty",
+  TC_LETTER_EMPTY: "error.letter_empty",
+  TC_LETTER_UNREADABLE: "error.letter_unreadable",
   TC_RESUME_FILE_UNCHANGEABLE: "error.resume_unchangeable",
   TC_STEP_UP_REQUIRED: "stepup.needed",
   TC_VERIFIED_FACT_LOCKED: "error.fact_locked",

@@ -77,6 +77,10 @@ export default async function DocumentPage(props: Props) {
         ? "This draft was made before your work history was in it. Claude is writing it again from your whole profile now. This page moves to it when it's ready."
         : "Claude is making the next version from your feedback. This page moves to it when it's ready."}</p></> : null}
       {revisionFailed ? <p className="error" role="alert">The new version couldn't be made this time. Your feedback wasn't lost: send it again below.</p> : null}
+      {d.createdBy === "applicant" ? (
+        <p className="status" role="status">{params.own === "1" ? "Your letter is saved as a draft. " : ""}This is your own letter, kept in your words: TC Hunter doesn&apos;t rewrite it or check it against your profile.
+          Look it over, edit or leave out any paragraph, then approve it.</p>
+      ) : null}
       {d.meta.feedback ? (
         <p className="muted">Made from your feedback{d.meta.revised_from ? ` on the previous version` : ""}: “{String(d.meta.feedback)}”
           {d.meta.feedback_applied === false ? <span className="warn"> Claude isn't set up, so only the usual rules were applied and your feedback couldn't be followed.</span> : null}</p>
@@ -173,7 +177,7 @@ function ApproveBar({ d, here }: { d: DocumentView; here: string }) {
   if (d.status === "draft") {
     return (
       <section className="card approve-bar">
-        {d.diffViewedAt ? (
+        {d.diffViewedAt || d.createdBy === "applicant" ? (
           <form action={approveAction}>
             <input type="hidden" name="doc" value={d.id} /><input type="hidden" name="back" value={`/documents/${d.ref}`} />
             <input type="hidden" name="kind" value={d.kind} />

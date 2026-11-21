@@ -462,6 +462,9 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 .doc-checklist li:last-child { border-bottom: 0; }
 .doc-checklist li > span:nth-child(2) { flex: 1 1 200px; }
 .doc-checklist .jchip { min-width: 0; }
+.doc-checklist .letter-actions { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.doc-checklist .letter-actions form { margin: 0; }
+.own-letter textarea { width: 100%; min-height: 16em; }
 .doc-prepare { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
 .doc-prepare .hint { margin-bottom: 0; }
 .stage-panel .packet { margin-top: 12px; }

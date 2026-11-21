@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listApplications, listDocuments, listEmailSignals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
-import { READ_WITHOUT_AI, readWithoutAi, t } from "@tc-hunter/domain";
+import { READ_WITHOUT_AI, aiIsOff, readWithoutAi, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -34,7 +34,7 @@ export default async function JobPage(props: Props) {
   const { pool, cfg } = app();
   const [{ saved, error }, m] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref)]);
   if (!m) notFound();
-  const [docs, work, prefs, apps, ready] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session)]);
+  const [docs, work, prefs, apps, ready, noAi] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session), aiIsOff()]);
   const lastResult = (work?.status === "done" ? work.result ?? {} : {}) as { empty?: boolean };
   const tracked = apps.find((a) => a.job_ref === m.public_ref);
   // A tracked job shows the application's own status card, stepper and "Your documents", worked out exactly as the
@@ -42,6 +42,7 @@ export default async function JobPage(props: Props) {
   let journey = null;
   let packetLine: { state: string; drafted?: number } | null | undefined;
   let resumeState: string | null | undefined;
+  let letterState: string | null | undefined;
   if (tracked) {
     const [full, facts, applying, signals, sum] = await Promise.all([getApplication(pool, cfg, session, tracked.public_ref), journeyFacts(pool, session, tracked.public_ref),
       applyStatus(pool, session, tracked.public_ref), listEmailSignals(pool, session, tracked.public_ref), trackerSummary(pool, session)]);
@@ -51,8 +52,12 @@ export default async function JobPage(props: Props) {
       { run: runLineOf(applying), signal: signals.length ? signals[signals.length - 1] : undefined, reached: full ? reachedOf(full.events) : undefined });
     packetLine = f?.packet ? { state: f.packet.state, drafted: f.packet.draftsToCheck } : null;
     resumeState = f?.docs.resume;
+    letterState = f?.docs.letter;
   }
   const preparing = !!work && (work.status === "queued" || work.status === "running");
+  // What's being prepared: both documents, or only the one asked for ("Write a cover letter").
+  const kinds = Array.isArray(work?.kinds) ? (work.kinds as string[]) : [];
+  const writing = (k: string) => preparing && (!kinds.length || kinds.includes(k));
   const resume = docs.find((d) => d.type === "tailored_resume");
   const letter = docs.find((d) => d.type === "cover_letter");
   const minScore = prefs?.min_score_to_tailor ?? null;
@@ -93,7 +98,7 @@ export default async function JobPage(props: Props) {
         <p className="error" role="alert">{lastResult.empty ? "Nothing was prepared: " : "A resume can't be prepared yet: "}
           your profile has no work history. <a href="/profile/import">Add your resume</a> or <a href="/profile/experience">add a role</a>, then come back and prepare it.</p>
       ) : null}
-      {work?.status === "failed" && !preparing ? <p className="error" role="alert">We couldn&apos;t prepare your resume and cover letter this time. Try again below.</p> : null}
+      {work?.status === "failed" && !preparing ? <p className="error" role="alert">We couldn&apos;t prepare {Array.isArray(work.kinds) && work.kinds.length === 1 && work.kinds[0] === "letter" ? "your cover letter" : "your resume and cover letter"} this time. Try again below.</p> : null}
       {tracked && journey ? (
         <>
           <StatusBlock j={journey} appRef={tracked.public_ref} back={`/applications/${tracked.public_ref}`} card />
@@ -108,7 +113,9 @@ export default async function JobPage(props: Props) {
       )}
 
       {!journey || journey.index <= 3 ? (
-        <DocChecklist resume={resume} letter={letter} resumeState={resumeState ?? (preparing ? "writing" : resume?.status)} jobRef={m.public_ref}
+        <DocChecklist resume={resume} letter={letter} resumeState={resumeState ?? (writing("resume") ? "writing" : resume?.status)}
+          letterState={letterState ?? (writing("letter") ? "writing" : letter?.status)} jobRef={m.public_ref}
+          back={`${back}#stage-getting_ready`} noAi={noAi} canWrite={!preparing && m.posting_status === "active"}
           packet={tracked ? packetLine ?? null : undefined} packetHref={tracked ? `/applications/${tracked.public_ref}#packet` : "#packet"} problem={journey?.tone === "problem"}>
           {!preparing && m.posting_status === "active" ? (
             <form action={tailorAction} id="prepare" className="doc-prepare">

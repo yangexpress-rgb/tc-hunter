@@ -1,13 +1,13 @@
 "use server";
 import { redirect } from "next/navigation";
-import { approveDocument, confirmAlias, editDocument, newVersion, requestTailor, reviseDocument, type DocKind, type EditOp } from "@tc-hunter/db";
-import { errorCode } from "@tc-hunter/domain";
+import { approveDocument, confirmAlias, editDocument, newVersion, requestTailor, reviseDocument, saveOwnLetter, type DocKind, type EditOp } from "@tc-hunter/db";
+import { MAX_OWN_LETTER_CHARS, MAX_RESUME_BYTES, detectKind, errorCode, extractText } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
 /** Only ever send people back to a Documents, Jobs or Applications page. */
 function backTo(form: FormData, fallback: string): string {
   const b = String(form.get("back") ?? "");
-  return /^\/(documents|jobs|applications)(\/[A-Za-z0-9-]*)?(\?[a-z=&0-9_-]*)?(#[a-z0-9-]*)?$/.test(b) ? b : fallback;
+  return /^\/(documents|jobs|applications)(\/[A-Za-z0-9-]*)?(\?[a-z=&0-9_-]*)?(#[a-z0-9_-]*)?$/.test(b) ? b : fallback;
 }
 const withParam = (path: string, k: string, v: string) => {
   const [base, hash] = path.split("#");
@@ -32,6 +32,34 @@ export async function tailorAction(form: FormData) {
   const job = String(form.get("job") ?? "");
   const kinds = form.getAll("kind").map(String).filter((k): k is DocKind => k === "resume" || k === "letter");
   await act(form, () => requestTailor(app().pool, s, job, kinds.length ? kinds : ["resume", "letter"]), `/jobs/${job}`, "preparing");
+}
+
+/**
+ * "Write or upload your own" cover letter (Yong, 2026-11-21): pasted text, or the text of a PDF, Word or
+ * text file. No AI is used. It becomes a draft letter for the job; the applicant looks it over and approves it.
+ */
+export async function ownLetterAction(form: FormData) {
+  const s = await requireSession();
+  const job = String(form.get("job") ?? "");
+  if (!/^[A-Za-z0-9-]{1,40}$/.test(job)) redirect("/jobs");
+  const here = `/jobs/${job}/letter`;
+  let text = String(form.get("text") ?? "");
+  const file = form.get("file");
+  if (file instanceof File && file.size > 0) {
+    if (file.size > MAX_RESUME_BYTES) redirect(`${here}?e=TC_RESUME_TOO_BIG`);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const kind = detectKind(file.name, bytes);
+    if (!kind) redirect(`${here}?e=TC_LETTER_UNREADABLE`);
+    try { text = await extractText(kind, bytes); } catch { redirect(`${here}?e=TC_LETTER_UNREADABLE`); }
+    if (!text.trim()) redirect(`${here}?e=TC_LETTER_UNREADABLE`);
+  }
+  let ref = "";
+  try { ref = await saveOwnLetter(app().pool, s, job, text.slice(0, MAX_OWN_LETTER_CHARS)); } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("documents.own_letter_failed", { code });
+    redirect(`${here}?e=${code}`);
+  }
+  redirect(`/documents/${ref}?own=1`);
 }
 
 export async function editAction(form: FormData) {

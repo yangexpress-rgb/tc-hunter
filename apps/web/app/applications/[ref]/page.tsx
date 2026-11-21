@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { applyStatus, budgetNow, getApplication, hasFreshStepUp, getPacket, journeyFacts, listDevices, listEmailSignals, trackerSummary } from "@tc-hunter/db";
-import { APPLICATION_STAGES, CLOSED, JOURNEY_STAGES, OUTCOME_LABEL, STAGE_LABEL, journeyTimeline, type ApplicationStage, type JourneyStage } from "@tc-hunter/domain";
+import { APPLICATION_STAGES, CLOSED, aiIsOff, JOURNEY_STAGES, OUTCOME_LABEL, STAGE_LABEL, journeyTimeline, type ApplicationStage, type JourneyStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -49,7 +49,7 @@ export default async function ApplicationPage(props: Props) {
   const { pool, cfg } = app();
   const [{ saved, error, params }, a, sum, signals, packet, devices, facts] = await Promise.all([flashOf(props), getApplication(pool, cfg, session, ref),
     trackerSummary(pool, session), listEmailSignals(pool, session, ref), getPacket(pool, cfg, session, ref), listDevices(pool, session), journeyFacts(pool, session, ref)]);
-  const applying = await applyStatus(pool, session, ref);
+  const [applying, noAi] = await Promise.all([applyStatus(pool, session, ref), aiIsOff()]);
   if (!a) notFound();
   const tz = sum.timeZone;
   const back = `/applications/${a.public_ref}`;
@@ -138,7 +138,8 @@ export default async function ApplicationPage(props: Props) {
 
       {/* Stage panels, in journey order, each only when it's relevant. */}
       {at <= 3 ? (
-        <DocChecklist resume={resume} letter={letter} resumeState={facts[a.public_ref]?.docs.resume} jobRef={a.job_ref} problem={problem}
+        <DocChecklist resume={resume} letter={letter} resumeState={facts[a.public_ref]?.docs.resume} letterState={facts[a.public_ref]?.docs.letter} jobRef={a.job_ref} problem={problem}
+          back={`${back}#stage-getting_ready`} noAi={noAi} canWrite={facts[a.public_ref]?.docs.resume !== "writing" && facts[a.public_ref]?.docs.letter !== "writing"} refresh
           packet={packet ? { state: packet.state, answers, drafted } : null}>
           {/* With a packet, its own card carries "Applied on their site yourself?": one toggle, not two. */}
           {preApplied && !packet && !sent ? (
