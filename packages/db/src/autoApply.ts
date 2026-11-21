@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, boardFromLinks, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SourceSpec, type WorkdaySearch,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
@@ -432,9 +432,19 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   const key = companyKey(app.employer);
   const known = key ? await withApplicant(pool, auto, async (c) => (await c.query(
     `SELECT s.name, s.type, s.kind, s.source_key AS key, s.url FROM employer_board b JOIN job_source s ON s.id = b.job_source_id WHERE b.company_key = $1`, [key])).rows[0] as SourceSpec | undefined) : undefined;
+  // Not known yet: the hiring system the employer's other jobs here came from (Wiley, 2026-11-21).
+  const fromOthers = known || !key ? null : await withApplicant(pool, auto, async (c) => {
+    const rows = (await c.query(
+      `SELECT p.employer_canonical AS employer, u.url FROM job_posting p
+         CROSS JOIN LATERAL (SELECT p.apply_url AS url UNION ALL SELECT p.employer_apply_url UNION ALL SELECT ps.url FROM job_posting_source ps WHERE ps.job_posting_id = p.id) u
+        WHERE p.id <> $1 AND p.employer_canonical ILIKE $2 AND u.url ~* '(myworkdayjobs|greenhouse|lever|ashbyhq|smartrecruiters)\\.'
+        LIMIT 200`, [posting.id, `%${key.split(" ")[0]}%`])).rows as Array<{ employer: string; url: string }>;
+    return boardFromLinks(rows.filter((x) => companyKey(x.employer) === key).map((x) => x.url), app.employer);
+  });
+  if (fromOthers) await run.note(`Found ${app.employer}'s own hiring site from its other jobs in TC Hunter (${(() => { try { return new URL(fromOthers.url).hostname; } catch { return fromOthers.url; } })()})`);
   let r: Awaited<ReturnType<typeof findOnEmployerSite>>;
   try {
-    r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw }, deps.fetcher, { known: known ?? null, lookup: deps.careers, workdaySearch: workdaySearchIn(deps.browser) });
+    r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw }, deps.fetcher, { known: known ?? fromOthers, lookup: deps.careers, workdaySearch: workdaySearchIn(deps.browser) });
   } catch (e) {
     applyLog.warn("apply.employer_site_error", { detail: String((e as Error)?.message ?? e).slice(0, 200) });
     return giveUp("its site couldn't be reached just now. Try again later");

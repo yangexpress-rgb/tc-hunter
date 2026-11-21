@@ -1,6 +1,6 @@
 import { careersGuesses, findBoard, tokenGuesses, type CareersLookup } from "../jobs/discover";
 import { SourceRefusedError, type Fetcher } from "../jobs/fetcher";
-import { fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem, workdayFromKey, type WorkdaySite } from "../jobs/sources";
+import { detectSource, fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem, workdayFromKey, type WorkdaySite } from "../jobs/sources";
 import { detectAts, isAvature } from "../packet/adapters";
 import { htmlToText } from "../jobs/text";
 import type { RawPosting, SourceSpec } from "../jobs/types";
@@ -101,6 +101,22 @@ export function workdayRows(rows: Array<Record<string, unknown>>, w: WorkdaySite
     return { externalId: `workday:${w.tenant}:${String(j.externalPath)}`, url, employer, title: String(j.title), locationRaw: where, workplaceType: null,
       descriptionText: "", salary: null, postedAt: null, applyUrl: url, atsType: "workday" };
   });
+}
+
+/**
+ * The employer's hiring system, from the addresses of its other jobs TC Hunter already has (Wiley,
+ * 2026-11-21: another Wiley job had come straight from wiley.wd1.myworkdayjobs.com, yet a Wiley job
+ * from LinkedIn ended with "couldn't find Wiley's careers site"). The system most of them use wins.
+ */
+export function boardFromLinks(urls: string[], name: string): SourceSpec | null {
+  const count = new Map<string, { spec: SourceSpec; n: number }>();
+  for (const u of urls) {
+    const spec = u ? detectSource(u, name) : null;
+    if (!spec || !SUPPORTED.has(spec.kind) || spec.kind === "careers_page") continue;
+    const id = `${spec.kind}:${spec.key}`;
+    count.set(id, { spec, n: (count.get(id)?.n ?? 0) + 1 });
+  }
+  return [...count.values()].sort((a, b) => b.n - a.n)[0]?.spec ?? null;
 }
 
 const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "careers_page"]);

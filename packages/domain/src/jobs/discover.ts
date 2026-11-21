@@ -89,7 +89,8 @@ export function tokenGuesses(name: string): string[] {
 export function careersGuesses(name: string): string[] {
   const t = tokenGuesses(name)[0];
   if (!t || t.length < 3) return [];
-  return [`https://www.${t}careers.com/`, `https://careers.${t}.com/`, `https://jobs.${t}.com/`, `https://www.${t}.com/careers`];
+  // Last, the employer's own front page, whose careers link is followed (wiley.com → /en-us/about-us/careers).
+  return [`https://www.${t}careers.com/`, `https://careers.${t}.com/`, `https://jobs.${t}.com/`, `https://www.${t}.com/careers`, `https://www.${t}.com/`];
 }
 
 const parse = (text: string): unknown => { try { return JSON.parse(text); } catch { return null; } };
@@ -146,31 +147,67 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
       if (spec && wd && spec.kind === "workday") { if (await workdayHasJobs(wd, f)) return spec; }
       else if (spec && spec.kind === "careers_page" && !isNoFetchHost(spec.url)) {
         const page = await f.get(spec.url, { kind: "page" });
-        // Many careers pages (Salesforce's, for one) send people on to a Workday site for the jobs themselves.
-        const wdLink = /https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[A-Za-z0-9_\/-]+/.exec(page.text)?.[0];
-        const wdSite = wdLink ? parseWorkday(wdLink) : null;
-        // Workday turns this server's own reader away (its jobs are read by the desktop app), so a Workday
-        // site the employer's own page links to is trusted when Workday won't answer us (Capital One, 2026-11-21).
-        if (wdSite && !skip.has(`workday:${wdSite.host}/${wdSite.tenant}/${wdSite.site}`)) {
-          const answers = await workdayHasJobs(wdSite, f).catch((e) => { if (e instanceof SourceRefusedError && e.reason !== "not_found") return "refused" as const; if (e instanceof SourceRefusedError) return false; throw e; });
-          if (answers) return detectSource(`https://${wdSite.host}/${wdSite.site}`, idea.name);
-        }
-        // Or to a public job board (Greenhouse, Lever, Ashby, SmartRecruiters) named in the page.
-        for (const m of page.text.matchAll(/https:\/\/(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io\/(?:embed\/job_board\?for=)?[a-z0-9_-]+|https:\/\/jobs\.(?:eu\.)?lever\.co\/[a-z0-9_.-]+|https:\/\/jobs\.ashbyhq\.com\/[a-z0-9_.%-]+|https:\/\/(?:jobs|careers)\.smartrecruiters\.com\/[a-z0-9_-]+/gi)) {
-          const b = detectSource(m[0], idea.name);
-          if (!b || b.kind === "careers_page" || b.kind === "workday" || skip.has(`${b.kind}:${b.key}`)) continue;
-          if (boardAnswer(b.kind as AtsKind, (await f.get(PROBE_URL[b.kind as AtsKind](encodeURIComponent(b.key)))).text)) return { ...b, name: idea.name };
-        }
+        const board = await boardOnPage(page.text, idea.name, f, skip);
+        if (board) return board;
         // Only a page that really shows jobs (Yong, 2026-11-17 audit: Deloitte, Infosys and Slalom were saved
         // from pages with links but no readable jobs, then failed every week). Its job links are read to check.
         if (jobPostingsFromHtml(page.text, page.url).length) return spec;
         for (const link of jobLinksFromHtml(page.text, page.url).slice(0, 3)) {
           try { if (jobPostingsFromHtml((await f.get(link, { kind: "page" })).text, link).length) return spec; } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
         }
+        // A front page or "about us" page that links on to the careers page (Wiley, 2026-11-21: wiley.com's
+        // careers page is /en-us/about-us/careers, which links to wiley.wd1.myworkdayjobs.com). Two hops at most.
+        for (const link of careersLinks(page.text, page.url).slice(0, 2)) {
+          try {
+            const next = await f.get(link, { kind: "page" });
+            const b = await boardOnPage(next.text, idea.name, f, skip);
+            if (b) return b;
+          } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
+        }
       }
     } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
   }
   return null;
+}
+
+/**
+ * The hiring system a careers page sends people on to: a Workday site (Salesforce's page, for one), or
+ * a public job board (Greenhouse, Lever, Ashby, SmartRecruiters) named in it that answers with jobs.
+ */
+async function boardOnPage(text: string, name: string, f: Fetcher, skip: Set<string>): Promise<SourceSpec | null> {
+  const wdLink = /https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[A-Za-z0-9_\/-]+/.exec(text)?.[0];
+  const wdSite = wdLink ? parseWorkday(wdLink) : null;
+  // Workday turns this server's own reader away (its jobs are read by the desktop app), so a Workday
+  // site the employer's own page links to is trusted when Workday won't answer us (Capital One, 2026-11-21).
+  if (wdSite && !skip.has(`workday:${wdSite.host}/${wdSite.tenant}/${wdSite.site}`)) {
+    const answers = await workdayHasJobs(wdSite, f).catch((e) => { if (e instanceof SourceRefusedError && e.reason !== "not_found") return "refused" as const; if (e instanceof SourceRefusedError) return false; throw e; });
+    if (answers) return detectSource(`https://${wdSite.host}/${wdSite.site}`, name);
+  }
+  for (const m of text.matchAll(/https:\/\/(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io\/(?:embed\/job_board\?for=)?[a-z0-9_-]+|https:\/\/jobs\.(?:eu\.)?lever\.co\/[a-z0-9_.-]+|https:\/\/jobs\.ashbyhq\.com\/[a-z0-9_.%-]+|https:\/\/(?:jobs|careers)\.smartrecruiters\.com\/[a-z0-9_-]+/gi)) {
+    const b = detectSource(m[0], name);
+    if (!b || b.kind === "careers_page" || b.kind === "workday" || skip.has(`${b.kind}:${b.key}`)) continue;
+    if (boardAnswer(b.kind as AtsKind, (await f.get(PROBE_URL[b.kind as AtsKind](encodeURIComponent(b.key)))).text)) return { ...b, name };
+  }
+  return null;
+}
+
+/** Links on a page to the same company's careers or jobs page ("/about-us/careers", careers.acme.com), first seen first. */
+export function careersLinks(html: string, pageUrl: string): string[] {
+  let here: URL;
+  try { here = new URL(pageUrl); } catch { return []; }
+  const site = (h: string) => h.split(".").slice(-2).join(".");
+  const out: string[] = [];
+  for (const m of html.matchAll(/href="([^"]+)"/g)) {
+    let u: URL;
+    try { u = new URL(m[1]!.replace(/&amp;/g, "&"), here); } catch { continue; }
+    if (u.protocol !== "https:" || site(u.hostname) !== site(here.hostname) || isNoFetchHost(u.href)) continue;
+    if (!/(^|[/.-])(careers?|jobs)([/.-]|$)/i.test(`${u.hostname}${u.pathname}`)) continue;
+    u.hash = "";
+    const href = u.href;
+    if (href.replace(/\/$/, "") === here.href.split("#")[0]!.replace(/\/$/, "") || out.includes(href)) continue;
+    out.push(href);
+  }
+  return out;
 }
 
 /** Looks up where an employer lists its jobs when the usual board names don't answer (Claude, when set up). */
