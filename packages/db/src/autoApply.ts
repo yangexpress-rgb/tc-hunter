@@ -4,7 +4,7 @@ import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
   checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, companyKey, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
-  type CareersLookup, type Fetcher, type SourceSpec,
+  type CareersLookup, type Fetcher, type SourceSpec, type WorkdaySearch,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
@@ -434,7 +434,7 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
     `SELECT s.name, s.type, s.kind, s.source_key AS key, s.url FROM employer_board b JOIN job_source s ON s.id = b.job_source_id WHERE b.company_key = $1`, [key])).rows[0] as SourceSpec | undefined) : undefined;
   let r: Awaited<ReturnType<typeof findOnEmployerSite>>;
   try {
-    r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw }, deps.fetcher, { known: known ?? null, lookup: deps.careers });
+    r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw }, deps.fetcher, { known: known ?? null, lookup: deps.careers, workdaySearch: workdaySearchIn(deps.browser) });
   } catch (e) {
     applyLog.warn("apply.employer_site_error", { detail: String((e as Error)?.message ?? e).slice(0, 200) });
     return giveUp("its site couldn't be reached just now. Try again later");
@@ -454,6 +454,34 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   const host = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
   await run.note(`Found it on ${app.employer}'s own site (${host}): "${r.title}"${r.location ? `, ${r.location}` : ""}. Applying there`);
   return r.url;
+}
+
+/**
+ * Searches a Workday site from TC Hunter's own browser, open on that site's job list: Workday turns
+ * the server's plain reader away but answers a browser page on its own site (Capital One, 2026-11-21).
+ */
+export function workdaySearchIn(browser: ApplyBrowser): WorkdaySearch {
+  return async (w, text) => {
+    const page = await browser.open(`https://${w.host}/${w.site}`).catch(() => null);
+    if (!page) return null;
+    try {
+      if (!page.postJson) return null;
+      const rows: Array<Record<string, unknown>> = [];
+      for (let offset = 0; offset < 60; offset += 20) {
+        const r = await page.postJson(`/wday/cxs/${w.tenant}/${w.site}/jobs`, { appliedFacets: {}, limit: 20, offset, searchText: text }) as { total?: number; jobPostings?: Array<Record<string, unknown>> } | null;
+        if (!r || !Array.isArray(r.jobPostings)) return offset ? rows : null;
+        rows.push(...r.jobPostings);
+        if (r.jobPostings.length < 20 || offset + 20 >= Number(r.total ?? 0)) break;
+      }
+      applyLog.info("apply.workday_search", { host: w.host, rows: rows.length });
+      return rows;
+    } catch (e) {
+      applyLog.info("apply.workday_search_failed", { host: w.host, detail: String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 160) });
+      return null;
+    } finally {
+      await page.close().catch(() => {});
+    }
+  };
 }
 
 /**

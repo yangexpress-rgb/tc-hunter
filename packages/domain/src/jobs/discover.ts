@@ -79,6 +79,19 @@ export function tokenGuesses(name: string): string[] {
   return [...new Set([k.replace(/ /g, ""), k.replace(/ /g, "-")])].filter((t) => t.length >= 2 && t.length <= 60);
 }
 
+/**
+ * Where an employer's own careers site most likely is, from its name alone, for when no AI says
+ * where to look (Yong, 2026-11-21: in No AI mode a Capital One job from LinkedIn ended with
+ * "couldn't find Capital One's careers site", though capitalonecareers.com links to its Workday
+ * site). Only a page that leads to a hiring system or shows jobs is ever used, and only the same
+ * job on it, so a wrong guess costs one request and nothing else.
+ */
+export function careersGuesses(name: string): string[] {
+  const t = tokenGuesses(name)[0];
+  if (!t || t.length < 3) return [];
+  return [`https://www.${t}careers.com/`, `https://careers.${t}.com/`, `https://jobs.${t}.com/`, `https://www.${t}.com/careers`];
+}
+
 const parse = (text: string): unknown => { try { return JSON.parse(text); } catch { return null; } };
 
 /**
@@ -136,7 +149,12 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
         // Many careers pages (Salesforce's, for one) send people on to a Workday site for the jobs themselves.
         const wdLink = /https:\/\/[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[A-Za-z0-9_\/-]+/.exec(page.text)?.[0];
         const wdSite = wdLink ? parseWorkday(wdLink) : null;
-        if (wdSite && !skip.has(`workday:${wdSite.host}/${wdSite.tenant}/${wdSite.site}`) && await workdayHasJobs(wdSite, f)) return detectSource(`https://${wdSite.host}/${wdSite.site}`, idea.name);
+        // Workday turns this server's own reader away (its jobs are read by the desktop app), so a Workday
+        // site the employer's own page links to is trusted when Workday won't answer us (Capital One, 2026-11-21).
+        if (wdSite && !skip.has(`workday:${wdSite.host}/${wdSite.tenant}/${wdSite.site}`)) {
+          const answers = await workdayHasJobs(wdSite, f).catch((e) => { if (e instanceof SourceRefusedError && e.reason !== "not_found") return "refused" as const; if (e instanceof SourceRefusedError) return false; throw e; });
+          if (answers) return detectSource(`https://${wdSite.host}/${wdSite.site}`, idea.name);
+        }
         // Or to a public job board (Greenhouse, Lever, Ashby, SmartRecruiters) named in the page.
         for (const m of page.text.matchAll(/https:\/\/(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io\/(?:embed\/job_board\?for=)?[a-z0-9_-]+|https:\/\/jobs\.(?:eu\.)?lever\.co\/[a-z0-9_.-]+|https:\/\/jobs\.ashbyhq\.com\/[a-z0-9_.%-]+|https:\/\/(?:jobs|careers)\.smartrecruiters\.com\/[a-z0-9_-]+/gi)) {
           const b = detectSource(m[0], idea.name);

@@ -69,3 +69,38 @@ describe("finding it on the employer's site", () => {
     if (!r.found) expect(r.reason).toMatch(/"VP, Digital Products and Technology" isn't on Dollar Shave Club's careers site \(boards\.greenhouse\.io\) now/);
   });
 });
+
+describe("Capital One: a Workday employer with no AI to say where to look (Yong, 2026-11-21)", () => {
+  const q = { employer: "Capital One", title: "Senior Director, Product Management- Capital One Software (Remote)", location: "United States (Remote)" };
+  const page = '<html><a href="https://capitalone.wd12.myworkdayjobs.com/Capital_One/login">Sign in</a></html>';
+  /** Workday turns the server's reader away, as it does Railway's address. */
+  class Careers extends Sites {
+    async get(url: string): Promise<FetchResult> {
+      if (/myworkdayjobs\.com/.test(url)) { this.calls.push(url); throw new SourceRefusedError("refused", "403 from Workday"); }
+      return super.get(url);
+    }
+  }
+  const rows = [
+    { title: "Senior Director, Product Management- Capital One Software (Remote)", locationsText: "2 Locations", externalPath: "/job/Richmond-VA/Senior-Director--Product-Management--Capital-One-Software--Remote-_R1006010-1" },
+    { title: "Senior Director, Data Engineer", locationsText: "3 Locations", externalPath: "/job/McLean-VA/Senior-Director--Data-Engineer_R1006011-1" },
+  ];
+
+  it("guesses its careers site from the name, follows its link to Workday, and searches Workday from a browser", async () => {
+    const f = new Careers({ "https://www.capitalonecareers.com/": page });
+    const searched: string[] = [];
+    const r = await findOnEmployerSite(q, f, { workdaySearch: async (w, text) => { searched.push(`${w.host}/${w.tenant}/${w.site}: ${text}`); return rows; } });
+    expect(r).toMatchObject({ found: true, url: "https://capitalone.wd12.myworkdayjobs.com/Capital_One/job/Richmond-VA/Senior-Director--Product-Management--Capital-One-Software--Remote-_R1006010-1" });
+    expect(searched).toEqual([`capitalone.wd12.myworkdayjobs.com/capitalone/Capital_One: ${q.title}`]);
+    expect(f.calls.some((u) => /linkedin|indeed/.test(u))).toBe(false);
+  });
+
+  it("without a browser, says Workday wouldn't let it read the jobs rather than that there's no careers site", async () => {
+    const r = await findOnEmployerSite(q, new Careers({ "https://www.capitalonecareers.com/": page }));
+    expect(r).toMatchObject({ found: false, reason: /careers site \(capitalone\.wd12\.myworkdayjobs\.com\) didn't let it read its jobs/ });
+  });
+
+  it("never takes a different job on the guessed site", async () => {
+    const r = await findOnEmployerSite(q, new Careers({ "https://www.capitalonecareers.com/": page }), { workdaySearch: async () => rows.slice(1) });
+    expect(r.found).toBe(false);
+  });
+});

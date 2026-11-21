@@ -95,6 +95,8 @@ export interface ApplyPage {
   links?(): Promise<import("./employerSite").PageLink[]>;
   /** Opens another address in this same page. */
   goto?(url: string): Promise<void>;
+  /** Asks this page's own site (a path on it) with JSON, as the page itself would; null when it says no. */
+  postJson?(path: string, body: unknown): Promise<unknown>;
 }
 
 /** Workday's own steps: an account, then a form over several pages. */
