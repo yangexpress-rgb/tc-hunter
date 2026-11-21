@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { findOnEmployerSite, pickSameJob, placesFit, SourceRefusedError, titleScore, type CareersLookup, type Fetcher, type FetchResult, type RawPosting } from "../src";
+import { boardFromLinks, careersLinks, findOnEmployerSite, pickSameJob, placesFit, SourceRefusedError, titleScore, type CareersLookup, type Fetcher, type FetchResult, type RawPosting } from "../src";
 
 /** Jobs found on LinkedIn or Indeed, applied for on the employer's own site (Yong, 2026-11-17). */
 
@@ -102,5 +102,39 @@ describe("Capital One: a Workday employer with no AI to say where to look (Yong,
   it("never takes a different job on the guessed site", async () => {
     const r = await findOnEmployerSite(q, new Careers({ "https://www.capitalonecareers.com/": page }), { workdaySearch: async () => rows.slice(1) });
     expect(r.found).toBe(false);
+  });
+});
+
+describe("Wiley: careers page linked from the front page, or known from its other jobs (Yong, 2026-11-21)", () => {
+  const q = { employer: "Wiley", title: "Group Vice President, Enterprise Systems Product Management", location: "Hoboken, NJ" };
+  const home = '<a href="/en-us/about-us/careers">Careers</a><a href="https://www.wiley.com/en-au/about-us/careers">AU</a><a href="/en-us/shop">Shop</a>';
+  const careers = '<a href="https://wiley.wd1.myworkdayjobs.com/wiley_careers">Search jobs</a>';
+  class Refused extends Sites {
+    async get(url: string): Promise<FetchResult> {
+      if (/myworkdayjobs\.com/.test(url)) throw new SourceRefusedError("refused", "403 from Workday");
+      return super.get(url);
+    }
+  }
+  const rows = [{ title: q.title, locationsText: "Hoboken (HQ), NJ, USA", externalPath: "/job/Hoboken-HQ-NJ-USA/Group-Vice-President--Enterprise-Systems-Product-Management_R2601352-1" }];
+
+  it("finds the careers link on a front page, on the same company's site only", () => {
+    expect(careersLinks(home, "https://www.wiley.com/")).toEqual(["https://www.wiley.com/en-us/about-us/careers", "https://www.wiley.com/en-au/about-us/careers"]);
+    expect(careersLinks('<a href="https://other.com/careers">x</a><a href="https://jobs.wiley.com/">y</a>', "https://www.wiley.com/")).toEqual(["https://jobs.wiley.com/"]);
+  });
+
+  it("goes from the front page to its careers page, on to Workday, and finds the job there", async () => {
+    const f = new Refused({ "https://www.wiley.com/": home, "https://www.wiley.com/en-us/about-us/careers": careers });
+    const r = await findOnEmployerSite(q, f, { workdaySearch: async () => rows });
+    expect(r).toMatchObject({ found: true, url: "https://wiley.wd1.myworkdayjobs.com/wiley_careers/job/Hoboken-HQ-NJ-USA/Group-Vice-President--Enterprise-Systems-Product-Management_R2601352-1" });
+  });
+
+  it("reads the hiring system off the employer's other jobs, the most used one winning", () => {
+    expect(boardFromLinks([
+      "https://wiley.wd1.myworkdayjobs.com/wiley_careers/job/Hoboken-NJ/Director_R1",
+      "https://wiley.wd1.myworkdayjobs.com/en-US/wiley_careers/job/Remote/Analyst_R2",
+      "https://boards.greenhouse.io/someoneelse/jobs/1",
+      "https://www.linkedin.com/jobs/view/1",
+    ], "Wiley")).toMatchObject({ kind: "workday", key: "wiley.wd1.myworkdayjobs.com/wiley/wiley_careers" });
+    expect(boardFromLinks(["https://www.linkedin.com/jobs/view/1"], "Wiley")).toBeNull();
   });
 });
