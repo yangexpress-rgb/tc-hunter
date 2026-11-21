@@ -272,7 +272,7 @@ export async function journeyFacts(pool: pg.Pool, session: Session, appRef?: str
       `SELECT a.public_ref,
               (SELECT d.status FROM document d WHERE d.match_id = a.match_id AND d.type = 'tailored_resume' ORDER BY d.version DESC LIMIT 1) AS resume,
               (SELECT d.status FROM document d WHERE d.match_id = a.match_id AND d.type = 'cover_letter' ORDER BY d.version DESC LIMIT 1) AS letter,
-              EXISTS (SELECT 1 FROM work_item w WHERE w.kind = 'tailor' AND w.payload->>'match_id' = a.match_id::text AND w.status IN ('queued','running')) AS writing,
+              (SELECT coalesce(w.payload->'kinds', '[]'::jsonb) FROM work_item w WHERE w.kind = 'tailor' AND w.payload->>'match_id' = a.match_id::text AND w.status IN ('queued','running') LIMIT 1) AS writing,
               k.id AS k_id, k.state AS k_state, k.failure_reason, k.waiting_reason, k.submitted_at, k.confirmation_ref AS k_conf,
               k.submission_key_used_at IS NOT NULL AS submit_started,
               (k.submit_approved_hash IS NOT NULL AND k.submit_approved_hash NOT LIKE 'assisted:%') AS submit_approved,
@@ -286,9 +286,12 @@ export async function journeyFacts(pool: pg.Pool, session: Session, appRef?: str
     return Object.fromEntries(rows.map((x) => {
       // A run silent for 10 minutes has stopped (same rule as applyStatus).
       const silent = x.r_status === "running" && Date.now() - new Date(x.r_updated).getTime() > 10 * 60_000;
-      const writing = x.writing ? "writing" : null;
+      // What the running preparation is writing: both by default, or just the one asked for ("Write a cover letter").
+      const kinds = Array.isArray(x.writing) ? x.writing as string[] : null;
+      const writes = (k: string) => !!kinds && (!kinds.length || kinds.includes(k));
       const f: JourneyFacts = {
-        docs: { resume: x.resume === "approved" ? "approved" : writing ?? x.resume ?? null, letter: x.letter === "approved" ? "approved" : x.letter ?? null },
+        docs: { resume: x.resume === "approved" ? "approved" : writes("resume") ? "writing" : x.resume ?? null,
+          letter: x.letter === "approved" ? "approved" : writes("letter") && kinds?.length ? "writing" : x.letter ?? null },
         packet: x.k_id ? { state: x.k_state, failureReason: x.failure_reason, waitingReason: x.waiting_reason, submittedAt: x.submitted_at, confirmationRef: x.k_conf,
           submitStarted: x.submit_started, submitApproved: x.submit_approved, draftsToCheck: x.drafts, missingRequired: x.missing } : null,
         run: x.r_status ? { status: silent ? "stopped" : x.r_status, step: x.r_step, problem: silent ? `TC Hunter stopped responding while ${String(x.r_step ?? "working").charAt(0).toLowerCase()}${String(x.r_step ?? "working").slice(1)}. It carries on by itself after a restart.` : x.r_problem,

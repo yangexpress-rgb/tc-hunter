@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, exportLeakSpots, type ExportLeakSpot, extractText, isStale, renderDocument,
+  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, exportLeakSpots, type ExportLeakSpot, extractText, isStale, ownLetterParagraphs, ownLetterSource, renderDocument,
   type Blocked, type DocHeader, type Gap, type LetterProposer, type LetterSource, type ResumeProposer, type ResumeSource,
   type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
@@ -145,7 +145,7 @@ async function writeClaims(c: pg.PoolClient, docId: string, source: DocSource) {
 }
 
 async function insertDocument(c: pg.PoolClient, kind: DocKind, posting: { id: string; matchId: string }, source: DocSource, meta: Record<string, unknown>,
-  blocked: Blocked[], gaps: Gap[], parentId: string | null): Promise<{ id: string; ref: string; version: number }> {
+  blocked: Blocked[], gaps: Gap[], parentId: string | null, createdBy: "app" | "applicant" = "app"): Promise<{ id: string; ref: string; version: number }> {
   const type = TYPE[kind];
   // One draft at a time per job and kind: a new draft replaces an unapproved one.
   await c.query("DELETE FROM document WHERE match_id = $1 AND type = $2 AND status = 'draft'", [posting.matchId, type]);
@@ -154,8 +154,8 @@ async function insertDocument(c: pg.PoolClient, kind: DocKind, posting: { id: st
     "SELECT id FROM document WHERE match_id = $1 AND type = $2 AND status <> 'draft' ORDER BY version DESC LIMIT 1", [posting.matchId, type])).rows[0]?.id ?? null;
   const d = (await c.query(
     `INSERT INTO document (applicant_id, type, version, parent_document_id, job_posting_id, match_id, created_by, source_json, content_hash, generation_meta)
-     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, 'app', $6, $7, $8) RETURNING id, public_ref`,
-    [type, version, parent, posting.id, posting.matchId, JSON.stringify(source), hashOf(source), JSON.stringify(meta)])).rows[0];
+     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $9, $6, $7, $8) RETURNING id, public_ref`,
+    [type, version, parent, posting.id, posting.matchId, JSON.stringify(source), hashOf(source), JSON.stringify(meta), createdBy])).rows[0];
   await writeClaims(c, d.id, source);
   for (const b of blocked) {
     await c.query(
@@ -231,6 +231,26 @@ export async function requestTailor(pool: pg.Pool, session: Session, jobRef: str
 }
 
 /**
+ * The applicant's own cover letter for one job (Yong, 2026-11-21), pasted, typed or read from their file.
+ * Kept word for word as a draft they approve like any other; it replaces an unapproved draft letter and
+ * becomes the next version. It is theirs, so it isn't checked against the profile (that check guards what
+ * TC Hunter writes), and no AI is used, so it works in No AI mode too.
+ */
+export async function saveOwnLetter(pool: pg.Pool, session: Session, jobRef: string, text: string): Promise<string> {
+  if (!ownLetterParagraphs(text).length) throw new DomainError("TC_LETTER_EMPTY");
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const m = (await c.query("SELECT m.id FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
+    if (!m) throw new DomainError("TC_NOT_FOUND");
+    await ensureApplication(c, jobRef, "tailoring");
+    const posting = await postingForMatch(c, m.id);
+    const source = ownLetterSource(text, { postingId: posting.id, title: posting.title, employer: posting.employer });
+    const doc = await insertDocument(c, "letter", posting, source, { proposer: "own-letter", written_by: "applicant", generated_at: new Date().toISOString() }, [], [], null, "applicant");
+    await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE.letter, version: doc.version, proposer: "own-letter", blocked: 0 } });
+    return doc.ref;
+  });
+}
+
+/**
  * Make one document again from the profile as it is now, keeping the old draft in the history.
  * Used when a draft was made from an empty profile that has since filled in (Yong, 2026-11-15).
  */
@@ -260,7 +280,7 @@ export async function reviseDocument(pool: pg.Pool, session: Session, docId: str
 
 export async function tailorWork(pool: pg.Pool, session: Session, jobRef: string) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT w.status, w.result, w.last_error, w.created_at FROM work_item w JOIN match m ON m.id::text = w.payload->>'match_id'
+    `SELECT w.status, w.result, w.last_error, w.created_at, w.payload->'kinds' AS kinds FROM work_item w JOIN match m ON m.id::text = w.payload->>'match_id'
        JOIN job_posting p ON p.id = m.job_posting_id WHERE w.kind = 'tailor' AND p.public_ref = $1 ORDER BY w.created_at DESC LIMIT 1`, [jobRef])).rows[0] ?? null);
 }
 
@@ -277,6 +297,8 @@ export interface DocumentView {
   applicationRef: string | null;
   /** Phrases that would stop the export, where they are (drafts only). */
   leaks: DocLeak[];
+  /** "applicant": the applicant's own letter, word for word (not checked against the profile). */
+  createdBy: "app" | "applicant";
 }
 
 const kindOf = (type: string): DocKind => (type === "cover_letter" ? "letter" : "resume");
@@ -306,7 +328,8 @@ export async function getDocument(pool: pg.Pool, cfg: AppConfig, session: Sessio
       profile,
       usedIn: [...new Set(used.rows.map((u) => u.public_ref as string))],
       applicationRef: appRow?.public_ref ?? null,
-      leaks: d.status === "draft" ? await leakSpots(c, d.id, d.source_json as DocSource, profile, employer) : [],
+      leaks: d.status === "draft" && d.created_by !== "applicant" ? await leakSpots(c, d.id, d.source_json as DocSource, profile, employer) : [],
+      createdBy: d.created_by,
     };
   });
 }
@@ -344,7 +367,7 @@ const move = <T>(a: T[], i: number, dir: number) => { const j = i + dir; if (i <
  */
 export async function editDocument(pool: pg.Pool, cfg: AppConfig, session: Session, docId: string, e: EditOp): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
-    const d = (await c.query("SELECT id, status, source_json, match_id FROM document WHERE id = $1 FOR UPDATE", [docId])).rows[0];
+    const d = (await c.query("SELECT id, status, source_json, match_id, created_by FROM document WHERE id = $1 FOR UPDATE", [docId])).rows[0];
     if (!d) throw new DomainError("TC_NOT_FOUND");
     if (d.status !== "draft") throw new DomainError("TC_DOCUMENT_IMMUTABLE");
     const s = d.source_json as DocSource;
@@ -397,6 +420,13 @@ export async function editDocument(pool: pg.Pool, cfg: AppConfig, session: Sessi
         case "move_para": move(s.paragraphs, e.para, e.dir); break;
         case "edit_para": {
           if (!p) throw new DomainError("TC_NOT_FOUND");
+          // The applicant's own letter stays in their own words: kept as typed, not checked.
+          if (d.created_by === "applicant") {
+            const text = e.text.replace(/\s+/g, " ").trim();
+            if (!text) throw new DomainError("TC_LETTER_EMPTY");
+            p.text = text; p.transform = "verbatim";
+            break;
+          }
           const r = await check(e.text, p.factIds);
           if (r.ok) { p.text = r.text; p.transform = r.transform; }
           break;
@@ -460,7 +490,7 @@ async function leakSpots(c: pg.PoolClient, docId: string, source: DocSource, pro
 }
 
 /** Renders both files and runs the export check over their text (risk 3, layer 5). Throws TC_EXPORT_LEAK on any leak. */
-async function renderChecked(c: pg.PoolClient, cfg: AppConfig, applicantId: string, docId: string, source: DocSource, when: Date) {
+async function renderChecked(c: pg.PoolClient, cfg: AppConfig, applicantId: string, docId: string, source: DocSource, when: Date, own = false) {
   const header = await headerFor(c, cfg, applicantId);
   const dk = await dataKeyFor(c, cfg, applicantId);
   const profile = await loadTailorProfile(c, dk);
@@ -469,6 +499,8 @@ async function renderChecked(c: pg.PoolClient, cfg: AppConfig, applicantId: stri
   // The employer and title the document is for are its subject, not a claim ("Dear GitLab hiring team").
   const names = [source.target.employer, source.target.title, job?.employer_canonical ?? "", cleanEmployerName(job?.employer_canonical ?? "")];
   const r = await renderDocument(source, header, when);
+  // The applicant's own letter is their words, not a claim TC Hunter made: nothing to hold back.
+  if (own) return r;
   for (const [kind, bytes] of [["pdf", r.pdf], ["docx", r.docx]] as const) {
     const text = (await extractText(kind, bytes)).replace(/\s+/g, " ");
     const leaks = exportLeaks(text, profile, [...gapSkills, ...heldBack], names);
@@ -487,7 +519,7 @@ export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Se
     const source = d.source_json as DocSource;
     if (!documentText(source).trim()) throw new DomainError("TC_DOCUMENT_EMPTY");
     const when = new Date();
-    const r = await renderChecked(c, cfg, session.applicantId, docId, source, when);
+    const r = await renderChecked(c, cfg, session.applicantId, docId, source, when, d.created_by === "applicant");
     await c.query("UPDATE document SET status = 'superseded' WHERE match_id = $1 AND type = $2 AND status = 'approved' AND id <> $3", [d.match_id, d.type, docId]);
     await c.query(
       `UPDATE document SET status = 'approved', content_hash = $2, pdf_ref = $3, docx_ref = $4,
@@ -517,7 +549,7 @@ export async function newVersion(pool: pg.Pool, session: Session, docId: string)
     const gaps = (await c.query("SELECT requirement_text, skill_term FROM document_gap WHERE document_id = $1", [docId])).rows
       .map((g) => ({ requirement: g.requirement_text, skill: g.skill_term, note: "" }));
     const doc = await insertDocument(c, kindOf(d.type), { id: d.job_posting_id, matchId: d.match_id }, d.source_json,
-      { ...(d.generation_meta ?? {}), rendered_at: undefined, edited_from: d.public_ref }, [], gaps, d.id);
+      { ...(d.generation_meta ?? {}), rendered_at: undefined, edited_from: d.public_ref }, [], gaps, d.id, d.created_by);
     return doc.ref;
   });
 }
@@ -529,7 +561,7 @@ export async function exportDocument(pool: pg.Pool, cfg: AppConfig, session: Ses
     if (!d) throw new DomainError("TC_NOT_FOUND");
     if (d.status === "draft" || !d.approved_at) throw new DomainError("TC_DOCUMENT_NOT_APPROVED");
     const when = d.generation_meta?.rendered_at ? new Date(d.generation_meta.rendered_at) : new Date(d.approved_at);
-    const r = await renderChecked(c, cfg, session.applicantId, d.id, d.source_json, when);
+    const r = await renderChecked(c, cfg, session.applicantId, d.id, d.source_json, when, d.created_by === "applicant");
     await recordAudit(c, "document.exported", { objectType: "document", objectId: d.id, payload: { document_ref: d.public_ref, format } });
     return format === "pdf"
       ? { bytes: r.pdf, fileName: `${r.fileBase}-v${d.version}.pdf`, contentType: "application/pdf" }

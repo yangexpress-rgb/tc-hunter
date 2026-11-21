@@ -8,7 +8,7 @@ import {
 } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, saveSummary, approveDocument, confirmAlias, editDocument, exportDocument, getDocument, listDocuments, markDiffViewed,
-  newVersion, remakeDocument, requestLink, requestTailor, reviseDocument, runNextWork, savePreferences, tailorReadiness, tailorWork, listMatches, verifyAll,
+  journeyFacts, newVersion, remakeDocument, requestLink, requestTailor, reviseDocument, runNextWork, saveOwnLetter, savePreferences, tailorReadiness, tailorWork, listMatches, verifyAll,
   type AppConfig, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -316,5 +316,45 @@ describe("making a draft again from the latest profile (Yong, 2026-11-15)", () =
     await editDocument(pool, cfg, yong, d.id, { op: "summary_original" });
     e = (await getDocument(pool, cfg, yong, latest.public_ref))!;
     expect(e.source.kind === "resume" && e.source.summary).toMatchObject({ text: "Solutions lead who ships CRM programs that sales teams actually use.", transform: "verbatim", included: true });
+  });
+});
+
+describe("a cover letter on demand: written for the job, or the applicant's own (Yong, 2026-11-21)", () => {
+  it("Write a cover letter makes only the letter, and the tracker shows it being written", async () => {
+    const before = (await listDocuments(pool, yong, jobRef)).find((d) => d.type === "tailored_resume")!;
+    await requestTailor(pool, yong, jobRef, ["letter"]);
+    const facts = Object.values(await journeyFacts(pool, yong))[0]!;
+    // The approved letter from earlier stays approved while the new one is written; the resume isn't touched.
+    expect(facts.docs.resume).not.toBe("writing");
+    expect((await tailorWork(pool, yong, jobRef))!.kinds).toEqual(["letter"]);
+    await drain();
+    const after = await listDocuments(pool, yong, jobRef);
+    expect(after.find((d) => d.type === "tailored_resume")!.public_ref).toBe(before.public_ref);
+    expect(after.find((d) => d.type === "cover_letter")!.status).toBe("draft");
+  });
+
+  it("keeps the applicant's own letter word for word, unchecked, and approves it without What changed", async () => {
+    await expect(saveOwnLetter(pool, yong, jobRef, "Dear team,\n\nSincerely,\nYong")).rejects.toThrow("TC_LETTER_EMPTY");
+    const ref = await saveOwnLetter(pool, yong, jobRef, "Dear Hiring Manager,\n\nI ran 3 Kubernetes clusters in 2031.\n\nI'd love to talk.\n\nSincerely,\nYong");
+    let d = (await getDocument(pool, cfg, yong, ref))!;
+    expect(d.createdBy).toBe("applicant");
+    expect(d.meta.proposer).toBe("own-letter");
+    expect(d.source.kind === "letter" && d.source.paragraphs.map((p) => p.text)).toEqual(["I ran 3 Kubernetes clusters in 2031.", "I'd love to talk."]);
+    expect(d.leaks).toEqual([]);
+    // The applicant's edits stay theirs too: not checked against the profile.
+    await editDocument(pool, cfg, yong, d.id, { op: "edit_para", para: 1, text: "I would welcome   a 30 minute call." });
+    d = (await getDocument(pool, cfg, yong, ref))!;
+    expect(d.source.kind === "letter" && d.source.paragraphs[1]!.text).toBe("I would welcome a 30 minute call.");
+    await approveDocument(pool, cfg, yong, d.id);
+    const text = await extractText("docx", (await exportDocument(pool, cfg, yong, ref, "docx")).bytes);
+    expect(text).toContain("I ran 3 Kubernetes clusters in 2031.");
+    expect(text.match(/Sincerely/g)?.length).toBe(1);
+    // "Make changes" keeps it the applicant's own.
+    const next = await newVersion(pool, yong, d.id);
+    expect((await getDocument(pool, cfg, yong, next))!.createdBy).toBe("applicant");
+  });
+
+  it("only for a job the applicant has", async () => {
+    await expect(saveOwnLetter(pool, leo, "J-99999999", "I want this job.")).rejects.toThrow("TC_NOT_FOUND");
   });
 });
