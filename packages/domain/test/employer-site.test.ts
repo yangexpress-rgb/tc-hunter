@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boardFromLinks, careersLinks, findOnEmployerSite, pickSameJob, placesFit, SourceRefusedError, titleScore, type CareersLookup, type Fetcher, type FetchResult, type RawPosting } from "../src";
+import { boardFromLinks, careersLinks, employerSites, findOnEmployerSite, hiringSiteByBrowsing, type SiteBrowser, pickSameJob, placesFit, SourceRefusedError, titleScore, type CareersLookup, type Fetcher, type FetchResult, type RawPosting } from "../src";
 
 /** Jobs found on LinkedIn or Indeed, applied for on the employer's own site (Yong, 2026-11-17). */
 
@@ -136,5 +136,43 @@ describe("Wiley: careers page linked from the front page, or known from its othe
       "https://www.linkedin.com/jobs/view/1",
     ], "Wiley")).toMatchObject({ kind: "workday", key: "wiley.wd1.myworkdayjobs.com/wiley/wiley_careers" });
     expect(boardFromLinks(["https://www.linkedin.com/jobs/view/1"], "Wiley")).toBeNull();
+  });
+});
+
+describe("looking around the employer's website in a browser when nothing else finds it (Yong, 2026-11-21)", () => {
+  /** A pretend website: each address's links, and where an address redirects. */
+  const site = (pages: Record<string, Array<{ text: string; href: string }>>, redirect: Record<string, string> = {}) => {
+    const visited: string[] = [];
+    let at = "";
+    const b: SiteBrowser = {
+      async visit(u) { if (!(u in pages) && !(u in redirect)) return false; visited.push(u); at = redirect[u] ?? u; return true; },
+      here: () => at,
+      async links() { return pages[at] ?? []; },
+      async close() { /* nothing */ },
+    };
+    return { b, visited };
+  };
+
+  it("follows Careers then Search jobs on the employer's own site to its Workday site", async () => {
+    const { b, visited } = site({
+      "https://www.acme.com/": [{ text: "Shop", href: "https://www.acme.com/shop" }, { text: "Careers", href: "https://www.acme.com/about/careers" }, { text: "Jobs at another place", href: "https://other.com/jobs" }],
+      "https://www.acme.com/about/careers": [{ text: "Search jobs", href: "https://acme.wd5.myworkdayjobs.com/en-US/External" }],
+    });
+    expect(await hiringSiteByBrowsing(["https://www.acme.com/"], "Acme", b)).toMatchObject({ kind: "workday", key: "acme.wd5.myworkdayjobs.com/acme/External" });
+    expect(visited).toEqual(["https://www.acme.com/", "https://www.acme.com/about/careers"]);
+  });
+
+  it("notices a careers page that redirects to a hiring system, and never leaves the employer's site otherwise", async () => {
+    const { b } = site({ "https://boards.greenhouse.io/acme": [] }, { "https://careers.acme.com/": "https://boards.greenhouse.io/acme" });
+    expect(await hiringSiteByBrowsing(["https://www.acmecareers.com/", "https://careers.acme.com/"], "Acme", b)).toMatchObject({ kind: "greenhouse", key: "acme" });
+    const other = site({ "https://www.acme.com/": [{ text: "Careers", href: "https://other.com/careers" }], "https://other.com/careers": [{ text: "Jobs", href: "https://boards.greenhouse.io/other" }] });
+    expect(await hiringSiteByBrowsing(["https://www.acme.com/"], "Acme", other.b)).toBeNull();
+    expect(other.visited).toEqual(["https://www.acme.com/"]);
+  });
+
+  it("reads the employer's own website from the job's text, never a job site's", () => {
+    expect(employerSites("About Wiley: learn more at www.wiley.com or https://newsroom.wiley.com. Apply via linkedin.com. Powered by onetrust.com", "Wiley"))
+      .toEqual(["https://www.wiley.com/", "https://newsroom.wiley.com/"]);
+    expect(employerSites("Visit capitalone.com/careers", "Capital One")).toEqual(["https://www.capitalone.com/"]);
   });
 });

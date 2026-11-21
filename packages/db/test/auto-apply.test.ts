@@ -854,14 +854,26 @@ describe("jobs found on LinkedIn or Indeed (Yong, 2026-11-17)", () => {
 
   it("no match on the employer's site: it says why, in red, and leaves it to the applicant", async () => {
     const opened = browser.opened.length;
+    // Its own website, looked around in the browser (Yong, 2026-11-21), shows no careers links.
+    browser.spec = () => ({ url: "https://www.nowhere.com/", fields: [], after: "thanks" });
     const ref = apps.at(-4)!;
     await approveResume(ref);
     await runNow();
     const s = await applyStatus(pool, yong, ref);
     expect(s.status).toBe("failed");
-    expect(s.problem).toMatch(/came from LinkedIn, and TC Hunter never applies there.*couldn't find Nowhere Co's careers site.*Apply on LinkedIn yourself/);
+    expect(s.problem).toMatch(/came from LinkedIn, and TC Hunter never applies there.*couldn't find Nowhere Co's careers site.*looks again by itself in about 1 hour.*Or, to apply now, apply on LinkedIn yourself/);
     expect(s.steps.at(-1)).toMatchObject({ bad: true });
-    expect(browser.opened.length).toBe(opened);
+    expect(s.steps.map((x) => x.text).join("\n")).toMatch(/Searching Nowhere Co's own website for its careers site/);
+    // Only the employer's own website was opened, never LinkedIn.
+    expect(browser.opened.slice(opened).length).toBeGreaterThan(0);
+    expect(browser.opened.slice(opened).filter((u) => !/nowhere/.test(u))).toEqual([]);
+    // It looks again by itself later, and starts applying when it finds the site.
+    const lookup = (await ownerQuery("SELECT employer_lookup FROM job_posting WHERE employer_canonical = 'Nowhere Co'")).rows[0].employer_lookup;
+    expect(lookup).toMatchObject({ found: false, tries: 1 });
+    await ownerQuery("UPDATE job_posting SET employer_lookup = jsonb_set(employer_lookup, '{at}', to_jsonb(now() - interval '2 hours')) WHERE employer_canonical = 'Nowhere Co'");
+    expect((await ownerQuery("SELECT enqueue_employer_site_retries() AS n")).rows[0].n).toBe(1);
+    expect((await ownerQuery("SELECT enqueue_employer_site_retries() AS n")).rows[0].n).toBe(0);
+    await ownerQuery("DELETE FROM work_item WHERE payload ->> 'retry' = 'employer_site'");
   });
 });
 
