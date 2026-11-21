@@ -1,6 +1,6 @@
-import { findBoard, type CareersLookup } from "../jobs/discover";
+import { careersGuesses, findBoard, tokenGuesses, type CareersLookup } from "../jobs/discover";
 import { SourceRefusedError, type Fetcher } from "../jobs/fetcher";
-import { fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem } from "../jobs/sources";
+import { fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem, workdayFromKey, type WorkdaySite } from "../jobs/sources";
 import { detectAts, isAvature } from "../packet/adapters";
 import { htmlToText } from "../jobs/text";
 import type { RawPosting, SourceSpec } from "../jobs/types";
@@ -86,6 +86,23 @@ export function pickSameJob(q: EmployerJobQuery, postings: RawPosting[]): { post
   return { posting: best.p, score: best.score };
 }
 
+/**
+ * Searches a Workday site for a title from inside a real browser page on that site, returning the
+ * rows of its job list (title, locationsText, externalPath), or null when it couldn't. Workday turns
+ * this server's own reader away, but not a browser (Capital One, 2026-11-21).
+ */
+export type WorkdaySearch = (site: WorkdaySite, text: string) => Promise<Array<Record<string, unknown>> | null>;
+
+/** Rows from a Workday job list search, as postings to compare. */
+export function workdayRows(rows: Array<Record<string, unknown>>, w: WorkdaySite, employer: string): RawPosting[] {
+  return rows.filter((j) => typeof j.title === "string" && typeof j.externalPath === "string").map((j) => {
+    const url = `https://${w.host}/${w.site}${String(j.externalPath)}`;
+    const where = typeof j.locationsText === "string" && !/^\d+ locations?$/i.test(j.locationsText.trim()) ? j.locationsText : null;
+    return { externalId: `workday:${w.tenant}:${String(j.externalPath)}`, url, employer, title: String(j.title), locationRaw: where, workplaceType: null,
+      descriptionText: "", salary: null, postedAt: null, applyUrl: url, atsType: "workday" };
+  });
+}
+
 const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "careers_page"]);
 
 /**
@@ -93,7 +110,7 @@ const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "w
  * TC Hunter already knows it; otherwise it tries the usual board names, then asks `lookup`.
  * Never fetches LinkedIn, Indeed or similar sites.
  */
-export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: { known?: SourceSpec | null; lookup?: CareersLookup } = {}): Promise<EmployerJobResult> {
+export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: { known?: SourceSpec | null; lookup?: CareersLookup; workdaySearch?: WorkdaySearch } = {}): Promise<EmployerJobResult> {
   let spec: SourceSpec | null = opts.known && SUPPORTED.has(opts.known.kind) && !isNoFetchHost(opts.known.url) ? opts.known : null;
   let system: string | null = null;
   let careersUrl: string | null = opts.known?.kind === "careers_page" ? opts.known.url : null;
@@ -109,6 +126,15 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
         spec = await findBoard({ name: q.employer, boards: idea.boards, careersUrl: idea.careersUrl }, f);
       }
     }
+    // No AI, or it didn't know: the employer's usual careers addresses (capitalonecareers.com,
+    // careers.acme.com…), each read for a link to its hiring system or for jobs.
+    if (!spec && !careersUrl) {
+      const tried = new Set(tokenGuesses(q.employer).flatMap((t) => ["greenhouse", "lever", "ashby", "smartrecruiters"].map((k) => `${k}:${t}`)));
+      for (const guess of careersGuesses(q.employer)) {
+        spec = await findBoard({ name: q.employer, careersUrl: guess }, f, tried).catch((e) => { if (e instanceof SourceRefusedError) return null; throw e; });
+        if (spec) break;
+      }
+    }
   } catch (e) {
     if (e instanceof SourceRefusedError) return { found: false, reason: `${q.employer}'s careers site turned it away`, spec: null };
     throw e;
@@ -122,10 +148,16 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
       ? `${q.employer}'s careers site runs on ${system}, which it can't search yet`
       : `it couldn't find ${q.employer}'s careers site` };
   }
-  let postings: RawPosting[];
+  let postings: RawPosting[] | null = null;
+  // A Workday site is searched from a browser page on it when one can be opened: Workday turns this server's reader away.
+  if (spec.kind === "workday" && opts.workdaySearch) {
+    const w = workdayFromKey(spec.key);
+    const rows = await opts.workdaySearch(w, q.title).catch(() => null);
+    if (rows) postings = workdayRows(rows, w, q.employer);
+  }
   try {
     const near = (t: string) => titleScore(q.title, t) >= 0.5;
-    postings = (await fetchSource(spec, f, near, 10, [q.title])).postings;
+    postings ??= (await fetchSource(spec, f, near, 10, [q.title])).postings;
   } catch (e) {
     if (e instanceof SourceRefusedError) return { found: false, spec, reason: `${q.employer}'s careers site (${hostOf(spec.url)}) didn't let it read its jobs` };
     throw e;

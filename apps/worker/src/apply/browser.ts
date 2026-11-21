@@ -146,6 +146,15 @@ class PwPage implements ApplyPage {
     await settle(this.pg);
   }
 
+  async postJson(path: string, body: unknown): Promise<unknown> {
+    if (!path.startsWith("/")) throw new Error("only this site's own addresses");
+    return this.pg.evaluate(async ([p, b]) => {
+      const r = await fetch(p as string, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(b), credentials: "same-origin" });
+      if (!r.ok) return null;
+      return r.json().catch(() => null);
+    }, [path, body] as const);
+  }
+
   protected async helpers() { await this.pg.evaluate(PAGE_SCRIPT); }
 
   /**
