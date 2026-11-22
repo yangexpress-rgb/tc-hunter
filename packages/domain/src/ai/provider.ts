@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { OpenAiMessages } from "./openai";
-import { aiModels, scopedProvider, withUsageScope, type AiMode, type AiProvider, type AiTier } from "./meter";
+import { AI_MODES, aiModels, recordRefused, scopedProvider, withUsageScope, type AiMode, type AiProvider, type AiTier } from "./meter";
 
 /**
  * One setting switches every AI task between Claude and OpenAI (Yong, 2026-11-18). Every call site
@@ -18,7 +18,7 @@ export interface AiProviderSource {
   openaiKey(): Promise<string | null>;
 }
 /** Things worth a log line that only the AI layer sees: a refusal on a provider with no fallback. */
-export type AiEventLog = (event: "ai.refused" | "ai.failed", data: Record<string, unknown>) => void;
+export type AiEventLog = (event: "ai.refused" | "ai.failed" | "ai.off_refused", data: Record<string, unknown>) => void;
 
 // Kept on globalThis: a bundler may load this module more than once in one process.
 const holder = globalThis as unknown as { __tcAiSource?: AiProviderSource | null; __tcAiLast?: AiMode; __tcAiLog?: AiEventLog | null };
@@ -26,10 +26,24 @@ export function setAiProviderSource(s: AiProviderSource | null) { holder.__tcAiS
 export function setAiEventLog(l: AiEventLog | null) { holder.__tcAiLog = l; }
 export const aiEvent: AiEventLog = (e, d) => { try { holder.__tcAiLog?.(e, d); } catch { /* logging never stops the work */ } };
 
-/** The provider the setting names now, or "none" (Claude when nothing is set up, as before the switch existed). */
+/**
+ * The provider the setting names now, or "none" (No AI mode). Fails closed (Yong, 2026-11-21: No AI is
+ * a cost decision, so unknown means off): when the setting can't be read, or reads as something that
+ * isn't a mode, the answer is "none" until a read succeeds again. Only a process with no setting source
+ * at all (tests, the evals) keeps the old default, Claude.
+ */
 export async function currentAiProvider(): Promise<AiMode> {
-  let p: AiMode = "claude";
-  try { p = (await holder.__tcAiSource?.provider()) ?? "claude"; } catch { p = holder.__tcAiLast ?? "claude"; }
+  const src = holder.__tcAiSource;
+  if (!src) return (holder.__tcAiLast = "claude");
+  let p: AiMode;
+  try {
+    const read = await src.provider();
+    p = AI_MODES.includes(read) ? read : "none";
+    if (p !== read) aiEvent("ai.refused", { reason: "setting_unknown", value: String(read).slice(0, 20) });
+  } catch (e) {
+    p = "none";
+    aiEvent("ai.refused", { reason: "setting_unreadable", message: String((e as Error)?.message ?? e).slice(0, 160) });
+  }
   holder.__tcAiLast = p;
   return p;
 }
@@ -110,10 +124,12 @@ const batchProvider = (id: string): AiProvider => (id.startsWith("batch_") ? "op
  */
 export function aiClient(tier: AiTier): Anthropic {
   // No AI mode: refused here, before any client is made or anything is sent (Yong, 2026-11-19).
-  const refuseIfOff = async () => { if ((await activeAiProvider()) === "none") throw new AiOffError(); };
+  // Every refusal is counted (A5): in a correct No AI run nothing even tries, so a count above zero is a wiring mistake made visible.
+  const refuse = (): never => { recordRefused(tier); aiEvent("ai.off_refused", { tier }); throw new AiOffError(); };
+  const refuseIfOff = async () => { if ((await activeAiProvider()) === "none") refuse(); };
   const route = async () => {
     const p = await activeAiProvider();
-    if (p === "none") throw new AiOffError();
+    if (p === "none") return refuse();
     return p === "openai" ? { kind: "openai" as const, c: await openai() } : { kind: "claude" as const, c: claude() };
   };
   const messages = {

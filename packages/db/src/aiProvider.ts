@@ -22,11 +22,14 @@ export interface AiProviderView {
   models: ReturnType<typeof aiModels>;
   /** Whether a key can be pasted here (the vault is set up on the server). */
   canSaveKey: boolean;
+  /** When the current mode was chosen (the meter's "since No AI was turned on"). */
+  modeSince: Date | null;
 }
 
-type Row = { provider: AiMode; openai_key_ref: string | null };
+type Row = { provider: AiMode; openai_key_ref: string | null; mode_since: Date | null };
+/** The setting's row. No row at all reads as No AI (fails closed, 2026-11-21): unknown means off. */
 const readRow = async (pool: pg.Pool): Promise<Row> =>
-  (await pool.query("SELECT provider, openai_key_ref FROM ai_provider_setting WHERE id")).rows[0] ?? { provider: "claude", openai_key_ref: null };
+  (await pool.query("SELECT provider, openai_key_ref, mode_since FROM ai_provider_setting WHERE id")).rows[0] ?? { provider: "none", openai_key_ref: null, mode_since: null };
 
 export async function aiProviderView(pool: pg.Pool, vault: SecretStore | undefined, env: NodeJS.ProcessEnv = process.env): Promise<AiProviderView> {
   const row = await readRow(pool);
@@ -35,6 +38,7 @@ export async function aiProviderView(pool: pg.Pool, vault: SecretStore | undefin
     connected: { claude: Boolean(env.ANTHROPIC_API_KEY), openai: Boolean(row.openai_key_ref && vault) },
     models: aiModels(env),
     canSaveKey: Boolean(vault),
+    modeSince: row.mode_since,
   };
 }
 
@@ -59,17 +63,26 @@ export class AiProviderRefused extends Error {
  * is never found out in the middle of a run. Work already running finishes on the provider it began with.
  * No AI (Yong, 2026-11-19) is never refused: it needs no key, even on a fresh install with none at all.
  */
-export async function setAiProvider(pool: pg.Pool, vault: SecretStore | undefined, session: Session, provider: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function setAiProvider(pool: pg.Pool, vault: SecretStore | undefined, session: Session, provider: string, env: NodeJS.ProcessEnv = process.env): Promise<NoAiSwitch | null> {
   if (!AI_MODES.includes(provider as AiMode)) throw new AiProviderRefused("pick");
   const view = provider === "none" ? null : await aiProviderView(pool, vault, env);
   if (view && !view.connected[provider as AiProvider]) {
     throw new AiProviderRefused(provider === "openai" ? "need_openai_key" : "need_anthropic_key");
   }
-  await withApplicant(pool, { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" }, async (c) => {
-    await c.query("UPDATE ai_provider_setting SET provider = $1, updated_by = $2, updated_at = now() WHERE id", [provider, session.userAccountId]);
+  return withApplicant(pool, { userAccountId: session.userAccountId, applicantId: session.applicantId, actor: "applicant" }, async (c) => {
+    await c.query(
+      `UPDATE ai_provider_setting SET mode_since = CASE WHEN provider = $1 THEN mode_since ELSE now() END,
+              provider = $1, updated_by = $2, updated_at = now() WHERE id`, [provider, session.userAccountId]);
     await recordAudit(c, "settings.changed", { payload: { setting: "AI_PROVIDER", removed: false } });
+    // A3 (2026-11-21): queued work pinned to an AI provider follows the switch to No AI; running work keeps its pin.
+    if (provider !== "none") return null;
+    const r = (await c.query("SELECT work, runs, running FROM repin_queued_work_to_no_ai()")).rows[0] as NoAiSwitch;
+    return { work: r.work, runs: r.runs, running: r.running };
   });
 }
+
+/** What switching to No AI moved: queued work and queued application runs now without AI, and work still running on AI. */
+export interface NoAiSwitch { work: number; runs: number; running: number }
 
 /** Asks OpenAI whether a key works (lists models; nothing is sent but the key). */
 export type OpenAiKeyCheck = (key: string) => Promise<"ok" | "rejected" | "unreachable">;

@@ -101,6 +101,7 @@ export default async function ImportPage(props: PageProps) {
       ) : null}
       <section className="card" id="how-claude-reads">
         <h2>How Claude reads your file</h2>
+        {noAi ? <p className="status" role="status">No AI is on, so none of this is used now: resume files aren&apos;t read by AI. These instructions are kept for when you switch an AI provider back on in Settings.</p> : null}
         <p>These are the instructions Claude follows every time it reads a resume. Edit them as you like and press Save. Each scan uses the latest saved version, so press Re-scan on a file to read it again with your changes.</p>
         <p className="muted">{prompt.isDefault ? "You're using the app's default instructions." : `You're using your own version, saved ${when(prompt.savedAt)}.`}</p>
         <form action={saveReaderPromptAction} className="stack wide">

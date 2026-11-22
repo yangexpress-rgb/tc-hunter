@@ -12,6 +12,16 @@ import { ConfirmCard, NeedsConfirm, SettingsHeader, ago } from "../shared";
 
 export const dynamic = "force-dynamic";
 
+/** The plain line after switching to No AI (A3): what moved to No AI at once, and what still finishes on AI. */
+function noAiSwitched(params: Record<string, string>): string {
+  const moved = Number(params.moved ?? 0) || 0, running = Number(params.running ?? 0) || 0;
+  const n = (k: number, one: string, many: string) => (k === 1 ? `1 ${one}` : `${k} ${many}`);
+  return ["Switched to No AI. From now on TC Hunter uses only your saved answers and information.",
+    moved ? `${n(moved, "piece of waiting work was", "pieces of waiting work were")} moved to No AI too, so documents waiting to be made use your own resume as it is and your saved letter.` : "",
+    running ? `${n(running, "piece of work was", "pieces of work were")} already under way with AI and will finish the way it started.` : "Nothing was under way with AI.",
+  ].filter(Boolean).join(" ");
+}
+
 /** Settings › Applying for you: how much TC Hunter does by itself, standing answers, and the optional extension. */
 export default async function ApplyingSettingsPage(props: PageProps) {
   const session = await requireSession();
@@ -32,7 +42,7 @@ export default async function ApplyingSettingsPage(props: PageProps) {
   const aiDone: Record<string, string> = {
     switched_claude: "Switched to Claude. New work uses it from now on; anything already running finishes on the provider it started with.",
     switched_openai: "Switched to OpenAI. New work uses it from now on; anything already running finishes on the provider it started with.",
-    switched_none: "Switched to No AI. New work uses only your saved answers and information from now on; anything already running finishes on the provider it started with.",
+    switched_none: noAiSwitched(params),
     key_saved: "OpenAI key saved. OpenAI checked it and it works.",
     key_removed: "OpenAI key removed.",
   };

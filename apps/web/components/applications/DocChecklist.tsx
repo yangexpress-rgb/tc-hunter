@@ -12,8 +12,9 @@ export type PacketLine = { state: string; answers?: number; drafted?: number };
 const DOC_STATE: Record<string, string> = { approved: "Approved", draft: "Waiting for your approval", writing: "Being written" };
 
 /** Chip words and tone for one document. `state` is the journey's view ("writing" while a fresh draft is being made). */
-function docChip(d: DocLine | undefined, state: string | null | undefined, none: string): { text: string; tone: string } {
-  if (state === "writing" && d?.status !== "approved") return { text: "Being written", tone: "upcoming" };
+function docChip(d: DocLine | undefined, state: string | null | undefined, none: string, noAi = false): { text: string; tone: string } {
+  // No AI (A2): nothing is "written" for the applicant; the draft is prepared from their own profile.
+  if (state === "writing" && d?.status !== "approved") return { text: noAi ? "Being prepared" : "Being written", tone: "upcoming" };
   if (!d) return { text: none, tone: "upcoming" };
   if (d.status === "approved") return { text: "Approved", tone: "active" };
   return { text: DOC_STATE[state ?? d.status] ?? "Waiting for your approval", tone: "yours" };
@@ -53,8 +54,8 @@ export function DocChecklist({ resume, letter, resumeState, letterState, packet,
   /** undefined: no prepared-answers row (no application yet). null: the row, not started. */
   packet?: PacketLine | null; problem?: boolean; jobRef: string; packetHref?: string; children?: ReactNode;
 }) {
-  const r = docChip(resume, resumeState, "Not started");
-  const l = docChip(letter, letterState, "Optional");
+  const r = docChip(resume, resumeState, "Not started", noAi);
+  const l = docChip(letter, letterState, "Optional", noAi);
   const letterWriting = letterState === "writing" && letter?.status !== "approved";
   const pDone = !!packet && !["packet_draft", "packet_ready_for_review"].includes(packet.state);
   const pReview = packet?.state === "packet_ready_for_review";
@@ -83,7 +84,7 @@ export function DocChecklist({ resume, letter, resumeState, letterState, packet,
         </li>
         {packet !== undefined ? (
           <li>
-            <span className={`jchip tone-${pDone ? "active" : pReview ? "yours" : "upcoming"}`}>{pDone ? "Approved" : pReview ? "Waiting for your approval" : packet ? "Being written" : "Not started"}</span>
+            <span className={`jchip tone-${pDone ? "active" : pReview ? "yours" : "upcoming"}`}>{pDone ? "Approved" : pReview ? "Waiting for your approval" : packet ? (noAi ? "Being prepared" : "Being written") : "Not started"}</span>
             <span>Prepared answers{packet?.answers ? ` (${packet.answers})` : ""}{packet?.drafted && pReview ? ` · ${packet.drafted === 1 ? "1 essay draft" : `${packet.drafted} essay drafts`} to check` : ""}</span>
             {packet ? <a href={packetHref}>{pReview && !problem ? "Review & approve" : "See them"}</a> : <span className="small muted">Made from their form when TC Hunter opens it</span>}
           </li>

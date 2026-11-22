@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { getDocument, markDiffViewed, remakeDocument, tailorReadiness, tailorWork, type DocumentView } from "@tc-hunter/db";
-import { formatMetric, monthYear, type LetterSource, type ResumeSource } from "@tc-hunter/domain";
+import { activeAiProvider, docCopy, formatMetric, monthYear, type DocCopy, type LetterSource, type ResumeSource } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -39,6 +39,8 @@ export default async function DocumentPage(props: Props) {
   if (!/^D-\d+$/.test(ref)) notFound();
   const { pool, cfg } = app();
   const { saved, error, params } = await flashOf(props);
+  // Mode-aware words (A2, 2026-11-21): in No AI nothing on this page says an AI is writing or revising.
+  const copy = docCopy(await activeAiProvider());
   const pane = ["changes", "profile"].includes(params.pane ?? "") ? params.pane! : "doc";
   let d = await getDocument(pool, cfg, session, ref);
   if (!d) notFound();
@@ -74,8 +76,7 @@ export default async function DocumentPage(props: Props) {
       {draft && d.leaks.length ? <LeakBanner d={d} stopped={params.e === "TC_EXPORT_LEAK"} /> : <Flash saved={saved || params.approved === "1"} error={error} />}
       {params.approved === "1" ? <p className="status" role="status">Approved. You can download it below.</p> : null}
       {revising ? <><meta httpEquiv="refresh" content="4" /><p className="status" role="status">{d.source.kind === "resume" && d.source.experience.length === 0
-        ? "This draft was made before your work history was in it. Claude is writing it again from your whole profile now. This page moves to it when it's ready."
-        : "Claude is making the next version from your feedback. This page moves to it when it's ready."}</p></> : null}
+        ? copy.remaking : copy.revising}</p></> : null}
       {revisionFailed ? <p className="error" role="alert">The new version couldn't be made this time. Your feedback wasn't lost: send it again below.</p> : null}
       {d.createdBy === "applicant" ? (
         <p className="status" role="status">{params.own === "1" ? "Your letter is saved as a draft. " : ""}This is your own letter, kept in your words: TC Hunter doesn&apos;t rewrite it or check it against your profile.
@@ -83,7 +84,7 @@ export default async function DocumentPage(props: Props) {
       ) : null}
       {d.meta.feedback ? (
         <p className="muted">Made from your feedback{d.meta.revised_from ? ` on the previous version` : ""}: “{String(d.meta.feedback)}”
-          {d.meta.feedback_applied === false ? <span className="warn"> Claude isn't set up, so only the usual rules were applied and your feedback couldn't be followed.</span> : null}</p>
+          {d.meta.feedback_applied === false ? <span className="warn"> {copy.feedbackNotFollowed}</span> : null}</p>
       ) : null}
 
       <nav className="tabs" aria-label="Views">
@@ -95,7 +96,7 @@ export default async function DocumentPage(props: Props) {
       </nav>
 
       <ApproveBar d={d} here={here} />
-      {!revising && (d.status === "draft" || d.status === "approved") && d.ref === latest?.ref ? <ReviseBox d={d} /> : null}
+      {!revising && (d.status === "draft" || d.status === "approved") && d.ref === latest?.ref ? (copy.revise ? <ReviseBox d={d} copy={copy} /> : draft && copy.editByHand ? <p className="muted">{copy.editByHand}</p> : null) : null}
       {d.status === "superseded" && latest ? <p className="muted">A newer version exists: <a href={`/documents/${latest.ref}`}>version {latest.version}</a>.</p> : null}
 
       {pane === "doc" ? (d.source.kind === "resume" ? <ResumePane d={d} s={d.source} here={here} editable={draft} /> : <LetterPane d={d} s={d.source} here={here} editable={draft} name={session.preferredName} />) : null}
@@ -158,15 +159,16 @@ function LeakBanner({ d, stopped }: { d: DocumentView; stopped: boolean }) {
   );
 }
 
-/** The other choice next to Approve (Yong, 2026-11-15): tell Claude what to change, and get the next version. */
-function ReviseBox({ d }: { d: DocumentView }) {
+/** The other choice next to Approve (Yong, 2026-11-15): say what to change, and get the next version (AI modes only). */
+function ReviseBox({ d, copy }: { d: DocumentView; copy: DocCopy }) {
+  const revise = copy.revise!;
   return (
-    <Details summary="Revise with feedback" open={d.status === "draft"}>
+    <Details summary={revise.summary} open={d.status === "draft"}>
       <form action={reviseAction} className="stack">
         <input type="hidden" name="doc" value={d.id} /><input type="hidden" name="ref" value={d.ref} />
         <label>What should change?
           <textarea name="feedback" rows={4} maxLength={2000} required placeholder="e.g. Lead with my transformation work, keep it to one page, drop the oldest role" /></label>
-        <p className="hint">Claude makes version {d.version + 1} from your feedback, still only from your profile's own facts. This version stays in the history.</p>
+        <p className="hint">{revise.hint(d.version + 1)}</p>
         <button className="secondary">Make a new version</button>
       </form>
     </Details>
