@@ -82,6 +82,7 @@ export function LearnedLines({ learned, back }: { learned: Learned[]; back: stri
  * The job just saved or passed on, folded in its own place on the list (Yong, 2026-11-22): what
  * happened, Undo, the optional reasons after a Pass, and what the list learned from it.
  */
+<<<<<<< HEAD
 export function DoneNotice({ r, back, why, learned, nextId }: { r: Record<string, any>; back: string; why?: string; learned: Learned[]; nextId?: string }) {
   const passed = r.status !== "saved";
   const here = `${back}${back.includes("?") ? "&" : "?"}done=${r.id}${why ? `&why=${why}` : ""}${learned.length ? `&learned=${learned.map((a) => a.id).join(",")}` : ""}#job-${r.id}`;
@@ -101,6 +102,18 @@ export function DoneNotice({ r, back, why, learned, nextId }: { r: Record<string
         </p>
       )}
       {passed && !reason ? <PassReasons matchId={r.id} back={back} /> : null}
+=======
+export function DoneNotice({ r, back, why, learned }: { r: Record<string, any>; back: string; why?: string; learned: Learned[] }) {
+  const passed = r.status !== "saved";
+  const here = `${back}${back.includes("?") ? "&" : "?"}done=${r.id}${why ? `&why=${why}` : ""}${learned.length ? `&learned=${learned.map((a) => a.id).join(",")}` : ""}#job-${r.id}`;
+  return (
+    <div className="done-notice" role="status">
+      <p>
+        {passed ? "Passed on " : "Saved "}<a href={`/jobs/${r.public_ref}`}>{r.title}</a> at {r.employer_canonical}. <span className="muted">It&apos;s in {passed ? "Passed" : "Saved"}.</span>{" "}
+        <form action={feedbackAction} className="inline-form"><Hidden matchId={r.id} back={back} /><input type="hidden" name="action" value="undo" /><button className="link-button">Undo</button></form>
+      </p>
+      {passed ? <PassReasons matchId={r.id} back={back} why={why} /> : null}
+>>>>>>> 9ed317db12410a04d6f1ce8796db3e285be55d70
       <LearnedLines learned={learned} back={here} />
     </div>
   );
