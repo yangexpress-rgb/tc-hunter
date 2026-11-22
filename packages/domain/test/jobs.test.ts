@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   dedupeKey, descriptionSimilarity, detectJobLink, detectSource, fetchSource, findSkills, groundRequirements, htmlToText, isSamePosting,
-  jobPostingsFromHtml, levelOf, normalizeEmployer, normalizeTitle, PoliteFetcher, proposeAdjustments, readGreenhouseJob, readLeverJob,
+  adjustmentHits, jobPostingsFromHtml, levelOf, normalizeEmployer, normalizeTitle, PoliteFetcher, proposeAdjustments, readGreenhouseJob, readLeverJob,
   readRequirementsText, robotsAllows, scoreMatch, SourceRefusedError, titleIsRelated, type Fetcher, type MatchPosting,
 } from "../src";
 
@@ -219,6 +219,15 @@ describe("filters, early career and feedback", () => {
     expect(p).toHaveLength(1);
     expect(p[0]).toMatchObject({ kind: "title_variant", target: "sales engineer", delta: -10 });
     expect(proposeAdjustments([{ ...rows[0]!, reasonCode: "employer", employer: "Globex" }])[0]).toMatchObject({ kind: "employer", target: "globex" });
+  });
+
+  it("turns a Too senior reason into that level shown lower, and only that level (2026-11-22)", () => {
+    const row = { action: "dismiss" as const, reasonCode: "too_senior", title: "VP, Product Management", employer: "X", location: null, matchId: "m1", feedbackId: "f1" };
+    expect(proposeAdjustments([row])).toEqual([expect.objectContaining({ kind: "level", target: "vp", delta: -15, label: "Showing VP jobs lower: you said too senior." })]);
+    expect(proposeAdjustments([{ ...row, title: "Sales Analyst" }])).toEqual([]);   // the title states no level: nothing to lower
+    const a = { kind: "level" as const, target: "vp" };
+    expect(adjustmentHits(a, { title: "Vice President, Sales", employer: "Y", locationRaw: null })).toBe(true);
+    expect(adjustmentHits(a, { title: "Senior Director, Sales", employer: "Y", locationRaw: null })).toBe(false);
   });
 
   it("only matches jobs whose titles relate to what the applicant wants", () => {

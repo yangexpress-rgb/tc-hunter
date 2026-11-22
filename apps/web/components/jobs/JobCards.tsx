@@ -1,6 +1,6 @@
 import { employmentKind, goalLevelIndex, goalTypeLabel, jobLevelKey, jobLevelLabel, t, tierReasonText } from "@tc-hunter/domain";
 import { feedbackAction } from "@/app/jobs/actions";
-import { FitScores, pay, place, posted } from "@/components/jobs/JobBits";
+import { DoneNotice, FitScores, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
 import { companyDomain, groupByCompany, payShort } from "@/lib/jobsView";
 
 // Sorting shared by every layout.
@@ -73,6 +73,8 @@ export function FitLines({ r }: { r: Row }) {
       <TierReason r={r} />
       {r.g_summary ? <div><strong>G</strong> {r.g_summary}</div> : null}
       {r.c_summary ? <div><strong>C</strong> {r.c_summary}</div> : null}
+      {/* What the applicant's own passes changed for this job, never hidden (2026-11-22). */}
+      {Array.isArray(r.adjustments) && r.adjustments.length ? <div className="adjusted small">{(r.adjustments as Array<{ label: string }>).map((a) => a.label).join(" ")}</div> : null}
     </div>
   );
 }
@@ -104,7 +106,7 @@ export function JobCard({ r, back }: { r: Row; back: string }) {
   const money = payShort(r);
   const level = jobLevelKey(r.title ?? "");
   return (
-    <li className={`job-card${r.filtered ? " is-filtered" : ""}${r.seen_at ? "" : " is-unseen"}`}>
+    <li id={`job-${r.id}`} className={`job-card${r.filtered ? " is-filtered" : ""}${r.seen_at ? "" : " is-unseen"}`}>
       <div className="job-card-head">
         <Initials name={r.employer_canonical} />
         <span className="company-name" title={r.employer_canonical}>{r.employer_canonical}</span>
@@ -126,8 +128,14 @@ export function JobCard({ r, back }: { r: Row; back: string }) {
 }
 
 /** Job cards in one grid (Yong, 2026-11-18: no grouping by goal; pick a goal in the filters instead). */
-export function JobCards({ rows, back }: { rows: Row[]; back: string }) {
-  return <ul className="card-grid plain">{rows.map((r) => <JobCard key={r.id} r={r} back={back} />)}</ul>;
+export function JobCards({ rows, back, done }: { rows: Row[]; back: string; done?: { id: string; why?: string; learned: Learned[] } }) {
+  return (
+    <ul className="card-grid plain">
+      {rows.map((r) => done && r.id === done.id
+        ? <li key={r.id} id={`job-${r.id}`} className="job-card done-card"><DoneNotice r={r} back={back} why={done.why} learned={done.learned} /></li>
+        : <JobCard key={r.id} r={r} back={back} />)}
+    </ul>
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -584,3 +584,16 @@ button.link-button { background: none; border: 0; padding: 0; color: var(--accen
 .answer-here-list { margin: 0; padding-left: 20px; display: grid; gap: 14px; }
 .answer-here-list > li { display: grid; gap: 6px; }
 .answer-here-list .packet-q { font-weight: 600; }
+
+/* Saving or passing on a job (2026-11-22): the job folds in its own place, with Undo and optional reasons. */
+.job-row.done-row, .job-card.done-card { display: block; background: var(--surface); border-style: dashed; }
+.done-notice p { margin: 0; }
+.done-notice .inline-form { display: inline; margin: 0; }
+.pass-reasons { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.pass-reasons form { margin: 0; }
+button.reason-chip { font-size: 13px; font-weight: 400; padding: 3px 12px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: inherit; cursor: pointer; }
+button.reason-chip.is-on { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+ul.learned { margin: 8px 0 0; }
+ul.learned li { padding: 4px 0; }
+.stack-tight { display: grid; gap: 4px; }
+.fit-lines .adjusted { color: var(--muted); margin-top: 2px; }

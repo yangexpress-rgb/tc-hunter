@@ -316,6 +316,57 @@ describe("feedback becomes a visible adjustment", () => {
     expect(passed).toEqual(["Sales Engineer", "Senior Sales Engineer"]);
   });
 
+  it("a reason after a Pass is optional, says what it taught the list, and moves the G-score too (2026-11-22)", async () => {
+    const pid = (await ownerQuery("SELECT id FROM job_source WHERE kind = 'pasted_link' LIMIT 1")).rows[0].id;
+    const add = (i: string, employer: string, title: string, place: string | null) => withApplicant(pool, sys(leo), async (c) => {
+      const { ingestPosting, matchApplicant } = await import("../src");
+      const o = await ingestPosting(c, pid, { externalId: `pr-${i}`, url: `https://y.example/${i}`, employer, title, locationRaw: place, workplaceType: null,
+        descriptionText: `Run sales analytics ${i}. Requirements\n- SQL\n- Excel`, salary: null, postedAt: null, applyUrl: null, atsType: null }, new RulesRequirementsReader());
+      await matchApplicant(c, clock, [o.postingId], "pasted_link");
+      return o.postingId as string;
+    });
+    await add("1", "Globex", "Sales Analyst", "Austin, TX");
+    await add("2", "Globex", "Sales Operations Analyst", "Austin, TX");
+    await add("3", "Initech", "Director of Sales Analytics", "Austin, TX");
+    const mine = async () => (await listMatches(pool, leo, { status: "all", showFiltered: true })).rows;
+    const first = (await mine()).find((r) => r.title === "Sales Analyst")!;
+    const sibling = (await mine()).find((r) => r.title === "Sales Operations Analyst")!;
+
+    // Pass alone: no reason asked for, nothing learned from one job.
+    expect(await giveFeedback(pool, leo, first.id, "dismiss")).toEqual({ learned: [] });
+    // Then "Not this employer": Globex shows lower, said at once, on G-score as well as Best match.
+    const r1 = await giveFeedback(pool, leo, first.id, "reason", "employer");
+    expect(r1.learned.map((a) => a.label)).toEqual(["Showing Globex jobs lower: you said not this employer."]);
+    const after = (await mine()).find((r) => r.id === sibling.id)!;
+    expect(after.score).toBe(Math.max(0, sibling.score - 20));
+    if (sibling.g_score !== null) expect(after.g_score).toBe(Math.max(0, sibling.g_score - 20));
+    expect(after.adjustments).toEqual([expect.objectContaining({ delta: -20 })]);
+    // Changing the reason replaces what it taught; the Pass itself stays one Pass.
+    const r2 = await giveFeedback(pool, leo, first.id, "reason", "location");
+    expect(r2.learned.map((a) => a.label)).toEqual(["Showing jobs in Austin lower: you said wrong place."]);
+    expect((await listAdjustments(pool, leo)).some((a) => a.kind === "employer")).toBe(false);
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM match_feedback WHERE match_id = $1", [first.id])).rows[0].n).toBe(1);
+
+    // "Too senior" shows that level lower.
+    const dir = (await mine()).find((r) => r.title === "Director of Sales Analytics")!;
+    await giveFeedback(pool, leo, dir.id, "dismiss");
+    const r3 = await giveFeedback(pool, leo, dir.id, "reason", "too_senior");
+    expect(r3.learned).toEqual([expect.objectContaining({ label: "Showing director jobs lower: you said too senior." })]);
+
+    // A reason needs a Pass first.
+    await expect(giveFeedback(pool, leo, sibling.id, "reason", "salary")).rejects.toThrow();
+
+    // The same job posted again (same title, same employer) starts in Passed.
+    await add("4", "Globex", "Sales Analyst", "Denver, CO");
+    const again = (await mine()).filter((r) => r.title === "Sales Analyst" && r.employer_canonical === "Globex");
+    expect(again).toHaveLength(2);
+    expect(again.every((r) => r.status === "dismissed")).toBe(true);
+
+    // Undo puts it back, and what the Pass taught goes away.
+    await giveFeedback(pool, leo, first.id, "undo");
+    expect((await listAdjustments(pool, leo)).some((a) => a.kind === "location")).toBe(false);
+  });
+
   it("home summary counts new matches and top gaps for the signed-in applicant only", async () => {
     const s = await jobsSummary(pool, leo);
     expect(s.following).toBe(1);

@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, setSourceIndustry, unfollowSource } from "@tc-hunter/db";
+import { followSource, giveFeedback, type FeedbackAction, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, setSourceIndustry, unfollowSource } from "@tc-hunter/db";
 import { errorCode, parseSourceList } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 import { TIMES, ZONES } from "@/lib/schedule";
@@ -9,7 +9,7 @@ import { JOBS_VIEWS } from "@/lib/jobsView";
 /** Only ever send people back to a Jobs page. */
 function backTo(form: FormData, fallback = "/jobs"): string {
   const b = String(form.get("back") ?? "");
-  return /^\/jobs(\/[A-Za-z0-9-]*)?(\?[A-Za-z0-9=&_.,%+*-]*)?(#[a-z-]*)?$/.test(b) ? b : fallback;
+  return /^\/jobs(\/[A-Za-z0-9-]*)?(\?[A-Za-z0-9=&_.,%+*-]*)?(#[a-z0-9-]*)?$/.test(b) ? b : fallback;
 }
 const withParam = (path: string, k: string, v: string) => {
   const [base, hash] = path.split("#");
@@ -100,11 +100,30 @@ export async function pasteLinkAction(form: FormData) {
   await act(form, () => requestLink(app().pool, s, { url: g("url") ?? "", title: g("title"), employer: g("employer"), location: g("location"), text: g("text") }), "/jobs#add-job", "queued");
 }
 
+/**
+ * Save / Pass / Undo / a reason after a Pass (Yong, 2026-11-22). The page comes back where the job
+ * was (#job-id), with a line naming what happened, Undo, and anything the list learned from it.
+ */
 export async function feedbackAction(form: FormData) {
   const s = await requireSession();
-  const action = String(form.get("action")) as "save" | "dismiss" | "not_a_fit" | "undo";
-  if (!["save", "dismiss", "not_a_fit", "undo"].includes(action)) redirect("/jobs");
-  await act(form, () => giveFeedback(app().pool, s, String(form.get("match_id")), action, String(form.get("reason") ?? "") || null), "/jobs");
+  const action = String(form.get("action")) as FeedbackAction;
+  if (!["save", "dismiss", "not_a_fit", "undo", "reason"].includes(action)) redirect("/jobs");
+  const id = String(form.get("match_id") ?? "");
+  const reason = String(form.get("reason") ?? "") || null;
+  const back = backTo(form);
+  const spot = (url: string) => (url.includes("#") || !/^\/jobs(\?|$)/.test(url) ? url : `${url}#job-${id}`);
+  let target: string;
+  try {
+    const { learned } = await giveFeedback(app().pool, s, id, action, reason);
+    target = action === "undo" ? withParam(back, "undone", "1") : withParam(back, "done", id);
+    if (action === "reason" && reason) target = withParam(target, "why", reason);
+    if (learned.length) target = withParam(target, "learned", learned.map((a) => a.id).join(","));
+  } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("jobs.action_failed", { code });
+    target = withParam(back, "e", code);
+  }
+  redirect(spot(target));
 }
 
 /** The layout the Jobs page opens in, for this applicant (Yong, 2026-11-18). */
@@ -117,7 +136,7 @@ export async function jobsViewAction(form: FormData) {
 
 export async function adjustmentAction(form: FormData) {
   const s = await requireSession();
-  await act(form, () => setAdjustmentActive(app().pool, s, String(form.get("id")), form.get("active") === "1"), "/jobs");
+  await act(form, () => setAdjustmentActive(app().pool, s, String(form.get("id")), form.get("active") === "1"), "/jobs", "adjusted");
 }
 
 export async function alertSeenAction(form: FormData) {

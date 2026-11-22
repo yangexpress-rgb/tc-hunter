@@ -295,9 +295,17 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
       sourcesOf.set(r.job_posting_id, [...(sourcesOf.get(r.job_posting_id) ?? []), r.job_source_id]);
     }
   }
+  // Jobs the applicant passed on (2026-11-22): the same job posted again (a repost, or the same title
+  // at the same employer) starts in Passed too, so a pass isn't undone by the job coming back.
+  const passKey = (r: Record<string, any>) => `${normalizeEmployer(cleanEmployerName(String(r.employer_canonical ?? "")))}|${normalizeTitle(String(r.title ?? ""))}`;
+  const passedRows = (await c.query(
+    "SELECT m.status, p.id, p.title, p.employer_canonical FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.status IN ('dismissed','not_a_fit')")).rows;
+  const passedById = new Map<string, string>(passedRows.map((r) => [r.id, r.status]));
+  const passedByKey = new Map<string, string>(passedRows.map((r) => [passKey(r), r.status]));
   let related = 0, created = 0;
   for (const p of postings) {
     const prior = existing.get(p.id);
+    const passedBefore = prior ? undefined : (p.reposted_from ? passedById.get(p.reposted_from) : undefined) ?? passedByKey.get(passKey(p));
     if (!prior && !postingIds && !titleIsRelated(p.title, targets)) continue;
     related++;
     // The employer's recorded industry: the followed company the job came from, or one of the same name.
@@ -311,7 +319,11 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
     // G-score and C-score (Yong, 2026-11-18): against the goals and against the applicant's own record.
     const g = bestGoalFit(prefs, posting);
     const cf = candidateFit(profile, posting, now);
-    const res = scoreBestGoal(profile, prefs, posting, { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
+    const res = scoreBestGoal(profile, prefs, posting, { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : !!passedBefore, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
+    // What the applicant taught the list (passes with a reason) moves the G-score too, so the
+    // default order learns, not only Best match (2026-11-22). Shown on the job as its own line.
+    const shift = res.adjustments.reduce((sum, a) => sum + a.delta, 0);
+    const gScore = g.score === null || g.score === undefined ? g.score : Math.max(0, Math.min(100, Math.round(g.score + shift)));
     const r = await c.query(
       `INSERT INTO match (applicant_id, job_posting_id, score, components, matched_skills, gap_skills, filtered, filter_reasons, reason_line, ladder_tag, ladder_label,
          adjustments, rules_version, parser_version, computed_at, found_by, goal_id, g_score, g_parts, g_summary, c_score, c_parts, c_summary, fit_version,
@@ -329,9 +341,12 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
       [p.id, res.score, JSON.stringify(res.components), JSON.stringify(res.matchedSkills), res.gapSkills, res.filtered, res.filterReasons, res.reasonLine,
         res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy,
         // The goal a job fits best is the one its G-score comes from.
-        g.goalId ?? res.goalId ?? null, g.score, JSON.stringify(g.parts), g.summary, cf.score, JSON.stringify(cf.parts), cf.summary, FIT_VERSION,
+        g.goalId ?? res.goalId ?? null, gScore, JSON.stringify(g.parts), g.summary, cf.score, JSON.stringify(cf.parts), cf.summary, FIT_VERSION,
         g.tier, g.tierMisses, g.tierReason, JSON.stringify(g.tierLines), g.domain, g.domainLine, DOMAIN_VERSION]);
-    if (r.rows[0].inserted) created++;
+    if (r.rows[0].inserted) {
+      created++;
+      if (passedBefore) await c.query("UPDATE match SET status = $2 WHERE job_posting_id = $1", [p.id, passedBefore]);
+    }
   }
   return { considered: postings.length, related, newMatches: created };
 }

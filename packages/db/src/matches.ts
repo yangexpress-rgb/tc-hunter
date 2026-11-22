@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { proposeAdjustments, type FeedbackRow } from "@tc-hunter/domain";
+import { adjustmentHits, proposeAdjustments, type Adjustment, type FeedbackRow } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import type { Session } from "./auth";
 import { withApplicant, type RequestContext } from "./context";
@@ -10,7 +10,7 @@ import { DomainError } from "./packets";
 const asApplicant = (s: Session): RequestContext => ({ userAccountId: s.userAccountId, applicantId: s.applicantId, actor: "applicant" });
 
 export type MatchSort = "score" | "g" | "c" | "date" | "salary";
-export interface MatchFilter { status?: "new" | "saved" | "passed" | "all"; sort?: MatchSort; ladder?: string; source?: string; showFiltered?: boolean }
+export interface MatchFilter { ids?: string[]; status?: "new" | "saved" | "passed" | "all"; sort?: MatchSort; ladder?: string; source?: string; showFiltered?: boolean }
 
 const SORT: Record<MatchSort, string> = {
   score: "m.filtered, m.score DESC, p.posted_at DESC NULLS LAST",
@@ -30,10 +30,11 @@ export async function listMatches(pool: pg.Pool, session: Session, f: MatchFilte
     else if (st === "saved") where.push("m.status = 'saved'");
     else if (st === "passed") where.push("m.status IN ('dismissed','not_a_fit')");
     if (!f.showFiltered && st !== "passed") where.push("NOT m.filtered");
+    if (f.ids) { args.push(f.ids); where.push(`m.id = ANY($${args.length}::uuid[])`); }
     if (f.ladder) { args.push(f.ladder); where.push(`m.ladder_tag = $${args.length}`); }
     if (f.source) { args.push(f.source); where.push(`EXISTS (SELECT 1 FROM job_posting_source ps WHERE ps.job_posting_id = p.id AND ps.job_source_id = $${args.length})`); }
     const r = await c.query(
-      `SELECT m.id, m.score, m.g_score, m.g_summary, m.c_score, m.c_summary, m.fit_version, m.reason_line, m.status, m.filtered, m.filter_reasons, m.ladder_tag, m.ladder_label, m.gap_skills, m.seen_at, m.found_by, m.goal_id,
+      `SELECT m.id, m.score, m.g_score, m.g_summary, m.c_score, m.c_summary, m.fit_version, m.reason_line, m.status, m.filtered, m.filter_reasons, m.ladder_tag, m.ladder_label, m.adjustments, m.gap_skills, m.seen_at, m.found_by, m.goal_id,
               m.tier, m.tier_misses, m.tier_reason, m.domain,
               p.public_ref, p.title, p.employer_canonical, p.location_raw, p.workplace_type, p.salary_min, p.salary_max, p.salary_currency, p.salary_period,
               p.posted_at, p.status AS posting_status, p.apply_url
@@ -77,45 +78,83 @@ export async function markMatchesSeen(pool: pg.Pool, session: Session): Promise<
   await withApplicant(pool, asApplicant(session), (c) => c.query("UPDATE match SET seen_at = now() WHERE seen_at IS NULL"));
 }
 
-/** Save / Pass / Not a fit, with an optional reason. Feedback is stored, then turned into visible adjustments only. */
-export async function giveFeedback(pool: pg.Pool, session: Session, matchId: string, action: "save" | "dismiss" | "not_a_fit" | "undo", reasonCode?: string | null, reasonText?: string | null): Promise<void> {
-  await withApplicant(pool, asApplicant(session), async (c) => {
-    const m = (await c.query("SELECT m.id, p.public_ref, p.id AS posting_id FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.id = $1", [matchId])).rows[0];
+export type FeedbackAction = "save" | "dismiss" | "not_a_fit" | "undo" | "reason";
+/** What a choice changed: the adjustments it added to the list (shown at once, each with Turn off). */
+export interface FeedbackResult { learned: Array<{ id: string; label: string }> }
+
+/**
+ * Save / Pass / Not a fit, and the optional reason given after a Pass (2026-11-22: one Pass button,
+ * then a one-tap reason). Feedback is stored, then turned into visible adjustments only. Only the
+ * job itself and the jobs a changed adjustment touches are scored again, so the click is quick.
+ */
+export async function giveFeedback(pool: pg.Pool, session: Session, matchId: string, action: FeedbackAction, reasonCode?: string | null, reasonText?: string | null): Promise<FeedbackResult> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const m = (await c.query("SELECT m.id, m.status, p.public_ref, p.id AS posting_id FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.id = $1", [matchId])).rows[0];
     if (!m) throw new DomainError("TC_NOT_FOUND");
-    const status = action === "save" ? "saved" : action === "dismiss" ? "dismissed" : action === "not_a_fit" ? "not_a_fit" : "new";
-    await c.query("UPDATE match SET status = $2 WHERE id = $1", [matchId, status]);
-    if (action !== "undo") {
-      await c.query("INSERT INTO match_feedback (applicant_id, match_id, action, reason_code, reason_text) VALUES (app_applicant_id(), $1, $2, $3, $4)",
-        [matchId, action, reasonCode || null, reasonText?.slice(0, 300) || null]);
+    if (action === "reason") {
+      // A reason belongs to the Pass just made: it goes on that feedback, and the job stays passed.
+      if (!["dismissed", "not_a_fit"].includes(m.status) || !reasonCode) throw new DomainError("TC_NOT_FOUND");
+      const f = await c.query(
+        `UPDATE match_feedback SET reason_code = $2, updated_at = now()
+          WHERE id = (SELECT id FROM match_feedback WHERE match_id = $1 AND action <> 'save' ORDER BY created_at DESC LIMIT 1) RETURNING id`, [matchId, reasonCode]);
+      if (!f.rowCount) await c.query("INSERT INTO match_feedback (applicant_id, match_id, action, reason_code) VALUES (app_applicant_id(), $1, 'dismiss', $2)", [matchId, reasonCode]);
+    } else {
+      const status = action === "save" ? "saved" : action === "dismiss" ? "dismissed" : action === "not_a_fit" ? "not_a_fit" : "new";
+      await c.query("UPDATE match SET status = $2 WHERE id = $1", [matchId, status]);
+      if (action !== "undo") {
+        await c.query("INSERT INTO match_feedback (applicant_id, match_id, action, reason_code, reason_text) VALUES (app_applicant_id(), $1, $2, $3, $4)",
+          [matchId, action, reasonCode || null, reasonText?.slice(0, 300) || null]);
+      }
     }
     await recordAudit(c, "match.feedback", { objectType: "match", objectId: matchId, payload: { job_ref: m.public_ref, action, reason: reasonCode ?? null } });
-    await refreshAdjustments(c);
-    await matchApplicant(c, new Date(), undefined);
+    const changed = await refreshAdjustments(c);
+    await rescoreTouched(c, [m.posting_id], [...changed.added, ...changed.removed]);
+    return { learned: changed.added.map((a) => ({ id: a.id, label: a.label })) };
   });
 }
 
+/** Scores again only these jobs and the ones the given adjustments apply to. */
+async function rescoreTouched(c: pg.PoolClient, postingIds: string[], adjustments: Array<Pick<Adjustment, "kind" | "target">>): Promise<void> {
+  const ids = new Set(postingIds);
+  if (adjustments.length) {
+    const rows = (await c.query("SELECT p.id, p.title, p.employer_canonical, p.location_raw FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.merged_into IS NULL")).rows;
+    for (const r of rows) {
+      const posting = { title: String(r.title ?? ""), employer: String(r.employer_canonical ?? ""), locationRaw: r.location_raw };
+      if (adjustments.some((a) => adjustmentHits(a, posting))) ids.add(r.id);
+    }
+  }
+  if (ids.size) await matchApplicant(c, new Date(), [...ids]);
+}
+
 /** Re-derives proposals from all feedback. New ones start on; ones the applicant switched off stay off. */
-async function refreshAdjustments(c: pg.PoolClient): Promise<void> {
+async function refreshAdjustments(c: pg.PoolClient): Promise<{ added: Array<Pick<Adjustment, "id" | "kind" | "target" | "label">>; removed: Array<Pick<Adjustment, "kind" | "target">> }> {
   const history: FeedbackRow[] = (await c.query(
     `SELECT f.id AS "feedbackId", f.match_id AS "matchId", f.action, f.reason_code AS "reasonCode", p.title, p.employer_canonical AS employer, p.location_raw AS location
        FROM match_feedback f JOIN match m ON m.id = f.match_id JOIN job_posting p ON p.id = m.job_posting_id
       WHERE f.id IN (SELECT DISTINCT ON (match_id) id FROM match_feedback ORDER BY match_id, created_at DESC)
         AND m.status <> 'new'`)).rows;
   const proposals = proposeAdjustments(history);
-  const existing = (await c.query("SELECT id, kind, target, delta FROM preference_adjustment")).rows;
+  const existing = (await c.query("SELECT id, kind, target, delta, active FROM preference_adjustment")).rows;
+  const added: Array<Pick<Adjustment, "id" | "kind" | "target" | "label">> = [];
+  const removed: Array<Pick<Adjustment, "kind" | "target">> = [];
   for (const p of proposals) {
     const same = existing.find((e) => e.kind === p.kind && e.target === p.target && Math.sign(e.delta) === Math.sign(p.delta));
     if (same) await c.query("UPDATE preference_adjustment SET label = $2, from_feedback_ids = $3 WHERE id = $1", [same.id, p.label, p.fromFeedbackIds]);
-    else await c.query(
-      "INSERT INTO preference_adjustment (applicant_id, kind, target, delta, from_feedback_ids, label) VALUES (app_applicant_id(), $1, $2, $3, $4, $5)",
-      [p.kind, p.target, p.delta, p.fromFeedbackIds, p.label]);
+    else {
+      const r = await c.query(
+        "INSERT INTO preference_adjustment (applicant_id, kind, target, delta, from_feedback_ids, label) VALUES (app_applicant_id(), $1, $2, $3, $4, $5) RETURNING id",
+        [p.kind, p.target, p.delta, p.fromFeedbackIds, p.label]);
+      added.push({ id: r.rows[0].id, kind: p.kind, target: p.target, label: p.label });
+    }
   }
   // A proposal the feedback no longer supports (the applicant undid it) goes away.
   for (const e of existing) {
     if (!proposals.some((p) => p.kind === e.kind && p.target === e.target && Math.sign(p.delta) === Math.sign(e.delta))) {
       await c.query("DELETE FROM preference_adjustment WHERE id = $1", [e.id]);
+      if (e.active) removed.push({ kind: e.kind, target: e.target });
     }
   }
+  return { added, removed };
 }
 
 export async function listAdjustments(pool: pg.Pool, session: Session) {
@@ -124,10 +163,10 @@ export async function listAdjustments(pool: pg.Pool, session: Session) {
 
 export async function setAdjustmentActive(pool: pg.Pool, session: Session, id: string, active: boolean): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
-    const r = await c.query("UPDATE preference_adjustment SET active = $2 WHERE id = $1 RETURNING kind", [id, active]);
+    const r = await c.query("UPDATE preference_adjustment SET active = $2 WHERE id = $1 RETURNING kind, target", [id, active]);
     if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");
     await recordAudit(c, "adjustment.changed", { objectType: "preference_adjustment", objectId: id, payload: { kind: r.rows[0].kind, active } });
-    await matchApplicant(c, new Date());
+    await rescoreTouched(c, [], [r.rows[0]]);
   });
 }
 
