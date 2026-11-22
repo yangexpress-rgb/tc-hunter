@@ -6,17 +6,18 @@ import { app, requireSession } from "@/lib/server";
 import { BudgetLine } from "@/components/applications/AppBits";
 import { Flash } from "@/components/profile/Fact";
 import { flashOf, type PageProps } from "@/lib/profile";
-import { EmailAttach, journeyFor, PipelineStrip, StatusBlock, type RunLine, type Signal } from "@/components/applications/Journey";
+import { restoreAppAction } from "./actions";
+import { EmailAttach, isStuck, journeyFor, PipelineStrip, StatusBlock, type RunLine, type Signal } from "@/components/applications/Journey";
 
 export const dynamic = "force-dynamic";
 
 type AppRow = Awaited<ReturnType<typeof listApplications>>[number];
-type Item = { a: AppRow; j: Journey; signal?: Signal };
+type Item = { a: AppRow; j: Journey; signal?: Signal; stuck: boolean };
 
 function Row({ it, back }: { it: Item; back: string }) {
   return (
     <li className="card app-row">
-      <StatusBlock j={it.j} appRef={it.a.public_ref} back={back} title={it.a.title} employer={it.a.employer_canonical}>
+      <StatusBlock j={it.j} appRef={it.a.public_ref} back={back} title={it.a.title} employer={it.a.employer_canonical} stuck={it.stuck}>
         {it.signal && it.j.action?.kind !== "email" ? <EmailAttach s={it.signal} back={back} /> : null}
       </StatusBlock>
     </li>
@@ -37,7 +38,12 @@ export default async function ApplicationsPage(props: PageProps) {
   // The oldest suggestion still waiting, per application: it attaches to that application's row.
   const signalFor = new Map<string, Signal>();
   for (const s of [...signals].reverse()) if (!signalFor.has(s.appRef)) signalFor.set(s.appRef, s);
-  const items: Item[] = rows.map((a) => ({ a, signal: signalFor.get(a.public_ref), j: journeyFor(a, facts[a.public_ref], ctx, { run: runs[a.public_ref] as RunLine | undefined, signal: signalFor.get(a.public_ref) }) }));
+  const items: Item[] = rows.map((a) => {
+    const run = runs[a.public_ref] as RunLine | undefined;
+    const j = journeyFor(a, facts[a.public_ref], ctx, { run, signal: signalFor.get(a.public_ref) });
+    return { a, signal: signalFor.get(a.public_ref), j, stuck: isStuck(j, a, run) };
+  });
+  const removed = /^A-\d{1,12}$/.test(params.removed ?? "") ? params.removed! : null;
 
   const filter = JOURNEY_STAGES.includes(params.stage as JourneyStage) ? (params.stage as JourneyStage) : null;
   const back = filter ? `/applications?stage=${filter}` : "/applications";
@@ -53,6 +59,12 @@ export default async function ApplicationsPage(props: PageProps) {
       <Flash error={error} />
       {params.moved === "1" ? <p className="status" role="status">Moved. You can change it any time.</p> : null}
       {params.dismissed === "1" ? <p className="status" role="status">Noted. That email suggestion is gone.</p> : null}
+      {removed ? (
+        <div className="status inline-actions" role="status">
+          <span>Removed {removed} from your tracker. Nothing was sent, and the job is still in Jobs.</span>
+          <form action={restoreAppAction}><input type="hidden" name="app" value={removed} /><input type="hidden" name="back" value={`/applications/${removed}`} /><button className="small secondary">Undo</button></form>
+        </div>
+      ) : null}
       {params.applying === "1" ? <p className="status" role="status">On it. TC Hunter is opening the employer&apos;s form now.</p> : null}
       <BudgetLine budget={sum.budget} />
 
@@ -63,7 +75,7 @@ export default async function ApplicationsPage(props: PageProps) {
           <section className="card needs-you" aria-label="Needs you">
             <h2>Needs you {needsYou.length ? <span className="count muted">{needsYou.length}</span> : null}</h2>
             {needsYou.length ? (
-              <ul className="plain job-list">{needsYou.map((x) => <li key={x.a.id} className="needs-row"><StatusBlock j={x.j} appRef={x.a.public_ref} back={back} title={x.a.title} employer={x.a.employer_canonical}>
+              <ul className="plain job-list">{needsYou.map((x) => <li key={x.a.id} className="needs-row"><StatusBlock j={x.j} appRef={x.a.public_ref} back={back} title={x.a.title} employer={x.a.employer_canonical} stuck={x.stuck}>
                 {x.signal && x.j.action?.kind !== "email" ? <EmailAttach s={x.signal} back={back} /> : null}
               </StatusBlock></li>)}</ul>
             ) : <p className="muted">Nothing needs you right now.</p>}

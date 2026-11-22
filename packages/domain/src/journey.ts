@@ -46,7 +46,9 @@ export type JourneyAction =
   | { kind: "link"; label: string; href?: string; anchor?: string }
   | { kind: "apply"; label: string; anyway?: boolean }
   | { kind: "email"; label: string; signalId: string }
-  | { kind: "clear_next_step"; label: string };
+  | { kind: "clear_next_step"; label: string }
+  /** Undo a Pass or a Remove on an application that was never sent. */
+  | { kind: "restore"; label: string };
 
 export type RunStatus = "none" | "queued" | "running" | "waiting" | "handover" | "sent" | "unclear" | "failed" | "stopped";
 
@@ -196,6 +198,13 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
 
   // 8. Closed: always with its reason, and nothing else at Layer 1.
   if (CLOSED_STAGES.includes(i.stage)) {
+    // Passed on, or removed from the tracker, before anything was sent (Yong, 2026-11-22): one tap puts it back.
+    if (i.stage === "withdrawn" && (i.outcomeTag === "passed" || i.outcomeTag === "removed")) {
+      const passed = i.outcomeTag === "passed";
+      return { stage: "closed", chip: passed ? "Closed · Passed" : "Closed · Removed",
+        status: `${passed ? "You passed on this job" : "You removed this from your tracker"}${i.closedAt ? ` on ${fmt(i.closedAt)}` : ""}. Nothing was sent.`,
+        owner: "nobody", tone: "done", action: { kind: "restore", label: passed ? "Undo the pass" : "Put it back in the tracker" } };
+    }
     const reason = CLOSED_REASON[i.stage]!;
     const detail = i.outcomeTag && OUTCOME_LABEL[i.outcomeTag] && OUTCOME_LABEL[i.outcomeTag] !== reason ? `${OUTCOME_LABEL[i.outcomeTag]}. ` : "";
     return { stage: "closed", chip: `Closed · ${reason}`, status: `${detail}Closed${i.closedAt ? ` on ${fmt(i.closedAt)}` : ""}.`, owner: "nobody", tone: "done", action: null };

@@ -9,7 +9,8 @@ import { JOBS_VIEWS } from "@/lib/jobsView";
 /** Only ever send people back to a Jobs page. */
 function backTo(form: FormData, fallback = "/jobs"): string {
   const b = String(form.get("back") ?? "");
-  return /^\/jobs(\/[A-Za-z0-9-]*)?(\?[A-Za-z0-9=&_.,%+*-]*)?(#[a-z0-9-]*)?$/.test(b) ? b : fallback;
+  // A Pass made on a stuck application comes back there, with its reasons (Yong, 2026-11-22).
+  return /^\/(jobs|applications)(\/[A-Za-z0-9-]*)?(\?[A-Za-z0-9=&_.,%+*-]*)?(#[a-z0-9-]*)?$/.test(b) ? b : fallback;
 }
 const withParam = (path: string, k: string, v: string) => {
   const [base, hash] = path.split("#");
