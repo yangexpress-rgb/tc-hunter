@@ -17,6 +17,8 @@ export interface RawPosting {
   postedAt: string | null;
   applyUrl: string | null;
   atsType: string | null;
+  /** Requisition IDs the site shows beside the job (Workday's job list does), when its reader keeps them. */
+  reqIds?: string[];
 }
 
 export interface Requirements {

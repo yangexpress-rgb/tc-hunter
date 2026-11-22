@@ -22,6 +22,7 @@ export * from "./email";
 export * from "./packet";
 export * from "./apply";
 export * from "./apply/employerSite";
+export * from "./apply/reqId";
 export * from "./apply/securityCode";
 export * from "./apply/handover";
 export * from "./promptShared";

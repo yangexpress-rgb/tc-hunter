@@ -101,3 +101,11 @@ Proof on Yong's Mac (0.2.1), app read vs the site's own total, no security check
 Stay "Can't be read directly": TCS and Infosys (Akamai "Access Denied" to the app on the first page),
 Slalom (reachable only by clicking its pager; Yong chose to leave it).
 A portal read short of its own count by more than 2% says so in Where we look.
+
+## Pasted Workday links (0.2.2, Phase 2 link hunt)
+
+When "Add a job by its link" gets a Workday link and Workday turns the server away, the job waits
+for this app instead of ending in a note. While the app runs, it checks every 10 minutes (and during
+its 6-hourly read) for such links, reads the one job on Workday's own page in the same hidden,
+read-only window, and hands it to TC Hunter, which adds and matches it straight away. The server
+also retries by itself after 1, 4 and 9 hours. See docs/link-hunt.md.

@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { goalTargets, portalFor, portalUrlOk, readPortalJob, readWorkdayJob, titleIsRelated, workdayApi, workdayFromKey, type PortalRecipe, type RawPosting } from "@tc-hunter/domain";
+import { goalTargets, parseWorkday, portalFor, portalUrlOk, readPortalJob, readWorkdayJob, titleIsRelated, workdayApi, workdayFromKey, type PortalRecipe, type RawPosting } from "@tc-hunter/domain";
 import { withApplicant } from "./context";
 import { DomainError } from "./packets";
 import { asApplicant } from "./profile";
@@ -56,7 +56,41 @@ export async function relayTodo(pool: pg.Pool, owner: DeviceOwner) {
       const recipe = portalFor(s.name);
       return recipe ? [{ id: s.id as string, name: s.name as string, recipe, readAt: s.read_at }] : [];
     });
-    return { terms, nextSearchAt, sources, portals };
+    // Pasted Workday links the server was turned away from (redesign §B): read on this Mac, one job each.
+    const links = (await c.query(
+      `SELECT id, payload->>'url' AS url FROM work_item WHERE kind = 'ingest_link' AND status = 'queued' AND payload->>'relay' = 'true' AND NOT payload ? 'raw'
+        ORDER BY created_at LIMIT 10`)).rows.flatMap((x) => {
+      const w = parseWorkday(String(x.url ?? ""));
+      return w?.jobPath ? [{ id: x.id as string, page: `https://${w.host}/${w.site}`, api: workdayApi(w).replace(`https://${w.host}`, ""), path: w.jobPath }] : [];
+    });
+    return { terms, nextSearchAt, sources, portals, links };
+  });
+}
+
+/**
+ * One pasted Workday job, read on the applicant's Mac (redesign §B: pasted links take the strong path).
+ * Kept on the waiting work, which then runs straight away: the server reads it as if it had fetched it,
+ * with the applicant's AI mode, and matches it. An error leaves the work waiting for its next own try.
+ */
+export async function relayLink(pool: pg.Pool, owner: DeviceOwner, b: { id: string; data?: unknown; error?: unknown }) {
+  return withApplicant(pool, asApplicant(owner.session), async (c) => {
+    const item = (await c.query(
+      "SELECT payload->>'url' AS url FROM work_item WHERE id = $1 AND kind = 'ingest_link' AND status = 'queued' AND payload->>'relay' = 'true'",
+      [/^[0-9a-f-]{36}$/i.test(b.id) ? b.id : "00000000-0000-0000-0000-000000000000"])).rows[0];
+    if (!item) throw new DomainError("TC_NOT_FOUND");
+    const w = parseWorkday(String(item.url));
+    if (!w?.jobPath) throw new DomainError("TC_NOT_FOUND");
+    if (typeof b.error === "string" && b.error) {
+      await c.query("UPDATE work_item SET payload = payload || jsonb_build_object('desktop_error', $2::text), updated_at = now() WHERE id = $1", [b.id, b.error.slice(0, 300)]);
+      return { read: false };
+    }
+    let raw: RawPosting | null = null;
+    try { raw = readWorkdayJob((b.data ?? {}) as Record<string, unknown>, w, w.tenant.charAt(0).toUpperCase() + w.tenant.slice(1), w.jobPath); } catch { raw = null; }
+    if (!raw?.title) throw new DomainError("TC_NOT_FOUND");
+    await c.query(
+      `UPDATE work_item SET payload = (payload - 'desktop_error') || jsonb_build_object('raw', $2::jsonb, 'via', 'desktop'), run_after = now(), updated_at = now() WHERE id = $1`,
+      [b.id, JSON.stringify(raw)]);
+    return { read: true, title: raw.title };
   });
 }
 
