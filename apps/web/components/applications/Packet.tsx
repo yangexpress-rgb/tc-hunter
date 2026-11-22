@@ -12,6 +12,7 @@ type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 const FROM: Record<string, string> = {
   master_profile: "From your profile", answer_bank: "Your saved answer", tailored_doc: "Your approved document for this job", applicant_typed: "You typed it",
   standing_answer: "Your standing answer in Settings", inferred: "Worked out from your profile", drafted: "A draft for you to check",
+  derived: "From your work history or education",
 };
 const STEP: Record<string, string> = {
   attestation: "A statement you confirm yourself", work_auth: "Your right to work", eeo: "A personal question: always your choice",

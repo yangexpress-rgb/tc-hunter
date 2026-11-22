@@ -9,7 +9,7 @@ export interface ReceiptData {
 }
 
 const SOURCE: Record<string, string> = {
-  master_profile: "your profile", answer_bank: "your saved answer", tailored_doc: "your approved document", applicant_typed: "typed by you", applicant_step: "your own step",
+  master_profile: "your profile", answer_bank: "your saved answer", tailored_doc: "your approved document", applicant_typed: "typed by you", applicant_step: "your own step", derived: "your work history or education",
 };
 const safe = (s: string) => [...s].map((ch) => { const c = ch.codePointAt(0)!; return (c >= 0x20 && c <= 0x7e) || (c >= 0xa0 && c <= 0xff) || "–—‘’“”•…".includes(ch) ? ch : "?"; }).join("");
 

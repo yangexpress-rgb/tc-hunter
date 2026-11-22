@@ -130,7 +130,9 @@ export interface ProfileData {
   about: { preferredName: string; legalName: string; email: string; phone: string; city: string; region: string; country: string;
     timezone: string; workAuthSummary: string; links: Record<string, string>;
     /** The About: an executive summary of who they are (Yong, 2026-11-17). Empty until filled. */
-    summary: string; summarySource: "resume" | "linkedin" | "applicant" | null; summaryUpdatedAt: Date | null };
+    summary: string; summarySource: "resume" | "linkedin" | "applicant" | null; summaryUpdatedAt: Date | null;
+    /** They marked their work history complete (every employer listed): "worked here before?" can be answered No from it. */
+    workHistoryComplete: boolean };
   experience: Array<Record<string, any> & { bullets: Array<Record<string, any>> }>;
   education: Array<Record<string, any>>;
   skills: Array<Record<string, any> & { evidence: Array<Record<string, any>> }>;
@@ -157,6 +159,7 @@ export async function getProfile(pool: pg.Pool, cfg: AppConfig, session: Session
         phone: dec("applicant.phone", a.phone_enc), city: a.city ?? "", region: a.region ?? "", country: a.country ?? "", timezone: a.timezone,
         workAuthSummary: dec("applicant.work_auth_summary", a.work_auth_summary_enc), links: a.links ?? {},
         summary: dec("applicant.about", a.about_enc), summarySource: a.about_source ?? null, summaryUpdatedAt: a.about_updated_at ?? null,
+        workHistoryComplete: !!a.work_history_complete,
       },
       experience: items.map((i) => ({ ...i, bullets: bullets.filter((b) => b.experience_item_id === i.id) })),
       education: (await c.query("SELECT * FROM education_item ORDER BY end_date DESC NULLS FIRST")).rows,
@@ -321,12 +324,28 @@ export async function saveLinkedInLink(pool: pg.Pool, session: Session, url: str
     [session.applicantId, full]));
 }
 
+/**
+ * "My work history is complete" (Yong, 2026-11-21): a one-time statement that every employer they have
+ * worked for is listed. Only then does TC Hunter answer "Have you worked at <employer> before?" with No
+ * from the work history; without it that question is asked.
+ */
+export async function setWorkHistoryComplete(pool: pg.Pool, session: Session, complete: boolean): Promise<void> {
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    await c.query("UPDATE applicant SET work_history_complete = $2, updated_at = now() WHERE id = $1", [session.applicantId, complete]);
+    await recordAudit(c, "settings.changed", { payload: { setting: "WORK_HISTORY_COMPLETE", removed: !complete } });
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Answer Bank
 // ---------------------------------------------------------------------------
 
 export interface AnswerRow { id: string; questionKey: string; patterns: string[]; answer: string; status: "draft" | "approved";
-  lastReviewedAt: Date | null; isApplicantStep: boolean; stale: boolean }
+  lastReviewedAt: Date | null; isApplicantStep: boolean; stale: boolean;
+  /** Kept for one employer only (its normalised name), or null for every form. */
+  employerKey: string | null;
+  /** The detail kept with the answer, for a follow-up box ("If yes, please explain"). */
+  detail: string | null }
 
 export async function listAnswers(pool: pg.Pool, cfg: AppConfig, session: Session): Promise<AnswerRow[]> {
   return withApplicant(pool, asApplicant(session), async (c) => {
@@ -336,13 +355,16 @@ export async function listAnswers(pool: pg.Pool, cfg: AppConfig, session: Sessio
       id: x.id, questionKey: x.question_key, patterns: x.question_patterns, status: x.status, lastReviewedAt: x.last_reviewed_at,
       isApplicantStep: x.is_applicant_step, answer: x.answer_text_enc ? decryptField(dk, "answer_bank_item.answer_text", x.answer_text_enc) : "",
       stale: x.status === "approved" && isStale(x.last_reviewed_at),
+      employerKey: x.employer_key ?? null, detail: x.detail_enc ? decryptField(dk, "answer_bank_item.detail", x.detail_enc) : null,
     }));
   });
 }
 
 /** Saving an answer leaves it a draft; approving is a separate, deliberate step. */
 export async function saveAnswer(pool: pg.Pool, cfg: AppConfig, session: Session,
-  a: { id?: string; questionKey: string; patterns?: string[]; answer: string; isApplicantStep?: boolean; approve?: boolean }): Promise<string> {
+  a: { id?: string; questionKey: string; patterns?: string[]; answer: string; isApplicantStep?: boolean; approve?: boolean;
+    /** The detail for a follow-up box: undefined leaves it as it is, "" removes it. */
+    detail?: string }): Promise<string> {
   return withApplicant(pool, asApplicant(session), async (c) => {
     const dk = await dataKeyFor(c, cfg, session.applicantId);
     const enc = encryptField(dk, "answer_bank_item.answer_text", a.answer.trim());
@@ -353,12 +375,17 @@ export async function saveAnswer(pool: pg.Pool, cfg: AppConfig, session: Session
            last_reviewed_at = CASE WHEN $4 = 'approved' THEN now() ELSE last_reviewed_at END WHERE id = $1 RETURNING id`,
         [a.id, enc, a.patterns ?? null, status]);
       if (!r.rows[0]) throw new DomainError("TC_NOT_FOUND");
+      if (a.detail !== undefined) {
+        await c.query("UPDATE answer_bank_item SET detail_enc = $2 WHERE id = $1",
+          [a.id, a.detail.trim() ? encryptField(dk, "answer_bank_item.detail", a.detail.trim().slice(0, 2000)) : null]);
+      }
       return a.id;
     }
     const r = await c.query(
-      `INSERT INTO answer_bank_item (applicant_id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step)
-       VALUES (app_applicant_id(), $1, $2, $3, $4, CASE WHEN $4 = 'approved' THEN now() END, $5) RETURNING id`,
-      [a.questionKey, a.patterns ?? [], enc, status, a.isApplicantStep ?? false]);
+      `INSERT INTO answer_bank_item (applicant_id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step, detail_enc)
+       VALUES (app_applicant_id(), $1, $2, $3, $4, CASE WHEN $4 = 'approved' THEN now() END, $5, $6) RETURNING id`,
+      [a.questionKey, a.patterns ?? [], enc, status, a.isApplicantStep ?? false,
+        a.detail?.trim() ? encryptField(dk, "answer_bank_item.detail", a.detail.trim().slice(0, 2000)) : null]);
     return r.rows[0].id;
   });
 }

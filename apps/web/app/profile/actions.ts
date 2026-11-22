@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import {
   addEvidence, addFact, approveAnswer, deleteAnswer, deleteFact, deleteResumeFile, deleteStory, removeProfileDuplicates, discardImport, FACT_TABLES, redigestResumeFile,
   removeEvidence, rescoreMatches, saveLinkedInLink, saveReaderInstructions, saveReaderPrompt, resetReaderPrompt, restoreReaderPrompt, resumeReaderName, runDigest, saveAbout, saveSummary, fillAboutFromResume, saveAnswer, saveGoal, deleteGoal, savePreferences, saveStory, storeResumeFile, updateFact,
-  verifyAll, verifyFact, verifyRole, requestScan, type FactTable,
+  verifyAll, verifyFact, verifyRole, requestScan, setWorkHistoryComplete, type FactTable,
 } from "@tc-hunter/db";
 import { aiIsOff, ANSWER_PRESETS, ClaudeAboutFinder, ClaudeResumeParser, errorCode, MAX_RESUME_BYTES, PoliteFetcher, readLinkedInProfile, RulesResumeParser } from "@tc-hunter/domain";
 import { fieldsFromForm } from "@/lib/profile";
@@ -272,10 +272,14 @@ export async function saveAnswerAction(form: FormData) {
   const key = String(form.get("question_key") ?? "").trim() || "custom";
   const preset = ANSWER_PRESETS.find((p) => p.key === key);
   const question = String(form.get("question") ?? "").trim();
+  // "keep": an answer kept for one employer, or any answer whose question stays as it was (only the answer and detail change).
+  const keepQuestion = key === "keep" && !!form.get("id");
+  const detail = form.has("detail") ? String(form.get("detail") ?? "") : undefined;
   await act(form, () => saveAnswer(app().pool, app().cfg, s, {
     id: String(form.get("id") ?? "") || undefined,
+    detail,
     questionKey: preset ? key : `custom:${question.slice(0, 80)}`,
-    patterns: preset ? [...preset.patterns] : question ? [question.toLowerCase()] : [],
+    patterns: keepQuestion ? undefined : preset ? [...preset.patterns] : question ? [question.toLowerCase()] : [],
     answer: String(form.get("answer") ?? ""),
     isApplicantStep: preset?.applicantStep ?? false,
     approve: form.get("approve") === "1",
@@ -360,4 +364,10 @@ export async function saveSearchSettingsAction(form: FormData) {
     min_score_to_tailor: num(form.get("min_score_to_tailor")),
     weekly_review_enabled: form.get("weekly_review_enabled") === "on",
   }), "/profile/goals");
+}
+
+/** "My work history is complete" (2026-11-21): lets "Have you worked at <employer> before?" be answered No from it. */
+export async function workHistoryCompleteAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => setWorkHistoryComplete(app().pool, s, form.get("complete") === "1"), "/profile#work-history-complete");
 }

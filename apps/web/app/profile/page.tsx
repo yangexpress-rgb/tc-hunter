@@ -8,7 +8,7 @@ import { AwardsSection, CertificationsSection, EducationSection, ExperienceSecti
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { EditDialog } from "@/components/profile/EditDialog";
-import { fillAboutAction, saveAboutAction, saveSummaryAction } from "./actions";
+import { fillAboutAction, saveAboutAction, saveSummaryAction, workHistoryCompleteAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +69,18 @@ export default async function ProfilePage(props: PageProps) {
       </section>
 
       <ExperienceSections profile={profile} targets={targets} sort={params.sort} copies={copies} />
+      {/* The answer ladder's one profile statement (2026-11-21): without it, "worked here before?" is asked, never answered No. */}
+      <section className="card" id="work-history-complete">
+        <form action={workHistoryCompleteAction} className="inline-form">
+          <input type="hidden" name="back" value="/profile#work-history-complete" />
+          <input type="hidden" name="complete" value={a.workHistoryComplete ? "0" : "1"} />
+          <span><strong>Work history complete: {a.workHistoryComplete ? "yes" : "not yet"}.</strong>{" "}
+            <span className="muted small">{a.workHistoryComplete
+              ? "Every employer you've worked for is listed above, so when a form asks \"Have you worked here before?\" TC Hunter answers from this list."
+              : "Once every employer you've worked for is listed above, say so here. Until then TC Hunter asks you whether you've worked at an employer before, instead of answering No."}</span></span>
+          <button className={`small${a.workHistoryComplete ? " secondary" : ""}`}>{a.workHistoryComplete ? "It isn't complete" : "My work history is complete"}</button>
+        </form>
+      </section>
       <EducationSection profile={profile} />
       <CertificationsSection profile={profile} />
       <SkillsSection profile={profile} />

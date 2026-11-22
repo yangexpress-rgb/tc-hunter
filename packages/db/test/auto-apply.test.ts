@@ -798,7 +798,7 @@ describe("answers worked out from the profile (Yong, 2026-11-17)", () => {
     const by = (label: RegExp) => p.fields.find((f: { label: string }) => label.test(f.label))!;
     expect(by(/worked for Premier/)).toMatchObject({ answer: "No", source: "inferred", willFill: true });
     expect(by(/Full-Time/)).toMatchObject({ answer: "Yes", source: "inferred" });
-    expect(by(/^Degree/)).toMatchObject({ answer: "Master's Degree", source: "inferred", willFill: true });
+    expect(by(/^Degree/)).toMatchObject({ answer: "Master's Degree", source: "derived", willFill: true });
     // Today where Yong lives (Toronto), not in UTC: in the evening there it is already tomorrow in UTC.
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
     expect(by(/^Date: Month/)).toMatchObject({ answer: String(+today.slice(5, 7)), source: "master_profile", willFill: true });
