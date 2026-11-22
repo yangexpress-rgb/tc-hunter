@@ -771,17 +771,49 @@ export async function runScanFinish(pool: pg.Pool, ctx: RequestContext, deps: Wo
   return { ...done, read_in_batch: fromBatch, read_live: live, waited_minutes: Math.round(waited) };
 }
 
-/** Reads one pasted job and matches it for the applicant. LinkedIn, Indeed and similar sites use the text the applicant pasted. */
-export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload: { url: string; title?: string; employer?: string; location?: string; text?: string }, deps: WorkDeps): Promise<{ matchId: string | null; note?: string }> {
+/** A pasted link's read that may work later (a refusal, a slow-down, no answer): tried again by itself, like a followed source. */
+const LINK_RETRY = new Set(["refused", "rate_limited", "unreachable"]);
+/** Tries in all for a pasted link, the first included: after 1, 4 and 9 hours, then stop (redesign §B, one retry policy). */
+export const LINK_TRIES = 4;
+
+/** What a pasted link's read came to. `retryIn` (seconds): not read yet, and looked at again by itself then. */
+export interface IngestLinkResult { matchId: string | null; ref?: string | null; note?: string; retryIn?: number; tries?: number; relay?: boolean }
+
+/** A posting the desktop app read, as handed over: only what a posting is, checked. */
+function relayedPosting(x: unknown): RawPosting | null {
+  const r = x as Partial<RawPosting> | null;
+  if (!r || typeof r !== "object" || typeof r.title !== "string" || !r.title.trim() || typeof r.employer !== "string" || typeof r.url !== "string" || typeof r.descriptionText !== "string") return null;
+  return r as RawPosting;
+}
+
+/**
+ * Reads one pasted job and matches it for the applicant (redesign §B: pasted links take the strong path).
+ * LinkedIn, Indeed and similar sites use the text the applicant pasted. A Workday link the server is
+ * turned away from is read by TC Hunter for Mac when it is open (the server's read is only the first
+ * try), and every read that may work later is tried again by itself after 1, 4 and 9 hours instead of
+ * ending in a note. Pasting the job's text stays the applicant's own shortcut.
+ */
+export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload: { url: string; title?: string; employer?: string; location?: string; text?: string; tries?: number; raw?: unknown }, deps: WorkDeps): Promise<IngestLinkResult> {
   const link = detectJobLink(payload.url);
   if (!link) return { matchId: null, note: "That address doesn't look like a job page." };
-  let raw: RawPosting | null = null;
-  if (payload.text && payload.title && payload.employer) raw = postingFromPastedText({ url: link.url, title: payload.title, employer: payload.employer, location: payload.location, text: payload.text });
+  let raw: RawPosting | null = relayedPosting(payload.raw);
+  if (raw) { /* read on the applicant's Mac by TC Hunter for Mac */ }
+  else if (payload.text && payload.title && payload.employer) raw = postingFromPastedText({ url: link.url, title: payload.title, employer: payload.employer, location: payload.location, text: payload.text });
   else if (link.kind === "no_fetch") return { matchId: null, note: "We don't open this site automatically. Paste the job's title, employer and text too." };
   else {
+    const tries = (Number(payload.tries) || 0) + 1;
     try { raw = await fetchJobLink(link, deps.fetcher); } catch (e) {
       const reason = e instanceof SourceRefusedError ? e.reason : "unreachable";
-      return { matchId: null, note: `${PLAIN_REFUSAL[reason] ?? PLAIN_REFUSAL.unreachable} You can paste the job's text instead.` };
+      const why = PLAIN_REFUSAL[reason] ?? PLAIN_REFUSAL.unreachable!;
+      const relay = link.kind === "workday";
+      if (LINK_RETRY.has(reason) && tries < LINK_TRIES) {
+        const hours = tries * tries;
+        return { matchId: null, tries, relay, retryIn: hours * 3600,
+          note: `${why.replace(/ We'll try again next time\.$/, "")} ${relay ? "The TC Hunter desktop app reads it from your computer next time it's open, and the server also" : "TC Hunter"} looks again by itself in about ${hours} hour${hours > 1 ? "s" : ""}. You can also paste the job's text.` };
+      }
+      return { matchId: null, tries, note: LINK_RETRY.has(reason)
+        ? `${why.replace(/ We'll try again next time\.$/, "")} It tried ${tries} times over about 14 hours and stopped. Paste the job's title, employer and text instead.`
+        : `${why} You can paste the job's text instead.` };
     }
     if (!raw) return { matchId: null, note: "We couldn't read a job on that page. You can paste the job's text instead." };
   }
@@ -865,6 +897,15 @@ export async function runNextWork(pool: pg.Pool, deps: WorkDeps): Promise<WorkDo
     if (item.kind === "scan_finish" && (result as { waiting?: number }).waiting) await withApplicant(pool, ctx, (c) => c.query(
       "UPDATE work_item SET status = 'queued', attempts = 0, locked_until = NULL, run_after = now() + $2::interval, updated_at = now() WHERE id = $1",
       [item.id, `${BATCH_CHECK_MINUTES} minutes`]));
+    // A pasted link not read yet: the same work waits and tries again by itself (redesign §B); the Jobs page says when.
+    else if (item.kind === "ingest_link" && (result as IngestLinkResult).retryIn) {
+      const r = result as IngestLinkResult;
+      await withApplicant(pool, ctx, (c) => c.query(
+        `UPDATE work_item SET status = 'queued', attempts = 0, locked_until = NULL, run_after = now() + make_interval(secs => $2),
+                payload = (payload - 'raw') || jsonb_build_object('tries', $3::int, 'relay', $4::boolean),
+                result = jsonb_build_object('note', $5::text, 'next_at', now() + make_interval(secs => $2)), updated_at = now() WHERE id = $1`,
+        [item.id, r.retryIn, r.tries ?? 1, !!r.relay, r.note ?? null]));
+    }
     else await pool.query("SELECT finish_work($1, true, NULL, $2)", [item.id, JSON.stringify(result)]);
     // An application to try again (a site hiccup, or a run a restart cut short): this same work, queued again.
     const again = item.kind === "apply" ? (result as { requeueIn?: number }).requeueIn : undefined;
@@ -984,7 +1025,9 @@ export async function requestLink(pool: pg.Pool, session: Session, p: { url: str
 
 export async function pendingWork(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    "SELECT id, kind, status, payload->>'url' AS url, last_error, result, created_at, finished_at FROM work_item ORDER BY created_at DESC LIMIT 10")).rows);
+    `SELECT id, kind, status, payload->>'url' AS url, last_error, result, created_at, finished_at,
+            (SELECT a.timezone FROM applicant a WHERE a.id = app_applicant_id()) AS timezone
+       FROM work_item ORDER BY created_at DESC LIMIT 10`)).rows);
 }
 
 export async function latestScan(pool: pg.Pool, session: Session) {

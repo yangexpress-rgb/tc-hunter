@@ -115,6 +115,19 @@ async function readSite(s, terms, plan) {
   } finally { w.destroy(); }
 }
 
+/**
+ * One pasted Workday job the server was turned away from (redesign §B, 2026-11-22): its site's page
+ * opens in the same hidden, read-only window, and the one job is asked of the site's own job service.
+ */
+async function readLink(link) {
+  if (!isWorkday(link.page) || typeof link.path !== "string" || !/^\/(job|details)\//.test(link.path)) throw new Error("Not a Workday job.");
+  const w = hiddenWindow();
+  try {
+    await load(w, link.page);
+    return trim(await ask(w, `${link.api}${link.path}`));
+  } finally { w.destroy(); }
+}
+
 /** For the proof: open a site and ask only for its full count. Nothing is sent anywhere. */
 async function countSite(page) {
   const u = new URL(page);
@@ -140,4 +153,4 @@ async function countSite(page) {
   return out;
 }
 
-module.exports = { readSite, countSite, SecurityCheck, hiddenWindow, load, pageNow, sleep, CHECK, GAP_MS };
+module.exports = { readSite, readLink, countSite, SecurityCheck, hiddenWindow, load, pageNow, sleep, CHECK, GAP_MS };

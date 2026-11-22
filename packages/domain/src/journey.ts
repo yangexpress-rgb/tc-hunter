@@ -94,6 +94,8 @@ export interface JourneyInput {
     handover?: { what: string; until?: string | null } | null;
     /** The run offers "Finish it yourself". */
     finishYourself?: boolean;
+    /** The employer's posting wasn't found yet and TC Hunter looks again by itself then (redesign §B). */
+    lookAgainAt?: Date | string | null;
   } | null;
   /** The oldest email suggestion still waiting for a yes or no. */
   email?: { id: string; says: string; moveTo: string } | null;
@@ -297,20 +299,20 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
   }
   if (approved) {
     // Approved, no run working on it.
-    if (r?.status === "failed" || r?.status === "stopped") return failedIn("applying", r, i);
+    if (r?.status === "failed" || r?.status === "stopped") return failedIn("applying", r, i, ctx);
     if (p!.state === "approved_to_apply" && !r?.forPacket) {
       return { stage: "applying", status: `Approved. Open ${E}'s form and choose Fill the form in the TC Hunter button.`, owner: "applicant", tone: "yours", action: { kind: "link", label: "See how", anchor: "packet" } };
     }
     return { stage: "applying", status: `${L1["packet.filling"]} on ${E}'s site.`, owner: "app", tone: "active", action: null };
   }
-  if (p?.state === "failed") return failedIn("applying", r ?? { status: "failed", problem: L1["packet.failed"] }, i);
+  if (p?.state === "failed") return failedIn("applying", r ?? { status: "failed", problem: L1["packet.failed"] }, i, ctx);
 
   // 2. Ready to apply: the packet is assembled and waits for the applicant's go-ahead.
   if (p?.state === "packet_ready_for_review") {
     // The newest run failed after these answers were prepared: the failure leads, not "review & approve"
     // (Huron, 2026-11-19). Approving alone wouldn't restart a failed run; Try again does.
     if (r?.status === "failed" || r?.status === "stopped") {
-      const f = failedIn("ready_to_apply", r, i);
+      const f = failedIn("ready_to_apply", r, i, ctx);
       return { ...f, note: f.note ?? "Your prepared answers are saved. Nothing was sent." };
     }
     const extra = p.missingRequired ? ` ${p.missingRequired === 1 ? "1 question needs" : `${p.missingRequired} questions need`} your answer first.`
@@ -326,7 +328,7 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
   if (r?.status === "waiting" && r.waitingFor === "weekly_limit" && resume === "approved") {
     return { stage: "ready_to_apply", status: `Your documents are approved. ${r.problem ?? "TC Hunter waits until next week."}`, owner: "applicant", tone: "yours", action: { kind: "apply", label: "Apply now anyway", anyway: true } };
   }
-  if (r?.status === "failed" || r?.status === "stopped") return failedIn(resume === "approved" && letter !== "draft" ? "ready_to_apply" : "getting_ready", r, i);
+  if (r?.status === "failed" || r?.status === "stopped") return failedIn(resume === "approved" && letter !== "draft" ? "ready_to_apply" : "getting_ready", r, i, ctx);
   if (!resume) {
     return i.stage === "tailoring"
       ? { stage: "getting_ready", status: "Your resume for this job is being written.", owner: "app", tone: "active", action: null }
@@ -344,9 +346,17 @@ function decide(i: JourneyInput, ctx: JourneyContext): Decided {
 const resumeApproved = (i: JourneyInput) => i.docs?.resume === "approved";
 
 /** A failure is not a stage: it shows in the stage where it happened, with a reason and a way on. */
-function failedIn(stage: JourneyStage, r: NonNullable<JourneyInput["run"]>, i: JourneyInput): Decided {
+function failedIn(stage: JourneyStage, r: NonNullable<JourneyInput["run"]>, i: JourneyInput, ctx: JourneyContext): Decided {
   const reason = r.problem ?? r.step ?? L1["packet.failed"];
   if (r.status === "stopped") return { stage, status: reason, owner: "app", tone: "problem", action: null };
+  // The employer's posting not found yet, for a reason that can clear by itself: not a dead failure.
+  // TC Hunter looks again on its own; Try again (and "I applied") stay offered (redesign §B).
+  if (r.status === "failed" && r.lookAgainAt) {
+    const at = asDate(r.lookAgainAt);
+    const soon = at.getTime() - (ctx.now ?? new Date()).getTime() < 5 * 60_000;
+    const when = new Intl.DateTimeFormat("en-US", { timeZone: ctx.timeZone, weekday: "short", hour: "numeric", minute: "2-digit" }).format(at);
+    return { stage, status: `Looking again by itself — next try ${soon ? "in a few minutes" : when}.`, note: reason, owner: "app", tone: "active", action: { kind: "apply", label: "Try again" } };
+  }
   // The way on is a button that does it, never a link to read more.
   const action: JourneyAction = r.finishYourself
     ? { kind: "link", label: "Finish it yourself", href: `/applications/${i.ref}/finish` }

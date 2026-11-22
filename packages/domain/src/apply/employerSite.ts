@@ -1,9 +1,10 @@
 import { careersGuesses, findBoard, tokenGuesses, type CareersLookup } from "../jobs/discover";
 import { SourceRefusedError, type Fetcher } from "../jobs/fetcher";
-import { detectSource, fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem, workdayFromKey, type WorkdaySite } from "../jobs/sources";
+import { detectJobLink, detectSource, fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem, workdayFromKey, type WorkdaySite } from "../jobs/sources";
 import { detectAts, isAvature } from "../packet/adapters";
 import { htmlToText } from "../jobs/text";
 import type { RawPosting, SourceSpec } from "../jobs/types";
+import { normalReqId, reqIdHits, reqIdsInText } from "./reqId";
 
 /**
  * Jobs found on LinkedIn or Indeed, applied for on the employer's own site (Yong, 2026-11-17).
@@ -14,11 +15,15 @@ import type { RawPosting, SourceSpec } from "../jobs/types";
  */
 
 
-export interface EmployerJobQuery { employer: string; title: string; location: string | null }
+export interface EmployerJobQuery {
+  employer: string; title: string; location: string | null;
+  /** Requisition IDs the job carries (from its address and text): an ID match outranks any title score. */
+  reqIds?: string[];
+}
 
 export type EmployerJobResult =
-  | { found: true; url: string; title: string; location: string | null; score: number; spec: SourceSpec | null }
-  | { found: false; reason: string; spec: SourceSpec | null };
+  | { found: true; url: string; title: string; location: string | null; score: number; spec: SourceSpec | null; by: "link" | "req_id" | "title"; trail: LinkTrail[] }
+  | { found: false; reason: string; spec: SourceSpec | null; failure: LinkFailure | LinkTerminal; step: number; trail: LinkTrail[] };
 
 const SHORT: Record<string, string> = {
   vp: "vice president", svp: "senior vice president", evp: "executive vice president", avp: "assistant vice president",
@@ -63,11 +68,15 @@ export function placesFit(a: string | null, b: string | null): boolean {
 }
 
 /**
- * The posting on the employer's own list that is the same job, if exactly one is. Same title
- * (or very nearly), in a place that fits. Two equally good postings in different places that
- * both fit means TC Hunter can't tell which one it is, so it picks none.
+ * The posting on the employer's own list that is the same job, if exactly one is. A requisition ID
+ * the job carries settles it first (redesign §B step 7): one posting with that ID is the job,
+ * whatever its title says. Otherwise the same title (or very nearly), in a place that fits. Two
+ * equally good postings in different places that both fit means TC Hunter can't tell which one it
+ * is, so it picks none and names them.
  */
-export function pickSameJob(q: EmployerJobQuery, postings: RawPosting[]): { posting: RawPosting; score: number } | { posting: null; why: "none" | "elsewhere" | "several"; near: string | null } {
+export function pickSameJob(q: EmployerJobQuery, postings: RawPosting[]): { posting: RawPosting; score: number; by: "req_id" | "title" } | { posting: null; why: "none" | "elsewhere" | "several"; near: string | null; rivals?: string[] } {
+  const byId = reqIdHits(q.reqIds ?? [], postings);
+  if (byId.length === 1) return { posting: byId[0]!, score: 1, by: "req_id" };
   const scored = postings.map((p) => ({ p, score: titleScore(q.title, p.title) })).filter((x) => x.score >= SAME_TITLE).sort((a, b) => b.score - a.score);
   if (!scored.length) {
     const near = postings.map((p) => ({ p, score: titleScore(q.title, p.title) })).sort((a, b) => b.score - a.score)[0];
@@ -80,10 +89,10 @@ export function pickSameJob(q: EmployerJobQuery, postings: RawPosting[]): { post
   if (rivals.length) {
     // Several of the same job: one whose place matches word for word wins; otherwise it's not clear which.
     const exact = [best, ...rivals].filter((x) => q.location && x.p.locationRaw && x.p.locationRaw.toLowerCase().includes(q.location.toLowerCase().split(",")[0]!.trim()));
-    if (exact.length === 1) return { posting: exact[0]!.p, score: exact[0]!.score };
-    return { posting: null, why: "several", near: null };
+    if (exact.length === 1) return { posting: exact[0]!.p, score: exact[0]!.score, by: "title" };
+    return { posting: null, why: "several", near: null, rivals: [best, ...rivals].slice(0, 5).map((x) => `${x.p.title}${x.p.locationRaw ? ` (${x.p.locationRaw})` : ""}`) };
   }
-  return { posting: best.p, score: best.score };
+  return { posting: best.p, score: best.score, by: "title" };
 }
 
 /**
@@ -99,7 +108,9 @@ export function workdayRows(rows: Array<Record<string, unknown>>, w: WorkdaySite
     const url = `https://${w.host}/${w.site}${String(j.externalPath)}`;
     const where = typeof j.locationsText === "string" && !/^\d+ locations?$/i.test(j.locationsText.trim()) ? j.locationsText : null;
     return { externalId: `workday:${w.tenant}:${String(j.externalPath)}`, url, employer, title: String(j.title), locationRaw: where, workplaceType: null,
-      descriptionText: "", salary: null, postedAt: null, applyUrl: url, atsType: "workday" };
+      descriptionText: "", salary: null, postedAt: null, applyUrl: url, atsType: "workday",
+      // Workday's list shows the requisition ID beside each title ("R2601352").
+      reqIds: (Array.isArray(j.bulletFields) ? j.bulletFields : []).flatMap((x) => reqIdsInText(String(x))) };
   });
 }
 
@@ -120,82 +131,219 @@ export function boardFromLinks(urls: string[], name: string): SourceSpec | null 
 }
 
 const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "careers_page"]);
+const LISTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday"]);
 
 /**
- * Finds the same job on the employer's own site. `known` is the employer's job board when
- * TC Hunter already knows it; otherwise it tries the usual board names, then asks `lookup`.
- * Never fetches LinkedIn, Indeed or similar sites.
+ * The link hunt (redesign §B, 2026-11-21): one fixed ladder, tried in order, every step's outcome
+ * recorded. In No AI mode the ladder is complete without the AI careers lookup; in an AI mode its
+ * hints come after the free name guesses (step 3), so a free answer is never paid for, and they are
+ * checked exactly like any other guess.
  */
-export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: { known?: SourceSpec | null; lookup?: CareersLookup; workdaySearch?: WorkdaySearch; browse?: () => SiteBrowser; hints?: string[] } = {}): Promise<EmployerJobResult> {
-  let spec: SourceSpec | null = opts.known && SUPPORTED.has(opts.known.kind) && !isNoFetchHost(opts.known.url) ? opts.known : null;
-  let system: string | null = null;
-  let careersUrl: string | null = opts.known?.kind === "careers_page" ? opts.known.url : null;
-  // An Avature careers site (Siemens) is searched directly: its job list isn't a feed TC Hunter reads otherwise.
-  if (careersUrl && isAvature(careersUrl)) return findOnAvature(q, careersUrl, f);
-  try {
-    if (!spec) spec = await findBoard({ name: q.employer }, f);
-    if (!spec && opts.lookup) {
-      const idea = await opts.lookup.find(q.employer).catch(() => null);
-      if (idea) {
-        careersUrl = idea.careersUrl ?? careersUrl;
-        system = idea.careersUrl ? unreadableCareersSystem(idea.careersUrl) : null;
-        spec = await findBoard({ name: q.employer, boards: idea.boards, careersUrl: idea.careersUrl }, f);
-      }
-    }
-    // No AI, or it didn't know: the employer's usual careers addresses (capitalonecareers.com,
-    // careers.acme.com…), each read for a link to its hiring system or for jobs.
-    if (!spec && !careersUrl) {
-      const tried = new Set(tokenGuesses(q.employer).flatMap((t) => ["greenhouse", "lever", "ashby", "smartrecruiters"].map((k) => `${k}:${t}`)));
-      for (const guess of careersGuesses(q.employer)) {
-        spec = await findBoard({ name: q.employer, careersUrl: guess }, f, tried).catch((e) => { if (e instanceof SourceRefusedError) return null; throw e; });
-        if (spec) break;
-      }
-    }
-  } catch (e) {
-    if (e instanceof SourceRefusedError) return { found: false, reason: `${q.employer}'s careers site turned it away`, spec: null };
-    throw e;
+export const LINK_STEPS = [
+  "The posting's own link",          // 0
+  "What TC Hunter already knows",    // 1
+  "Requisition ID",                  // 2
+  "Usual hiring-system names",       // 3
+  "Usual careers addresses",         // 4
+  "Avature search",                  // 5
+  "The employer's own website",      // 6
+  "Same-job match",                  // 7
+] as const;
+
+/** Failures that can clear by themselves: TC Hunter looks again on its own (a job posted later, a slow-down that lifts). */
+export type LinkFailure = "no_board" | "board_refused" | "job_not_listed" | "ambiguous" | "read_failed";
+/** The only ends that are final: the employer sends applicants back to the job site, or uses a system TC Hunter can't search. */
+export type LinkTerminal = "sends_back" | "unsupported";
+export const TRANSIENT_LINK_FAILURES: readonly LinkFailure[] = ["no_board", "board_refused", "job_not_listed", "ambiguous", "read_failed"];
+export const isTransientLinkFailure = (x: string | null | undefined): x is LinkFailure => TRANSIENT_LINK_FAILURES.includes(x as LinkFailure);
+
+/** One rung of the ladder and what came of it, in plain words. */
+export interface LinkTrail { step: number; outcome: string }
+
+/** The trail in plain words, one line ("What TC Hunter already knows: nothing yet · Requisition ID: R2601352 found"). */
+export function trailWords(trail: LinkTrail[]): string {
+  return trail.map((t) => `${LINK_STEPS[t.step] ?? `Step ${t.step}`}: ${t.outcome}`).join(" · ");
+}
+
+/** Does a hiring site's own name fit the employer (Wiley's Workday is "wiley", Capital One's "capitalone")? */
+export function boardFits(spec: SourceSpec, employer: string): boolean {
+  const key = (spec.kind === "workday" ? spec.key.split("/")[1] ?? "" : spec.key).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!key) return false;
+  const words = titleWords(employer).filter((w) => w.length >= 3);
+  const joined = words.join("");
+  return (!!joined && (key.includes(joined) || joined.includes(key))) || words.some((w) => w.length >= 4 && key.includes(w));
+}
+
+/** Job and hiring-site addresses a posting's own text carries (a pasted posting, an email alert, an aggregator's text). */
+export function linksIn(text: string | null | undefined): string[] {
+  const out = new Set<string>();
+  for (const m of (text ?? "").slice(0, 60_000).matchAll(/https:\/\/[^\s"'<>)\]]+/gi)) {
+    const u = m[0]!.replace(/[.,;:!?]+$/, "");
+    if (!isNoFetchHost(u) && !isJobBoardHost(u)) out.add(u);
   }
-  if ((!spec || spec.kind === "careers_page") && careersUrl) {
-    const base = await avatureBase(careersUrl, f).catch(() => null);
-    if (base) return findOnAvature(q, base, f);
-  }
-  // Still nothing: look around the employer's own website in a real browser, as a person would
-  // (Yong, 2026-11-21: "the right link should be searched … automatically").
-  if (!spec && !system && opts.browse) {
-    const home = tokenGuesses(q.employer)[0];
-    const starts = [...(opts.hints ?? []), ...(careersUrl ? [careersUrl] : []), ...(home ? [`https://www.${home}.com/`] : []), ...careersGuesses(q.employer)];
-    spec = await hiringSiteByBrowsing(starts, q.employer, opts.browse()).catch(() => null);
-  }
-  if (!spec) {
-    return { found: false, spec: null, reason: system
-      ? `${q.employer}'s careers site runs on ${system}, which it can't search yet`
-      : `it couldn't find ${q.employer}'s careers site` };
-  }
-  let postings: RawPosting[] | null = null;
-  // A Workday site is searched from a browser page on it when one can be opened: Workday turns this server's reader away.
-  if (spec.kind === "workday" && opts.workdaySearch) {
-    const w = workdayFromKey(spec.key);
-    const rows = await opts.workdaySearch(w, q.title).catch(() => null);
-    if (rows) postings = workdayRows(rows, w, q.employer);
-  }
-  try {
-    const near = (t: string) => titleScore(q.title, t) >= 0.5;
-    postings ??= (await fetchSource(spec, f, near, 10, [q.title])).postings;
-  } catch (e) {
-    if (e instanceof SourceRefusedError) return { found: false, spec, reason: `${q.employer}'s careers site (${hostOf(spec.url)}) didn't let it read its jobs` };
-    throw e;
-  }
-  const pick = pickSameJob(q, postings);
-  if (!pick.posting) {
+  return [...out].slice(0, 20);
+}
+
+/**
+ * Finds the same job on the employer's own site, by the ladder above. `known` is the employer's job
+ * board when TC Hunter already knows it; `links` are addresses the posting itself gives. Never
+ * fetches LinkedIn, Indeed or similar sites. Never throws: a site that fails ends in `read_failed`.
+ */
+export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: { known?: SourceSpec | null; lookup?: CareersLookup; workdaySearch?: WorkdaySearch; browse?: () => SiteBrowser; hints?: string[]; links?: string[] } = {}): Promise<EmployerJobResult> {
+  const trail: LinkTrail[] = [];
+  const log = (step: number, outcome: string) => { trail.push({ step, outcome }); };
+  const ids = [...new Set((q.reqIds ?? []).map(normalReqId))];
+  const fail = (failure: LinkFailure | LinkTerminal, step: number, reason: string, spec: SourceSpec | null = null): EmployerJobResult => ({ found: false, failure, step, reason, spec, trail });
+  const refusedWhy = (e: SourceRefusedError) => (e.reason === "unreachable" || e.reason === "too_big" ? "read_failed" : "board_refused") as LinkFailure;
+
+  /** Steps 2 and 7 on one board: the requisition ID first, then the title. "gone": the board no longer answers there. */
+  const searchBoard = async (spec: SourceSpec, at: number): Promise<EmployerJobResult | "gone"> => {
     const where = hostOf(spec.url);
-    const reason = pick.why === "several" ? `${q.employer}'s careers site (${where}) lists more than one "${q.title}" job and it can't tell which one this is`
-      : pick.why === "elsewhere" ? `${q.employer}'s careers site (${where}) lists ${pick.near}, which isn't in ${q.location}`
-      : `"${q.title}" isn't on ${q.employer}'s careers site (${where}) now${pick.near ? `; the closest is "${pick.near}"` : ""}. It may be closed, or listed only on the job site`;
-    return { found: false, spec, reason };
+    let postings: RawPosting[] | null = null;
+    const w = spec.kind === "workday" ? workdayFromKey(spec.key) : null;
+    try {
+      // 2. Requisition ID: searched for by itself on a Workday site; on other boards it is checked in the match below.
+      if (!ids.length) log(2, "the posting names none");
+      else if (w) {
+        let byId: RawPosting[] = [];
+        for (const id of ids.slice(0, 2)) {
+          const rows = opts.workdaySearch ? await opts.workdaySearch(w, id).catch(() => null) : null;
+          byId = rows ? workdayRows(rows, w, q.employer) : opts.workdaySearch ? [] : (await fetchSource(spec, f, () => true, 3, [id])).postings;
+          const hit = reqIdHits(ids, byId);
+          if (hit.length === 1) {
+            log(2, `${id} found on ${where}: "${hit[0]!.title}"`);
+            return done(hit[0]!, 1, "req_id", spec);
+          }
+        }
+        log(2, `${ids.join(", ")} not found on ${where}`);
+      } else log(2, `${ids.join(", ")}: checked against ${where}'s list below`);
+      // The title: a Workday site from a browser page on it when one can be opened (Workday turns this server's reader away).
+      if (w && opts.workdaySearch) {
+        const rows = await opts.workdaySearch(w, q.title).catch(() => null);
+        if (rows) postings = workdayRows(rows, w, q.employer);
+      }
+      const near = (t: string) => titleScore(q.title, t) >= 0.5;
+      postings ??= (await fetchSource(spec, f, near, 10, [q.title])).postings;
+    } catch (e) {
+      if (e instanceof SourceRefusedError) {
+        if (e.reason === "not_found") return "gone";
+        log(at, `${where} didn't let it read its jobs`);
+        return fail(refusedWhy(e), at, `${q.employer}'s careers site (${where}) didn't let it read its jobs`, spec);
+      }
+      log(at, `${where} couldn't be read`);
+      return fail("read_failed", at, `${q.employer}'s careers site (${where}) couldn't be read just now`, spec);
+    }
+    // 7. Same-job match.
+    const pick = pickSameJob({ ...q, reqIds: ids }, postings);
+    if (!pick.posting) {
+      const reason = pick.why === "several" ? `${q.employer}'s careers site (${where}) lists more than one "${q.title}" job and it can't tell which one this is`
+        : pick.why === "elsewhere" ? `${q.employer}'s careers site (${where}) lists ${pick.near}, which isn't in ${q.location}`
+        : `"${q.title}" isn't on ${q.employer}'s careers site (${where}) now${pick.near ? `; the closest is "${pick.near}"` : ""}. It may be closed, or listed only on the job site`;
+      log(7, pick.why === "several" ? `several fit: ${(pick.rivals ?? []).join("; ")}` : pick.why === "elsewhere" ? `only elsewhere: ${pick.near}` : `not listed${pick.near ? ` (closest: "${pick.near}")` : ""}`);
+      return fail(pick.why === "several" ? "ambiguous" : "job_not_listed", 7, reason, spec);
+    }
+    log(7, pick.by === "req_id" ? `matched by requisition ID: "${pick.posting.title}"` : `matched by title: "${pick.posting.title}"`);
+    return done(pick.posting, pick.score, pick.by, spec);
+  };
+  const done = (p: RawPosting, score: number, by: "req_id" | "title", spec: SourceSpec): EmployerJobResult => {
+    const url = p.applyUrl && !isNoFetchHost(p.applyUrl) ? p.applyUrl : p.url;
+    if (isNoFetchHost(url)) return fail("sends_back", 7, `${q.employer}'s own listing sends applicants back to the job site`, spec);
+    return { found: true, url, title: p.title, location: p.locationRaw, score, spec, by, trail };
+  };
+
+  try {
+    // 0. The posting's own way out: a link in its text to the job on the employer's hiring system wins outright.
+    let fromPosting: SourceSpec | null = null;
+    for (const link of opts.links ?? []) {
+      const spec = detectSource(link, q.employer);
+      if (!spec || !LISTED.has(spec.kind) || !boardFits(spec, q.employer)) continue;
+      const job = detectJobLink(link);
+      if (job && job.kind !== "page" && job.kind !== "no_fetch") {
+        log(0, `its text links to the job on ${hostOf(link)}`);
+        return { found: true, url: link, title: q.title, location: q.location, score: 1, spec, by: "link", trail };
+      }
+      fromPosting ??= spec;
+    }
+    log(0, fromPosting ? `its text links to ${hostOf(fromPosting.url)}` : opts.links?.length ? "its links don't lead to the employer's hiring site" : "it has no link to the employer");
+
+    // 1. What TC Hunter already knows: the employer's remembered board, or the one its other jobs here use.
+    const known = opts.known && SUPPORTED.has(opts.known.kind) && !isNoFetchHost(opts.known.url) ? opts.known : null;
+    let careersUrl: string | null = known?.kind === "careers_page" ? known.url : null;
+    // An Avature careers site (Siemens) is searched directly: its job list isn't a feed TC Hunter reads otherwise.
+    if (careersUrl && isAvature(careersUrl)) { log(1, hostOf(careersUrl)); log(5, "searching it"); return withTrail(await findOnAvature(q, careersUrl, f), trail); }
+    for (const board of [known, fromPosting].filter((x): x is SourceSpec => !!x && x.kind !== "careers_page")) {
+      log(1, hostOf(board.url));
+      const r = await searchBoard(board, 1);
+      if (r !== "gone") return r;
+      log(1, `${hostOf(board.url)} no longer lists jobs`);
+    }
+    if (!known && !fromPosting) log(1, "nothing yet");
+
+    // 3. The usual board names on Greenhouse, Lever, Ashby, SmartRecruiters and Workday.
+    let spec: SourceSpec | null = known?.kind === "careers_page" ? known : null;
+    let system: string | null = null;
+    try {
+      if (!spec) {
+        spec = await findBoard({ name: q.employer }, f);
+        log(3, spec ? hostOf(spec.url) : "none answered");
+      }
+      // An AI mode only: the careers lookup's hints, checked like any guess. No AI never asks.
+      if (!spec && opts.lookup) {
+        const idea = await opts.lookup.find(q.employer).catch(() => null);
+        if (idea) {
+          careersUrl = idea.careersUrl ?? careersUrl;
+          system = idea.careersUrl ? unreadableCareersSystem(idea.careersUrl) : null;
+          spec = await findBoard({ name: q.employer, boards: idea.boards, careersUrl: idea.careersUrl }, f);
+          log(3, `AI hint: ${spec ? hostOf(spec.url) : "nothing that checked out"}`);
+        }
+      }
+      // 4. The employer's usual careers addresses (capitalonecareers.com, careers.acme.com…), each read
+      // for a link to its hiring system or for jobs, following Careers links.
+      if (!spec && !careersUrl) {
+        const tried = new Set(tokenGuesses(q.employer).flatMap((t) => ["greenhouse", "lever", "ashby", "smartrecruiters"].map((k) => `${k}:${t}`)));
+        for (const guess of careersGuesses(q.employer)) {
+          spec = await findBoard({ name: q.employer, careersUrl: guess }, f, tried).catch((e) => { if (e instanceof SourceRefusedError) return null; throw e; });
+          if (spec) break;
+        }
+        log(4, spec ? hostOf(spec.url) : "none led to a hiring site");
+      }
+    } catch (e) {
+      if (e instanceof SourceRefusedError) {
+        log(3, "its careers site turned it away");
+        return fail(refusedWhy(e), 3, `${q.employer}'s careers site turned it away`);
+      }
+      throw e;
+    }
+    // 5. Avature, when the careers site is one.
+    if ((!spec || spec.kind === "careers_page") && careersUrl) {
+      const base = await avatureBase(careersUrl, f).catch(() => null);
+      if (base) { log(5, "searching it"); return withTrail(await findOnAvature(q, base, f), trail); }
+    }
+    // 6. Still nothing: look around the employer's own website in a real browser, as a person would
+    // (Yong, 2026-11-21: "the right link should be searched … automatically").
+    if (!spec && !system && opts.browse) {
+      const home = tokenGuesses(q.employer)[0];
+      const starts = [...(opts.hints ?? []), ...(careersUrl ? [careersUrl] : []), ...(home ? [`https://www.${home}.com/`] : []), ...careersGuesses(q.employer)];
+      spec = await hiringSiteByBrowsing(starts, q.employer, opts.browse()).catch(() => null);
+      log(6, spec ? hostOf(spec.url) : "no careers link led to a hiring site");
+    }
+    if (!spec) {
+      return system
+        ? fail("unsupported", 3, `${q.employer}'s careers site runs on ${system}, which it can't search yet`)
+        : fail("no_board", 6, `it couldn't find ${q.employer}'s careers site`);
+    }
+    const r = await searchBoard(spec, 3);
+    return r === "gone" ? fail("no_board", 3, `it couldn't find ${q.employer}'s careers site`) : r;
+  } catch (e) {
+    log(trail.at(-1)?.step ?? 0, `a site couldn't be reached (${String((e as Error)?.message ?? e).slice(0, 80)})`);
+    return fail("read_failed", trail.at(-1)?.step ?? 0, `${q.employer}'s site couldn't be reached just now`);
   }
-  const url = pick.posting.applyUrl && !isNoFetchHost(pick.posting.applyUrl) ? pick.posting.applyUrl : pick.posting.url;
-  if (isNoFetchHost(url)) return { found: false, spec, reason: `${q.employer}'s own listing sends applicants back to the job site` };
-  return { found: true, url, title: pick.posting.title, location: pick.posting.locationRaw, score: pick.score, spec };
+}
+
+/** An Avature search's result, carrying the ladder's trail. */
+function withTrail(r: EmployerJobResult, trail: LinkTrail[]): EmployerJobResult {
+  trail.push({ step: 7, outcome: r.found ? `matched by title: "${r.title}"` : r.reason });
+  return { ...r, trail };
 }
 
 const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } };
@@ -305,17 +453,17 @@ async function findOnAvature(q: EmployerJobQuery, base: string, f: Fetcher): Pro
     const r = await f.get(search, { kind: "page" });
     postings = avatureResults(r.text, r.url, q.employer);
   } catch (e) {
-    if (e instanceof SourceRefusedError) return { found: false, spec: null, reason: `${q.employer}'s careers site (${where}) didn't let it search its jobs` };
-    throw e;
+    if (e instanceof SourceRefusedError) return { found: false, spec: null, failure: e.reason === "unreachable" ? "read_failed" : "board_refused", step: 5, trail: [], reason: `${q.employer}'s careers site (${where}) didn't let it search its jobs` };
+    return { found: false, spec: null, failure: "read_failed", step: 5, trail: [], reason: `${q.employer}'s careers site (${where}) couldn't be read just now` };
   }
   const pick = pickSameJob(q, postings);
   if (!pick.posting) {
     const reason = pick.why === "several" ? `${q.employer}'s careers site (${where}) lists more than one "${q.title}" job and it can't tell which one this is`
       : pick.why === "elsewhere" ? `${q.employer}'s careers site (${where}) lists ${pick.near}, which isn't in ${q.location}`
       : `"${q.title}" isn't on ${q.employer}'s careers site (${where}) now${pick.near ? `; the closest is "${pick.near}"` : ""}. It may be closed, or listed only on the job site`;
-    return { found: false, spec: null, reason };
+    return { found: false, spec: null, failure: pick.why === "several" ? "ambiguous" : "job_not_listed", step: 7, trail: [], reason };
   }
-  return { found: true, url: pick.posting.url, title: pick.posting.title, location: pick.posting.locationRaw, score: pick.score, spec: null };
+  return { found: true, url: pick.posting.url, title: pick.posting.title, location: pick.posting.locationRaw, score: pick.score, spec: null, by: pick.by, trail: [] };
 }
 
 // Searching the employer's own website in a real browser (Yong, 2026-11-21) ---------------------------

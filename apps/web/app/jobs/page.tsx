@@ -22,6 +22,9 @@ const LADDER = [["", "Any"], ["step_toward", "Steps toward your goal"], ["same_l
 const WORK = [["remote", "Remote"], ["hybrid", "Hybrid"], ["onsite", "In the office"]] as const;
 
 /** Jobs (brief 5.3): one filter bar, then the jobs as a list, as job cards or as company cards (Yong, 2026-11-18). */
+/** The applicant's time zone, or UTC when it isn't one Intl knows. */
+const zoneOk = (z: unknown) => { try { new Intl.DateTimeFormat("en", { timeZone: String(z || "UTC") }); return String(z || "UTC"); } catch { return "UTC"; } };
+
 export default async function JobsPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
@@ -177,13 +180,14 @@ export default async function JobsPage(props: PageProps) {
           {recentLinks.length ? (
             <ul className="plain">
               {recentLinks.map((w) => {
-                const res = (w.result ?? {}) as { ref?: string | null; note?: string };
+                const res = (w.result ?? {}) as { ref?: string | null; note?: string; next_at?: string };
                 return (
                   <li key={w.id} className="paste-row">
                     <span className="muted">Added {ago(w.created_at)}:</span>{" "}
                     {w.status === "done" && res.ref ? <a href={`/jobs/${res.ref}`}>See how it matches you</a>
                       : w.status === "done" ? <span className="error">{res.note ?? "We couldn't read a job there."}</span>
                       : w.status === "failed" ? <span className="error">We couldn't read that job. Paste its title, employer and text and try again.</span>
+                      : w.status === "queued" && res.next_at ? <span className="status">Looking again by itself — next try {new Date(res.next_at).toLocaleString("en-US", { timeZone: zoneOk(w.timezone), weekday: "short", hour: "numeric", minute: "2-digit" })}. <span className="muted small">{res.note}</span></span>
                       : <span>Reading…</span>}
                   </li>
                 );

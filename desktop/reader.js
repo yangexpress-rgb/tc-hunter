@@ -7,14 +7,14 @@
  * When: shortly after the app opens, about every 6 hours while it runs, and ahead of the weekly
  * search. "Read now" in Where we look starts one straight away.
  */
-const { readSite } = require("./workday");
+const { readSite, readLink } = require("./workday");
 const { readPortal } = require("./portal");
 
-const EVERY_MS = 6 * 3_600_000, FIRST_AFTER_MS = 60_000, BEFORE_SEARCH_MS = 45 * 60_000;
+const EVERY_MS = 6 * 3_600_000, FIRST_AFTER_MS = 60_000, BEFORE_SEARCH_MS = 45 * 60_000, LINKS_EVERY_MS = 10 * 60_000;
 
 let mainWindow = null, origin = "";
 let running = null;
-let timer = null, beforeSearch = null;
+let timer = null, beforeSearch = null, linkTimer = null, linksRunning = null;
 let last = { state: "idle" };
 
 /** A call to TC Hunter, made from the app's own window so it carries that window's sign-in. */
@@ -73,6 +73,7 @@ async function readAll(why) {
         }
         last.done += 1;
       }
+      await readLinks(todo.links || [], results);
       last = { state: "done", why, at: Date.now(), results };
     } catch (e) {
       last = e.signedOut ? { state: "signed_out", at: Date.now() } : { state: "failed", at: Date.now(), message: e.message, results };
@@ -82,6 +83,36 @@ async function readAll(why) {
     return last;
   })();
   return running;
+}
+
+/**
+ * Pasted Workday links the server couldn't read (redesign §B): each read here, one job each, and
+ * handed to TC Hunter, which adds it at once. A link that fails here is left for TC Hunter's own next try.
+ */
+async function readLinks(links, results) {
+  for (const l of links) {
+    try {
+      const data = await readLink(l);
+      await call("/api/ext/workday/link", { id: l.id, data });
+      if (results) results.push({ name: "A job you added by its link", read: 1 });
+    } catch (e) {
+      if (e.signedOut) throw e;
+      if (results) results.push({ name: "A job you added by its link", error: e.message });
+      await call("/api/ext/workday/link", { id: l.id, error: e.message }).catch(() => {});
+    }
+  }
+}
+
+/** Every few minutes, only the pasted links waiting for this Mac: they shouldn't wait for the 6-hourly read. */
+async function linksOnly() {
+  if (running || linksRunning) return;
+  linksRunning = (async () => {
+    try {
+      const todo = await call("/api/ext/workday");
+      if ((todo.links || []).length) await readLinks(todo.links);
+    } catch { /* signed out or offline: the next tick tries again */ }
+    finally { linksRunning = null; }
+  })();
 }
 
 function scheduleBeforeSearch(nextSearchAt) {
@@ -98,6 +129,7 @@ function start(win, appOrigin) {
   if (timer) return;
   setTimeout(() => readAll("app opened"), FIRST_AFTER_MS);
   timer = setInterval(() => readAll("every 6 hours"), EVERY_MS);
+  linkTimer = setInterval(linksOnly, LINKS_EVERY_MS);
 }
 
 const status = () => ({ ...last, running: !!running });

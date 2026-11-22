@@ -9,6 +9,7 @@ const ago = (iso: string | null) => {
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60_000);
   return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
 };
+const when = (iso: string) => new Date(iso).getTime() - Date.now() < 5 * 60_000 ? "in a few minutes" : new Date(iso).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
 const time = (iso: string) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 const LIVE = new Set(["queued", "running"]);
@@ -95,7 +96,14 @@ export function ApplyPanel({ appRef, employer, initial, canApply, problemShown =
           </div>
         </>
       ) : null}
-      {(s.status === "failed" || s.status === "stopped") && !problemShown ? (
+      {s.status === "failed" && s.lookAgainAt && !problemShown ? (
+        <>
+          <p className="status" role="status">Looking again by itself — next try {when(s.lookAgainAt)}.</p>
+          {s.problem ? <p className="muted small">{s.problem}</p> : null}
+          <div className="inline-actions">{canApply ? <Button appRef={appRef} label="Try again" secondary /> : null}</div>
+        </>
+      ) : null}
+      {(s.status === "failed" || s.status === "stopped") && !problemShown && !s.lookAgainAt ? (
         <>
           {s.problem ? <p className="error" role="alert">{s.problem}</p> : <p className="status">{s.step}</p>}
           <div className="inline-actions">
