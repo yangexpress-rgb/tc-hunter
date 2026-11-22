@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
 import {
-  ADAPTERS, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, isEssayQuestion, looksConfirmed, packetHash, proposeFields, receiptPdf, willFill,
+  ADAPTERS, checkQualifications, confirmationIn, decryptField, detectAts, documentText, encryptField, formFingerprint, guidedCheck, isEssayQuestion, looksConfirmed, packetHash, proposeFields, receiptPdf, willFill,
   type AiMode, type Ats, type FormField, type PacketProfile, type ProposedField, type StandingKind, type StepKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -152,6 +152,17 @@ export async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantI
     // Today where they live, for the form's own date and a start date (by the calendar, in every AI mode).
     today: localDay(await tz(c)),
   };
+  // The Basic Qualifications standing rule (Yong, 2026-11-22): only when every must-have of this job, as the match
+  // and gap display read them, matches the profile. Worked out only when the rule is on.
+  if (standing.some((x) => x.kind === "basic_qualifications")) {
+    const m = (await c.query(
+      "SELECT m.matched_skills, m.gap_skills, p.requirements FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.id = $1", [matchId])).rows[0];
+    const req = (m?.requirements ?? {}) as { must_have?: string[]; years?: number | null; education?: string | null; confidence?: "high" | "low" };
+    profile.qualifications = m ? checkQualifications({
+      mustHave: req.must_have ?? [], matched: ((m.matched_skills ?? []) as Array<{ skill?: string }>).map((x) => x.skill ?? "").filter(Boolean),
+      gaps: (m.gap_skills ?? []) as string[], years: req.years ?? null, education: req.education ?? null, confidence: req.confidence ?? null,
+    }, profile) : { met: false, why: "this job's requirements haven't been read" };
+  }
   return { profile, dk, resume, letter };
 }
 

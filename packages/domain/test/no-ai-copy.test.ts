@@ -31,14 +31,15 @@ describe("No AI wording", () => {
 
 /** A4: short and written questions the cascade leaves are counted the same way. */
 describe("left for you", () => {
-  it("counts short and written questions together, applicant steps apart", () => {
+  it("counts short and written questions together, applicant steps apart, and only what the form needs (Answer-First)", () => {
     const n = leftForYou([
       { willFill: false, essay: false, required: true },
-      { willFill: false, essay: true },
+      { willFill: false, essay: true, required: true },
+      { willFill: false, essay: false },   // may be left empty: never "left for you"
       { willFill: true, essay: false },
       { willFill: false, essay: false, step: "attestation", required: true },
     ]);
-    expect(n).toEqual({ short: 1, written: 1, required: 1 });
+    expect(n).toEqual({ short: 1, written: 1, required: 2 });
     expect(leftForYouLine(n)).toBe("2 questions were left for you: 1 short and 1 written answer.");
     expect(leftForYouLine({ short: 0, written: 1 })).toBe("1 question was left for you: 1 written answer.");
     expect(leftForYouLine({ short: 0, written: 0 })).toBe("");
