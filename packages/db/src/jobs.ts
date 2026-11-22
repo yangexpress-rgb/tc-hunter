@@ -2,7 +2,7 @@ import type pg from "pg";
 import { runEmailCheck, type EmailDeps } from "./email";
 import {
   cleanEmployerName, companyKey, dedupeKey, descriptionFingerprint, descriptionSimilarity, DEDUPE_SIMILARITY, detectJobLink, detectSource, fetchJobLink, fetchSource,
-  normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreBestGoal, bestGoalFit, candidateFit, FIT_VERSION, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
+  normalizeEmployer, normalizeLocation, normalizeTitle, postingFromPastedText, RULES_VERSION, scoreGoals, candidateFit, FIT_VERSION, goalTargets, ladderGoal, prefsForGoal, sha256Hex, canonicalJson,
   SourceRefusedError, retryWaitMs, titleIsRelated, outsideCountries, scanCountries, levelOf, searchQueries, findBoardOrAsk, SOURCE_FIX_VERSION, VERIFIED_SOURCES, UNREADABLE_COMPANIES, portalFor, REMOVED_COMPANIES, unreadableReason, type SearchSite, type SearchSiteId,
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
   readRequirementsText, withUsageScope, AI_MODES, currentAiProvider, scopedProvider, type AiMode, type BatchPosting, type Requirements, type RequirementsBatcher,
@@ -317,13 +317,16 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
       await c.query("UPDATE job_posting SET domain = $2, domain_version = $3 WHERE id = $1", [p.id, domainOf({ title: p.title, descriptionText: p.description_text }).domain, DOMAIN_VERSION]);
     }
     // G-score and C-score (Yong, 2026-11-18): against the goals and against the applicant's own record.
-    const g = bestGoalFit(prefs, posting);
+    // Every goal's verdict, and the primary goal's (multi-goal brief §4): one rule picks it, see scoreGoals.
+    const scored = scoreGoals(profile, prefs, posting, { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : !!passedBefore, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
+    const g = scored.primary.fit, res = scored.primary.result;
     const cf = candidateFit(profile, posting, now);
-    const res = scoreBestGoal(profile, prefs, posting, { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : !!passedBefore, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
     // What the applicant taught the list (passes with a reason) moves the G-score too, so the
     // default order learns, not only Best match (2026-11-22). Shown on the job as its own line.
+    // One match-level number, applied the same to every goal's G (not goal-scoped).
     const shift = res.adjustments.reduce((sum, a) => sum + a.delta, 0);
-    const gScore = g.score === null || g.score === undefined ? g.score : Math.max(0, Math.min(100, Math.round(g.score + shift)));
+    const shifted = (n: number | null | undefined) => n === null || n === undefined ? n : Math.max(0, Math.min(100, Math.round(n + shift)));
+    const gScore = shifted(g.score);
     const r = await c.query(
       `INSERT INTO match (applicant_id, job_posting_id, score, components, matched_skills, gap_skills, filtered, filter_reasons, reason_line, ladder_tag, ladder_label,
          adjustments, rules_version, parser_version, computed_at, found_by, goal_id, g_score, g_parts, g_summary, c_score, c_parts, c_summary, fit_version,
@@ -337,12 +340,26 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
          c_score = EXCLUDED.c_score, c_parts = EXCLUDED.c_parts, c_summary = EXCLUDED.c_summary, fit_version = EXCLUDED.fit_version,
          tier = EXCLUDED.tier, tier_misses = EXCLUDED.tier_misses, tier_reason = EXCLUDED.tier_reason, tier_lines = EXCLUDED.tier_lines,
          domain = EXCLUDED.domain, domain_line = EXCLUDED.domain_line, domain_version = EXCLUDED.domain_version
-       RETURNING (xmax = 0) AS inserted`,
+       RETURNING id, (xmax = 0) AS inserted`,
       [p.id, res.score, JSON.stringify(res.components), JSON.stringify(res.matchedSkills), res.gapSkills, res.filtered, res.filterReasons, res.reasonLine,
         res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy,
-        // The goal a job fits best is the one its G-score comes from.
-        g.goalId ?? res.goalId ?? null, gScore, JSON.stringify(g.parts), g.summary, cf.score, JSON.stringify(cf.parts), cf.summary, FIT_VERSION,
+        // The primary goal: its numbers are the match's, copied from its match_goal row below.
+        scored.primary.goalId, gScore, JSON.stringify(g.parts), g.summary, cf.score, JSON.stringify(cf.parts), cf.summary, FIT_VERSION,
         g.tier, g.tierMisses, g.tierReason, JSON.stringify(g.tierLines), g.domain, g.domainLine, DOMAIN_VERSION]);
+    // One row per goal in use, written with the match (one writer, so the match's copy can't drift).
+    for (const e of scored.each) {
+      if (!e.goalId) continue;
+      await c.query(
+        `INSERT INTO match_goal (applicant_id, match_id, goal_id, g_score, g_parts, g_summary, tier, tier_misses, tier_reason, tier_lines, domain_relation,
+           score, filtered, filter_reasons, reason_line, computed_at, fit_version)
+         VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now(), $15)
+         ON CONFLICT (match_id, goal_id) DO UPDATE SET g_score = EXCLUDED.g_score, g_parts = EXCLUDED.g_parts, g_summary = EXCLUDED.g_summary,
+           tier = EXCLUDED.tier, tier_misses = EXCLUDED.tier_misses, tier_reason = EXCLUDED.tier_reason, tier_lines = EXCLUDED.tier_lines,
+           domain_relation = EXCLUDED.domain_relation, score = EXCLUDED.score, filtered = EXCLUDED.filtered, filter_reasons = EXCLUDED.filter_reasons,
+           reason_line = EXCLUDED.reason_line, computed_at = now(), fit_version = EXCLUDED.fit_version`,
+        [r.rows[0].id, e.goalId, shifted(e.fit.score), JSON.stringify(e.fit.parts), e.fit.summary, e.fit.tier, e.fit.tierMisses, e.fit.tierReason,
+          JSON.stringify(e.fit.tierLines), e.fit.domainRelation ?? null, e.result.score, e.result.filtered, e.result.filterReasons, e.result.reasonLine, FIT_VERSION]);
+    }
     if (r.rows[0].inserted) {
       created++;
       if (passedBefore) await c.query("UPDATE match SET status = $2 WHERE job_posting_id = $1", [p.id, passedBefore]);

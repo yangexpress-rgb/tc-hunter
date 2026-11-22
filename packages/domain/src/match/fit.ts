@@ -5,6 +5,7 @@ import { functionWords, levelOf } from "../jobs/normalize";
 import type { SalaryPeriod } from "../jobs/types";
 import { domainLabel, domainOf, domainRelation, type DomainKey, type DomainVerdict } from "../jobs/domain";
 import { DOMAIN_ROLE_FACTOR, tierFor, type Tier } from "./rank";
+import type { DomainRelation } from "../jobs/domain";
 import { applicantLevel, effectiveYears, employmentKind, languageMentioned, levelFit, sameEmployer, seniorityFit, type MatchPosting, type MatchPrefs, type MatchProfile } from "./score";
 
 /**
@@ -22,7 +23,8 @@ import { applicantLevel, effectiveYears, employmentKind, languageMentioned, leve
  * the ruled-out filters, calibration and the resume threshold.
  */
 // fit-2: the goal's countries count in Place. fit-3: tiers by level, track and domain order the list (Yong, 2026-11-22).
-export const FIT_VERSION = "fit-4";  // fit-4: technology domains split out (domain-2)
+// fit-4: technology domains split out (domain-2). fit-5: every goal's result is kept (match_goal) and one rule picks the primary goal (multi-goal brief §4).
+export const FIT_VERSION = "fit-5";
 
 export interface FitPart { key: string; label: string; weight: number; raw: number; points: number; detail: string[] }
 export interface Fit { score: number; parts: FitPart[]; summary: string }
@@ -30,6 +32,8 @@ export interface GoalFit extends Fit {
   goalId: string | null; goalName: string | null;
   /** Level and domain tier against this goal (1 first), the main reason it isn't Tier 1, and the job's domain. */
   tier: 1 | 2 | 3; tierMisses: number; tierReason: Tier["reason"]; tierLines: string[]; domain: DomainKey; domainLine: string;
+  /** How the job's domain stands to this goal's domains (same, near, different), or null when the goal sets none. */
+  domainRelation?: DomainRelation | null;
 }
 
 const PER_YEAR: Record<SalaryPeriod, number> = { year: 1, month: 12, hour: 2080 };
@@ -164,17 +168,38 @@ export function goalFit(prefs: MatchPrefs, posting: MatchPosting, verdict?: Doma
   const tier = tierFor({ levels: prefs.levels, roles: prefs.targetTitles, occupation: prefs.occupation, domains: goalDomains },
     { title: posting.title, years: posting.requirements?.years ?? null }, dom.domain);
   return { score, parts: done, summary, goalId: prefs.goalId ?? null, goalName: prefs.goalName ?? null,
-    tier: tier.tier, tierMisses: tier.misses, tierReason: tier.reason, tierLines: tier.lines, domain: dom.domain, domainLine: dom.line };
+    tier: tier.tier, tierMisses: tier.misses, tierReason: tier.reason, tierLines: tier.lines, domain: dom.domain, domainLine: dom.line, domainRelation: tier.domainRelation };
 }
 
-/** G-score across goals: the goal the job fits best. */
-export function bestGoalFit(prefs: MatchPrefs[], posting: MatchPosting): GoalFit {
-  let best: GoalFit | null = null;
+/** Whether goal fit `a` beats `b` for a job: the best tier, then the fewest tier misses, then the best G-score (2026-11-22). */
+export function betterGoalFit(a: GoalFit, b: GoalFit): boolean {
+  return a.tier < b.tier || (a.tier === b.tier && (a.tierMisses < b.tierMisses || (a.tierMisses === b.tierMisses && a.score > b.score)));
+}
+
+/**
+ * The job's primary goal (multi-goal brief §4.2): the one rule, used for every job. Among the goals
+ * whose preferences don't rule the job out (all of them when every goal does), the best tier, then the
+ * fewest tier misses, then the best G-score. Ties keep the earlier goal. Returns the winner's index.
+ */
+export function primaryGoalIndex(fits: GoalFit[], ruledOut: boolean[] = []): number {
+  const open = fits.map((_, i) => i).filter((i) => !ruledOut[i]);
+  const pool = open.length ? open : fits.map((_, i) => i);
+  let best = -1;
+  for (const i of pool) if (best < 0 || betterGoalFit(fits[i]!, fits[best]!)) best = i;
+  return best;
+}
+
+/** "Fits your goal "Goal-A" best." on the primary goal's first part, when there's more than one goal. */
+export function markPrimaryFit(best: GoalFit, goals: number): GoalFit {
+  return goals > 1 && best.goalName ? { ...best, parts: best.parts.map((p, i) => i === 0 ? { ...p, detail: [`Fits your goal "${best.goalName}" best.`, ...p.detail] } : p) } : best;
+}
+
+/** G-score across goals: the primary goal's (see primaryGoalIndex). `ruledOut` is each goal's ruled-out verdict, when known. */
+export function bestGoalFit(prefs: MatchPrefs[], posting: MatchPosting, ruledOut: boolean[] = []): GoalFit {
   const verdict = domainOf({ title: posting.title, descriptionText: posting.descriptionText, employerIndustry: posting.employerIndustry ?? null });
-  // The goal it's closest to: the best tier first, then the best G-score (2026-11-22).
-  for (const p of prefs) { const g = goalFit(p, posting, verdict); if (!best || g.tier < best.tier || (g.tier === best.tier && (g.tierMisses < best.tierMisses || (g.tierMisses === best.tierMisses && g.score > best.score)))) best = g; }
-  if (!best) return { score: 0, parts: [], summary: "No goal set yet.", goalId: null, goalName: null, tier: 1, tierMisses: 0, tierReason: null, tierLines: [], domain: verdict.domain, domainLine: verdict.line };
-  return prefs.length > 1 && best.goalName ? { ...best, parts: best.parts.map((p, i) => i === 0 ? { ...p, detail: [`Fits your goal "${best!.goalName}" best.`, ...p.detail] } : p) } : best;
+  const fits = prefs.map((p) => goalFit(p, posting, verdict));
+  if (!fits.length) return { score: 0, parts: [], summary: "No goal set yet.", goalId: null, goalName: null, tier: 1, tierMisses: 0, tierReason: null, tierLines: [], domain: verdict.domain, domainLine: verdict.line, domainRelation: null };
+  return markPrimaryFit(fits[primaryGoalIndex(fits, ruledOut)]!, prefs.length);
 }
 
 /** C-score: the applicant's checked record against what the posting asks for. */
