@@ -260,6 +260,9 @@ describe("applications carry their goal (stage 4)", () => {
 
   it("the migration stamps older applications with their job's primary goal", async () => {
     await ownerQuery("UPDATE application SET goal_id = NULL");
+    // Frozen documents (a receipt is never changed) are left alone: on Railway this stopped the first deploy.
+    await ownerQuery(`INSERT INTO document (applicant_id, type, job_posting_id, match_id, created_by, goal_id)
+      VALUES ($1, 'receipt', $2, (SELECT id FROM match WHERE job_posting_id = $2), 'app', NULL)`, [yong.applicantId, ids.get("J2")]);
     const sql = readFileSync(join(__dirname, "..", "migrations", "093_application_goal.sql"), "utf8");
     await ownerQuery(sql.slice(sql.indexOf("UPDATE application a")));
     for (const a of await listApplications(pool, yong)) {
