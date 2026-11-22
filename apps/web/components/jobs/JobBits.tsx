@@ -82,16 +82,25 @@ export function LearnedLines({ learned, back }: { learned: Learned[]; back: stri
  * The job just saved or passed on, folded in its own place on the list (Yong, 2026-11-22): what
  * happened, Undo, the optional reasons after a Pass, and what the list learned from it.
  */
-export function DoneNotice({ r, back, why, learned }: { r: Record<string, any>; back: string; why?: string; learned: Learned[] }) {
+export function DoneNotice({ r, back, why, learned, nextId }: { r: Record<string, any>; back: string; why?: string; learned: Learned[]; nextId?: string }) {
   const passed = r.status !== "saved";
   const here = `${back}${back.includes("?") ? "&" : "?"}done=${r.id}${why ? `&why=${why}` : ""}${learned.length ? `&learned=${learned.map((a) => a.id).join(",")}` : ""}#job-${r.id}`;
+  const reason = PASS_REASONS.find(([k]) => k === why)?.[1];
+  // Reason given (Yong, 2026-11-22): say so, then the job leaves the list by itself, landing on the
+  // next job. A little longer when the list learned something, so Turn off can still be pressed.
+  const leave = passed && reason ? `${learned.length ? 8 : 3};url=${back}${nextId ? `#job-${nextId}` : ""}` : null;
+  const undo = <form action={feedbackAction} className="inline-form"><Hidden matchId={r.id} back={back} /><input type="hidden" name="action" value="undo" /><button className="link-button">Undo</button></form>;
   return (
     <div className="done-notice" role="status">
-      <p>
-        {passed ? "Passed on " : "Saved "}<a href={`/jobs/${r.public_ref}`}>{r.title}</a> at {r.employer_canonical}. <span className="muted">It&apos;s in {passed ? "Passed" : "Saved"}.</span>{" "}
-        <form action={feedbackAction} className="inline-form"><Hidden matchId={r.id} back={back} /><input type="hidden" name="action" value="undo" /><button className="link-button">Undo</button></form>
-      </p>
-      {passed ? <PassReasons matchId={r.id} back={back} why={why} /> : null}
+      {leave ? <meta httpEquiv="refresh" content={leave} /> : null}
+      {passed && reason ? (
+        <p>Passed on <a href={`/jobs/${r.public_ref}`}>{r.title}</a> at {r.employer_canonical}. Reason noted: <strong>{reason}</strong>. <span className="muted">Clearing it from the list…</span> {undo}</p>
+      ) : (
+        <p>
+          {passed ? "Passed on " : "Saved "}<a href={`/jobs/${r.public_ref}`}>{r.title}</a> at {r.employer_canonical}. <span className="muted">It&apos;s in {passed ? "Passed" : "Saved"}.</span> {undo}
+        </p>
+      )}
+      {passed && !reason ? <PassReasons matchId={r.id} back={back} /> : null}
       <LearnedLines learned={learned} back={here} />
     </div>
   );
