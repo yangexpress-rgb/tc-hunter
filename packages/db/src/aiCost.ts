@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { AI_GROUP, type AiGroup, type AiProvider, type AiPurpose, type AiUsage } from "@tc-hunter/domain";
+import { AI_GROUP, type AiGroup, type AiMode, type AiProvider, type AiPurpose, type AiRefusal, type AiUsage } from "@tc-hunter/domain";
 
 /**
  * The AI cost meter's rows (Yong, 2026-11-17). The worker and the web app hand every Claude call's
@@ -16,6 +16,28 @@ export function aiUsageSink(pool: pg.Pool, log?: { info: (e: string, d: Record<s
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
       [u.purpose, u.model.slice(0, 80), u.inputTokens, u.outputTokens, u.cacheWriteTokens, u.cacheReadTokens, u.batch, u.test, u.costUsd.toFixed(6), u.run?.slice(0, 100) ?? null, u.provider]);
   };
+}
+
+/** Where refused AI attempts go (No AI mode, A5): a row each, and a log line. */
+export function aiRefusalSink(pool: pg.Pool, log?: { warn: (e: string, d: Record<string, unknown>) => void }) {
+  return async (r: AiRefusal) => {
+    log?.warn("ai.off_attempt", { tier: r.tier, run: r.run, test: r.test });
+    await pool.query("INSERT INTO ai_refusal (tier, run, test) VALUES ($1, $2, $3)", [r.tier, r.run?.slice(0, 100) ?? null, r.test]);
+  };
+}
+
+/**
+ * The proof line for the current mode (Yong, 2026-11-21, A5): AI calls made and AI attempts refused since
+ * the mode was chosen. In No AI mode both should be 0; refusals above 0 mean something tried to use AI.
+ */
+export interface AiModeTally { mode: AiMode; since: Date | null; calls: number; refused: number }
+export async function aiModeTally(pool: pg.Pool): Promise<AiModeTally> {
+  const r = (await pool.query(
+    `SELECT s.provider AS mode, s.mode_since AS since,
+            (SELECT count(*)::int FROM ai_usage WHERE NOT test AND at >= s.mode_since) AS calls,
+            (SELECT count(*)::int FROM ai_refusal WHERE NOT test AND at >= s.mode_since) AS refused
+       FROM ai_provider_setting s WHERE s.id`)).rows[0] as AiModeTally | undefined;
+  return r ?? { mode: "none", since: null, calls: 0, refused: 0 };
 }
 
 export interface AiCostMonth { month: string; total: number; byGroup: Partial<Record<AiGroup, number>> }

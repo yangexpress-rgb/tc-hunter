@@ -5,7 +5,7 @@ import { Details } from "@/components/Layers";
 import { BudgetLine, day } from "@/components/applications/AppBits";
 import { packetAnswerAction, packetApproveAction, standingFromAppAction, workAuthAnswerAction, resolveOutcomeAction, sendApproveAction, serverSendApproveAction, submittedAction } from "@/app/applications/actions";
 import { stepUpAction } from "@/app/settings/vault-actions";
-import { NO_AI_PACKET_LINE, STANDING_ANSWERS, standingKindFor, type StepKind } from "@tc-hunter/domain";
+import { NO_AI_PACKET_LINE, STANDING_ANSWERS, leftForYou, leftForYouLine, standingKindFor, type StepKind } from "@tc-hunter/domain";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 
@@ -290,6 +290,8 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
 }) {
   const review = p.state === "packet_ready_for_review";
   const missing = p.fields.filter((f) => f.required && !f.willFill);
+  // A4: every question left for the applicant, short or written, counted the same way as the run counts them.
+  const left = leftForYou(p.fields);
   const standing = p.fields.filter((f) => f.source === "standing_answer");
   const toApprove = p.state === "ready_to_submit" && !p.submitApproved && !p.submitStarted && !!p.filledHash;
   return (
@@ -304,6 +306,7 @@ function ServerPacketCard({ p, back, timeZone, budget, confirmation, fresh, mfa 
       ) : null}
       {/* No AI mode (Yong, 2026-11-19): plainly, where these answers came from. */}
       {p.noAi && p.state !== "submitted" ? <p className="status" role="status">{NO_AI_PACKET_LINE}</p> : null}
+      {(left.short + left.written) && review ? <p className="muted">{leftForYouLine(left)}</p> : null}
       {missing.length && review ? <p className="error">{missing.length === 1 ? "1 required question needs" : `${missing.length} required questions need`} your answer. Answer below and TC Hunter carries on by itself.</p> : null}
       {standing.length && p.state !== "submitted" ? (
         <p className="warn">{standing.length === 1 ? "1 answer comes" : `${standing.length} answers come`} from your standing answers in Settings (statements, consents, signatures or personal questions you let TC Hunter answer). Check them: you are responsible for what they say. <a href="/settings/applying">Change in Settings</a></p>

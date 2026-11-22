@@ -138,3 +138,21 @@ export class ClaudeEssayDrafter implements EssayDrafter {
     return r.parsed_output.drafts.filter((d) => questions.some((q) => q.key === d.key));
   }
 }
+
+/**
+ * The one "left for you" count (Yong, 2026-11-21, A4): every question the answer cascade leaves, short or
+ * written, is counted the same way, in the run's problems and on the packet. Statements, consents and
+ * other steps that are always the applicant's are counted apart (they were never the cascade's to answer).
+ */
+export function leftForYou(fields: Array<{ willFill: boolean; step?: string | null; essay: boolean; required?: boolean }>): { short: number; written: number; required: number } {
+  const left = fields.filter((f) => !f.willFill && !f.step);
+  return { short: left.filter((f) => !f.essay).length, written: left.filter((f) => f.essay).length, required: left.filter((f) => f.required).length };
+}
+
+/** "3 questions were left for you: 2 short and 1 written answer." (empty when nothing was left). */
+export function leftForYouLine(n: { short: number; written: number }): string {
+  const total = n.short + n.written;
+  if (!total) return "";
+  const parts = [n.short ? `${n.short} short` : "", n.written ? `${n.written} written ${n.written === 1 ? "answer" : "answers"}` : ""].filter(Boolean);
+  return `${total === 1 ? "1 question was" : `${total} questions were`} left for you: ${parts.join(" and ")}.`;
+}

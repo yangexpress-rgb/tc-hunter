@@ -6,12 +6,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   AiOffError, ClaudeAnswerInferrer, ClaudeCareersLookup, ClaudeCompanyProposer, ClaudeEssayDrafter, ClaudeLetterProposer, ClaudeProofreader, ClaudeRequirementsBatcher,
   ClaudeRequirementsReader, ClaudeResumeProposer, MemorySecretStore, NO_AI_PACKET_LINE, RULES_REQUIREMENTS_VERSION, SourceRefusedError, activeAiProvider, aiClient,
-  readRequirementsText, readWithoutAi, recordUsage, setAiClientsForTest, setAiProviderSource, setUsageSink, withAiProvider,
+  currentAiProvider, leftForYou, readRequirementsText, readWithoutAi, recordUsage, setAiClientsForTest, setAiProviderSource, setRefusalSink, setUsageSink, withAiProvider,
   type AiMode, type AnswerInferrer, type ApplyBrowser, type ApplyPage, type FetchResult, type Fetcher, type FillItem, type FormField, type InferOutcome, type PageForm,
   type Requirements, type RequirementsReader,
 } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, aiProviderSource, aiProviderView, aiUsageSink, answerAndContinue, applyStatus, approveDocument, followSource, getPacket, getApplication,
+  addEvidence, addFact, aiModeTally, aiProviderSource, aiProviderView, aiRefusalSink, aiUsageSink, answerAndContinue, applyStatus, approveDocument, followSource, getPacket, getApplication,
   listDocuments, listMatches, markDiffViewed, requestApply, requestLink, requestTailor, runNextWork, saveAbout, saveAnswer, saveApplyMode, savePreferences, saveStory,
   setAiProvider, smartAnswersStatus, trackJob, type AppConfig, type ApplyDeps, type Session, type WorkDeps,
 } from "../src";
@@ -115,6 +115,9 @@ const deps = (): WorkDeps => {
 const drain = async (d: WorkDeps = deps()) => { while (await runNextWork(pool, d)) { /* keep going */ } };
 const runApplies = async () => { await ownerQuery("UPDATE work_item SET run_after = now() WHERE kind = 'apply' AND status = 'queued'"); await drain(); };
 const usageRows = async () => Number((await ownerQuery("SELECT count(*) AS n FROM ai_usage")).rows[0].n);
+/** AI attempts refused because No AI is on (A5): in a correct No AI flow nothing even tries. */
+const refusedRows = async () => Number((await ownerQuery("SELECT count(*) AS n FROM ai_refusal")).rows[0].n);
+let refusedAtScan = -1;
 
 beforeAll(async () => {
   await freshDatabase();
@@ -123,6 +126,7 @@ beforeAll(async () => {
   yong = (await newApplicant(pool, cfg, "Yong")).session;
   setAiProviderSource(aiProviderSource(pool, undefined));
   setUsageSink(aiUsageSink(pool));
+  setRefusalSink(aiRefusalSink(pool));
   setAiClientsForTest({ claude: trap() as never, openai: trap() as never });
   inferrer = new ClaudeAnswerInferrer();
   const board = JSON.parse(readFileSync(join(FX, "f3/greenhouse-board.json"), "utf8"));
@@ -140,7 +144,7 @@ beforeAll(async () => {
   await saveAnswer(pool, cfg, yong, { questionKey: "why_company", patterns: ["why (do you want to|are you interested in) (work|working)"], answer: "I like building reports that planners use every day.", approve: true });
   await saveStory(pool, cfg, yong, { title: "Faster supply review", star: { situation: "The weekly supply review took half a day.", task: "Shorten it.", action: "I built one shared SQL report.", result: "It now takes an hour." }, linkedFactIds: [b1], approve: true });
 });
-afterAll(async () => { setAiClientsForTest(null); setAiProviderSource(null); setUsageSink(null); await pool.end(); });
+afterAll(async () => { setAiClientsForTest(null); setAiProviderSource(null); setUsageSink(null); setRefusalSink(null); await pool.end(); });
 
 describe("The setting (Yong, 2026-11-19)", () => {
   it("switching to No AI with no keys saved at all succeeds; the smart-answers line says No AI mode", async () => {
@@ -174,11 +178,18 @@ describe("The AI client refuses in No AI mode, before any call", () => {
     });
     expect(outbound).toBe(0);
     expect(await usageRows()).toBe(0);
+    // A5: each refusal is counted, so a wiring mistake shows up in Settings, not only in tests.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await refusedRows()).toBeGreaterThan(0);
+    const tally = await aiModeTally(pool);
+    expect(tally).toMatchObject({ mode: "none", calls: 0 });
+    expect(tally.refused).toBe(await refusedRows());
   });
 });
 
 describe("A No AI scan", () => {
   it("reads requirements with the rule reader (marked read without AI), sends no batch, asks no AI for companies, and makes zero AI calls", async () => {
+    refusedAtScan = await refusedRows();
     await followSource(pool, yong, "https://boards.greenhouse.io/fabrikam", "Fabrikam");
     await ownerQuery(`INSERT INTO work_item (applicant_id, kind, payload) VALUES ($1, 'scan', '{"scheduled":true,"discover":true}')`, [yong.applicantId]);
     await drain();
@@ -226,6 +237,8 @@ describe("A fixture application, end to end in No AI mode", () => {
     expect(s).toMatchObject({ status: "waiting", waitingFor: "answers" });
     expect(s.problem).toMatch(/How many years have you worked with Kubernetes/);
     expect(s.steps.map((x) => x.text).join("\n")).toMatch(/No AI mode is on, so only your saved answers and information were used/);
+    // A4: the short question and the optional written one are counted the same way, in one line.
+    expect(s.steps.map((x) => x.text).join("\n")).toMatch(/2 questions were left for you: 1 short and 1 written answer\./);
     const p = (await getPacket(pool, cfg, yong, appRef))!;
     expect(p.noAi).toBe(true);
     const f = (label: string) => p.fields.find((x) => x.label.startsWith(label))!;
@@ -241,6 +254,7 @@ describe("A fixture application, end to end in No AI mode", () => {
     // The written answer isn't drafted: it's theirs, with their stories offered word for word.
     expect(f("Tell us about a time")).toMatchObject({ answer: null, essay: true, willFill: false });
     expect(p.stories.map((x) => x.title)).toEqual(["Faster supply review"]);
+    expect(leftForYou(p.fields)).toEqual({ short: 1, written: 1, required: 1 });
     expect(p.fields.some((x) => x.source === "inferred" || x.source === "drafted")).toBe(false);
     expect(browser.pages.at(-1)!.clicks).toBe(0);
     expect(NO_AI_PACKET_LINE).toBe("These answers came only from your saved information. Nothing was written or checked by AI.");
@@ -268,6 +282,9 @@ describe("A fixture application, end to end in No AI mode", () => {
     expect((await getApplication(pool, cfg, yong, appRef))!.stage).toBe("applied");
     expect(outbound).toBe(0);
     expect(await usageRows()).toBe(0);
+    // A5: the scan, tailoring and the whole application made no AI attempt at all, not even a refused one.
+    expect(refusedAtScan).toBeGreaterThanOrEqual(0);
+    expect(await refusedRows()).toBe(refusedAtScan);
   });
 });
 
@@ -334,5 +351,66 @@ describe("An AI run in flight when the setting flips to No AI finishes on its ow
     expect((await aiProviderView(pool, undefined, env)).provider).toBe("none");
     // Its written answer went to Claude for a draft (the stand-in refuses it): the run stayed on Claude, not refused as No AI.
     expect(outbound).toBeGreaterThan(0);
+  });
+});
+
+describe("No AI integrity (Yong, 2026-11-21)", () => {
+  it("A1: when the setting can't be read, the mode is No AI: a full AI-wired scan makes zero outbound calls", async () => {
+    const out0 = outbound, use0 = await usageRows();
+    await setAiProvider(pool, undefined, yong, "claude", env);
+    setAiProviderSource({ provider: async () => { throw new Error("database unreachable"); }, openaiKey: async () => null });
+    try {
+      expect(await currentAiProvider()).toBe("none");
+      expect(await activeAiProvider()).toBe("none");
+      await ownerQuery("UPDATE job_posting SET status = 'expired'");
+      await ownerQuery("DELETE FROM job_posting_source");
+      await ownerQuery(`INSERT INTO work_item (applicant_id, kind, payload) VALUES ($1, 'scan', '{"discover":true}')`, [yong.applicantId]);
+      await drain();
+      expect((await ownerQuery("SELECT payload->>'ai_provider' AS p FROM work_item WHERE kind = 'scan' ORDER BY created_at DESC LIMIT 1")).rows[0].p).toBe("none");
+      // A value that isn't a mode is unknown too, and unknown means off.
+      setAiProviderSource({ provider: async () => "gemini" as never, openaiKey: async () => null });
+      expect(await currentAiProvider()).toBe("none");
+    } finally {
+      setAiProviderSource(aiProviderSource(pool, undefined));
+    }
+    // A successful read says otherwise again.
+    expect(await currentAiProvider()).toBe("claude");
+    expect(outbound).toBe(out0);
+    expect(await usageRows()).toBe(use0);
+  });
+
+  it("A1: no setting row at all reads as No AI", async () => {
+    await ownerQuery("ALTER TABLE ai_provider_setting DISABLE TRIGGER ALL");
+    const saved = (await ownerQuery("SELECT * FROM ai_provider_setting")).rows[0];
+    await ownerQuery("DELETE FROM ai_provider_setting");
+    try {
+      expect(await currentAiProvider()).toBe("none");
+    } finally {
+      await ownerQuery("INSERT INTO ai_provider_setting (id, provider, openai_key_ref, mode_since) VALUES (true, $1, $2, $3)", [saved.provider, saved.openai_key_ref, saved.mode_since]);
+    }
+  });
+
+  it("A3: switching to No AI moves queued work off AI; running work, a sent batch and the applicant's turn keep their pin", async () => {
+    await setAiProvider(pool, undefined, yong, "claude", env);
+    const app = (await ownerQuery("SELECT id FROM application ORDER BY created_at LIMIT 1")).rows[0].id;
+    await ownerQuery(`INSERT INTO work_item (applicant_id, kind, payload, run_after) VALUES ($1, 'tailor', '{"ai_provider":"claude","marker":"queued"}', now() + interval '1 hour')`, [yong.applicantId]);
+    await ownerQuery(`INSERT INTO work_item (applicant_id, kind, payload, run_after) VALUES ($1, 'scan_finish', '{"ai_provider":"claude","marker":"batch"}', now() + interval '1 hour')`, [yong.applicantId]);
+    await ownerQuery(`INSERT INTO work_item (applicant_id, kind, payload, status) VALUES ($1, 'tailor', '{"ai_provider":"openai","marker":"running"}', 'running')`, [yong.applicantId]);
+    await ownerQuery(`INSERT INTO apply_run (applicant_id, application_id, status, step, ai_provider) VALUES ($1, $2, 'queued', 'Waiting to start', 'claude')`, [yong.applicantId, app]);
+    const before = (await aiProviderView(pool, undefined, env)).modeSince!;
+    const r = await setAiProvider(pool, undefined, yong, "none", env);
+    expect(r).toEqual({ work: 1, runs: 1, running: 2 });
+    const pin = async (m: string) => (await ownerQuery("SELECT payload->>'ai_provider' AS p FROM work_item WHERE payload->>'marker' = $1", [m])).rows[0].p;
+    expect(await pin("queued")).toBe("none");
+    expect(await pin("batch")).toBe("claude");
+    expect(await pin("running")).toBe("openai");
+    expect((await ownerQuery("SELECT ai_provider FROM apply_run WHERE status = 'queued' AND application_id = $1", [app])).rows).toEqual([{ ai_provider: "none" }]);
+    // The meter counts "since No AI was turned on" from the switch; saving the same mode again doesn't move it.
+    const since = (await aiProviderView(pool, undefined, env)).modeSince!;
+    expect(since.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    await setAiProvider(pool, undefined, yong, "none", env);
+    expect((await aiProviderView(pool, undefined, env)).modeSince!.getTime()).toBe(since.getTime());
+    await ownerQuery("DELETE FROM work_item WHERE payload ? 'marker'");
+    await ownerQuery("DELETE FROM apply_run WHERE status = 'queued' AND application_id = $1", [app]);
   });
 });

@@ -4,10 +4,10 @@ import { AiProviderRefused, hasFreshStepUp, saveOpenAiKey, setAiProvider } from 
 import { app, log, requireSession, vault } from "@/lib/server";
 
 /** Settings › AI provider: plain words come back on the page (?ai=...), never the key or an error's text. */
-async function go(fn: () => Promise<void>, ok: string, card: "ai-provider" | "openai-key" = "ai-provider"): Promise<never> {
+async function go(fn: () => Promise<void>, ok: string | (() => string), card: "ai-provider" | "openai-key" = "ai-provider"): Promise<never> {
   const param = card === "openai-key" ? "aikey" : "ai";
-  let target = `/settings/applying?${param}=${ok}#${card}`;
-  try { await fn(); } catch (e) {
+  let target = "";
+  try { await fn(); target = `/settings/applying?${param}=${typeof ok === "string" ? ok : ok()}#${card}`; } catch (e) {
     const code = e instanceof AiProviderRefused ? e.code : "failed";
     log.warn("settings.ai_provider_refused", { code, card });
     target = `/settings/applying?${param}=${code}#${card}`;
@@ -24,7 +24,12 @@ export async function aiProviderAction(form: FormData): Promise<void> {
   const { pool, cfg } = app();
   if (!hasFreshStepUp(s, cfg)) redirect("/settings/applying#confirm");
   const provider = String(form.get("provider") ?? "");
-  await go(() => setAiProvider(pool, vault(), s, provider), `switched_${provider === "openai" ? "openai" : provider === "none" ? "none" : "claude"}`);
+  let moved = "";
+  await go(async () => {
+    const r = await setAiProvider(pool, vault(), s, provider);
+    // A3: what the switch to No AI moved, for the page's plain line (counts only).
+    if (r) moved = `&moved=${r.work + r.runs}&running=${r.running}`;
+  }, () => `switched_${provider === "openai" ? "openai" : provider === "none" ? `none${moved}` : "claude"}`);
 }
 
 /**

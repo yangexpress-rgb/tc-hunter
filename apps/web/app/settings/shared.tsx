@@ -1,4 +1,4 @@
-import { aiCostSummary, hasFreshStepUp, listPasskeys, passkeysAvailable, type Session } from "@tc-hunter/db";
+import { aiCostSummary, aiModeTally, hasFreshStepUp, listPasskeys, passkeysAvailable, type Session } from "@tc-hunter/db";
 import { t } from "@tc-hunter/domain";
 import { Status } from "@/components/Layers";
 import { Flash } from "@/components/profile/Fact";
@@ -19,8 +19,21 @@ export const dollars = (n: number) => (n > 0 && n < 0.005 ? "under 1¢" : `$${n.
 async function AiCostLine() {
   let month: number | null = null;
   try { month = (await aiCostSummary(app().pool)).thisMonth; } catch { month = null; }
+  let tally: Awaited<ReturnType<typeof aiModeTally>> | null = null;
+  try { tally = await aiModeTally(app().pool); } catch { tally = null; }
   if (month === null) return null;
-  return <p className="muted">AI cost this month: <strong>{dollars(month)}</strong> · <a href="/settings/data#ai-cost">See the breakdown</a></p>;
+  return (
+    <>
+      <p className="muted">AI cost this month: <strong>{dollars(month)}</strong> · <a href="/settings/data#ai-cost">See the breakdown</a></p>
+      {/* No AI's proof in the product (2026-11-21): both counts are 0 when nothing tried to use AI. Refusals mean something did, so they show in red. */}
+      {tally?.mode === "none" ? (
+        <p className={tally.calls || tally.refused ? "error small" : "muted small"} id="no-ai-proof">
+          No AI since {ago(tally.since)}: AI calls made: <strong>{tally.calls}</strong> · AI attempts refused because No AI is on: <strong>{tally.refused}</strong>
+          {tally.refused ? ". Something tried to use AI and was stopped; nothing was sent or charged." : null}
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 /** Page heading and the saved / error line (errors in red). */

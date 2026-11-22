@@ -179,6 +179,21 @@ export function recordUsage(purpose: AiPurpose, r: { model?: string | null; usag
   return u;
 }
 
+/**
+ * An AI call refused because No AI is on (Yong, 2026-11-21, A5). Settings shows the count next to the
+ * cost line, so "zero AI" is provable in the product and not only in the tests.
+ */
+export interface AiRefusal { tier: AiTier; run: string | null; test: boolean }
+export type RefusalSink = (r: AiRefusal) => void | Promise<void>;
+const refusals = globalThis as unknown as { __tcRefusalSink?: RefusalSink | null };
+/** Where refusals go (the worker and the web app set this once at start: a database row). */
+export function setRefusalSink(s: RefusalSink | null) { refusals.__tcRefusalSink = s; }
+/** Records one refused attempt. Never throws. */
+export function recordRefused(tier: AiTier): void {
+  const s = scope.getStore() ?? {};
+  try { void Promise.resolve(refusals.__tcRefusalSink?.({ tier, run: s.run ?? null, test: !!s.test })).catch(() => undefined); } catch { /* never stops the work */ }
+}
+
 /** A cached prefix's share of the input it could have covered: reads / (reads + writes + uncached). */
 export function cacheHitRate(rows: Array<Pick<AiUsage, "inputTokens" | "cacheReadTokens" | "cacheWriteTokens">>): number {
   const read = rows.reduce((s, r) => s + r.cacheReadTokens, 0);

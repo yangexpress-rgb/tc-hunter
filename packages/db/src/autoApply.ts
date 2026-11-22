@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SiteBrowser, type SourceSpec, type WorkdaySearch,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
@@ -316,7 +316,7 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   });
   if (!gathered) return { answers: out, problems };
   if (!gathered.evidence) {
-    problems.push(`Smart answers are off, so ${gathered.open.length === 1 ? "1 question was" : `${gathered.open.length} questions were`} left for you. ${offReason()}`.trim());
+    problems.push(leftProblem(gathered.open.filter((f) => !isEssayQuestion(f)).length, gathered.open.filter((f) => isEssayQuestion(f)).length));
     return { answers: out, problems };
   }
   const ask: InferQuestion[] = [];
@@ -355,8 +355,10 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
     education: facts.education.length, with_degree: facts.education.filter((e) => e.degree?.trim()).length, saved: facts.saved.length, stories: facts.stories.length,
     resume: facts.resumeText?.length ?? 0, master_resume: facts.masterResumeText?.length ?? 0, start_saved: !!startSaid, start_read: !!start,
     essays: essays.length, from_education: gathered.open.length - ask.length - essays.length });
-  if (ask.length && !deps.inferrer) problems.push(`Smart answers are off, so ${ask.length === 1 ? "1 question was" : `${ask.length} questions were`} left for you. ${offReason()}`.trim());
-  else if (ask.length) {
+  // A4 (2026-11-21): short and written questions no helper can work out are counted together, in one line.
+  const leftShort = !deps.inferrer ? ask.length : 0, leftWritten = !deps.drafter ? essays.length : 0;
+  if (leftShort || leftWritten) problems.push(leftProblem(leftShort, leftWritten));
+  if (ask.length && deps.inferrer) {
     const got = await deps.inferrer!.infer(ask, facts).catch((e): InferOutcome => ({ answers: [], problems: [`Smart answers failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`] }));
     problems.push(...got.problems);
     for (const q of ask) {
@@ -390,6 +392,9 @@ async function inferAnswers(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps
   }
   return { answers: out, problems };
 }
+
+/** The run's "left for you" problem line: the same count for short and written questions (A4). */
+const leftProblem = (short: number, written: number) => `Smart answers are off, so ${leftForYouLine({ short, written }).replace(/^./, (c) => c.toLowerCase())} ${offReason()}`.trim();
 
 /** Why answers weren't worked out, in plain words: No AI mode, or the server's own setting. */
 const offReason = () => (scopedProvider() === "none"

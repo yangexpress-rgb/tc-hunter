@@ -3,11 +3,11 @@
  * tailored documents and looks at connected mailboxes, one at a time, politely. It has no internet route of its own: every request goes through the
  * egress gate, which only lets it reach public hosts on HTTPS.
  */
-import { aiProviderSource, aiUsageSink, createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
+import { aiProviderSource, aiRefusalSink, aiUsageSink, createPool, queueLostHandovers, tickHeld, enqueueDueApplies, enqueueDueEmailChecks, enqueueDueScansAndPrune, loadConfig, recoverInterruptedWork, loadSecretStore, resumeReaderName, runNextWork, settingsEnv, smartAnswersStatus, type EmailDeps } from "@tc-hunter/db";
 import {
   ClaudeAnswerInferrer, ClaudeEssayDrafter, ClaudeCompanyProposer, ClaudeCareersLookup, ClaudeLetterProposer, ClaudeProofreader, searchSites, ClaudeRequirementsReader, NamedCompaniesOnly, ClaudeResumeProposer, createLogger, PoliteFetcher, RulesLetterProposer, RulesRequirementsReader,
   ClaudeResumeParser, mailReaderFor, googleClientFrom, RulesResumeParser, RulesResumeProposer, type GoogleClient, type RequirementsReader,
-  HeldSessions, handoverHours, ClaudeRequirementsBatcher, setUsageSink, promptCacheOn, setAiProviderSource, setAiEventLog, currentAiProvider, aiModels,
+  HeldSessions, handoverHours, ClaudeRequirementsBatcher, setUsageSink, setRefusalSink, promptCacheOn, setAiProviderSource, setAiEventLog, currentAiProvider, aiModels,
 } from "@tc-hunter/domain";
 import { ServerBrowser } from "./apply/browser";
 import { liveServer } from "./apply/live";
@@ -20,6 +20,8 @@ const cfg = loadConfig();
 const pool = createPool(cfg.databaseUrl);
 // The AI cost meter (Yong, 2026-11-17): every Claude call's usage goes into ai_usage and the log.
 setUsageSink(aiUsageSink(pool, log));
+// No AI mode's proof (2026-11-21): every refused AI attempt is counted and shown in Settings.
+setRefusalSink(aiRefusalSink(pool, log));
 // Claude or OpenAI (Yong, 2026-11-18): every AI task follows Settings › AI provider. Each piece of work
 // keeps the provider it started on; the OpenAI key comes from the vault.
 setAiProviderSource(aiProviderSource(pool, process.env.TC_VAULT_DIR ? loadSecretStore() : undefined));

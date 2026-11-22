@@ -47,6 +47,26 @@ Proof: `packages/db/test/no-ai.test.ts` wires every AI helper the worker uses, r
 clients with call-counting traps, and checks a No AI scan and a fixture application end to end make
 zero calls and zero `ai_usage` rows.
 
+### No AI integrity (Yong, 2026-11-21: No AI is the design centre, Phase 0)
+
+- **Fails closed (A1).** `currentAiProvider()` returns `none` when the setting can't be read, reads as a
+  value that isn't a mode, or the row is missing, until a read succeeds again. Only a process with no
+  setting source at all (tests, evals) defaults to Claude.
+- **Mode-aware words (A2).** Pages where AI used to be named take their words from `docCopy(mode)`
+  (`packages/domain/src/ai/modeCopy.ts`). In No AI the document page has no "Revise with feedback" box
+  (edit by hand instead), a stale draft "will be rebuilt from your profile", and the chips say "Being
+  prepared". `NO_AI_FORBIDDEN` and `no-ai-copy.test.ts` guard it.
+- **Switching re-pins queued work (A3).** `setAiProvider(..., "none")` calls `repin_queued_work_to_no_ai()`
+  (migration 082): queued work items and queued application runs pinned to Claude/OpenAI move to `none`.
+  Running work, a search batch already sent (`scan_finish`) and an application on the applicant's turn
+  keep their pin; Settings says how many moved and how many are still finishing on AI.
+- **One "left for you" count (A4).** `leftForYou` / `leftForYouLine` (packet/essay.ts) count short and
+  written questions the same way, in the run's problems and on the packet.
+- **Proof in the product (A5).** Every refused AI call is a row in `ai_refusal` (`setRefusalSink`,
+  `aiRefusalSink`). Settings shows, in No AI mode: "No AI since …: AI calls made: 0 · AI attempts refused
+  because No AI is on: 0" (red if either is above 0). `ai_provider_setting.mode_since` marks when the mode
+  was chosen. `no-ai.test.ts` asserts the scan, tailoring and application flow make zero attempts.
+
 ## Models (one table: `aiModels()` in `packages/domain/src/ai/meter.ts`, next to `AI_PRICES`)
 
 | Tier | Claude | OpenAI |

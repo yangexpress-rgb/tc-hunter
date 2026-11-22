@@ -1,5 +1,5 @@
 import { coachNudges, fillAboutFromResume, getProfile, listGoals, listResumeFiles, profileDuplicates, resumeReaderName } from "@tc-hunter/db";
-import { ABOUT_GUIDE, aiIsOff, ClaudeAboutFinder, t } from "@tc-hunter/domain";
+import { ABOUT_GUIDE, activeAiProvider, aiIsOff, ClaudeAboutFinder, docCopy, t, type AiMode } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -26,6 +26,7 @@ export default async function ProfilePage(props: PageProps) {
   const [{ saved, error, params }, profile, nudges, goals, copies, files] = await Promise.all([flashOf(props), getProfile(pool, cfg, session), coachNudges(pool, session),
     listGoals(pool, session), profileDuplicates(pool, session), listResumeFiles(pool, session)]);
   const targets: string[] = [...new Set(goals.flatMap((g) => g.roles))];
+  const mode = await activeAiProvider();
   const a = profile.about;
   return (
     <>
@@ -41,7 +42,7 @@ export default async function ProfilePage(props: PageProps) {
         </section>
       ) : null}
 
-      <AboutSection text={a.summary} source={a.summarySource} hasResume={files.length > 0} />
+      <AboutSection text={a.summary} source={a.summarySource} hasResume={files.length > 0} mode={mode} />
 
       <section className="card" id="details">
         <h2>Contact and basics</h2>
@@ -96,7 +97,8 @@ const SOURCE_NOTE: Record<string, string> = {
  * you bring and your main experience. Each tailored resume opens with a version of it written
  * for that job, from your profile's facts only.
  */
-function AboutSection({ text, source, hasResume }: { text: string; source: string | null; hasResume: boolean }) {
+function AboutSection({ text, source, hasResume, mode }: { text: string; source: string | null; hasResume: boolean; mode: AiMode }) {
+  const copy = docCopy(mode);
   const paragraphs = text.split(/\n+/).filter((p) => p.trim());
   return (
     <section className="card profile-section" id="about">
@@ -110,20 +112,22 @@ function AboutSection({ text, source, hasResume }: { text: string; source: strin
                 placeholder="Senior technology leader with 20 years in digital transformation and IT delivery at global companies. Known for…" />
             </label>
             <p className="hint">A few sentences in business language: who you are (your level, field and the scale you work at), the value you bring,
-              and your main experience and expertise, with a result or two. Up to 2,600 characters, like LinkedIn. Each tailored resume
-              starts with a version of this written for that job, using only what your profile says.</p>
+              and your main experience and expertise, with a result or two. Up to 2,600 characters, like LinkedIn.{" "}
+              {mode === "none" ? "Each tailored resume starts with it as you wrote it." : "Each tailored resume starts with a version of this written for that job, using only what your profile says."}</p>
             <button>Save</button>
           </form>
-          <Details summary="How Claude writes the summary for each job">
-            <pre className="prompt-text" style={{ whiteSpace: "pre-wrap" }}>{ABOUT_GUIDE}</pre>
-          </Details>
+          {mode === "none" ? <p className="hint">{copy.summaryNote}</p> : (
+            <Details summary={copy.summaryHow}>
+              <pre className="prompt-text" style={{ whiteSpace: "pre-wrap" }}>{ABOUT_GUIDE}</pre>
+            </Details>
+          )}
         </EditDialog>
       </header>
       {paragraphs.length ? (
         <>
           {paragraphs.map((p, i) => <p key={i}>{p}</p>)}
           {source && SOURCE_NOTE[source] ? <p className="muted small">{SOURCE_NOTE[source]}</p> : null}
-          <p className="muted small">Each tailored resume opens with a version of this written for that job: what the job asks for most comes first, using only facts from your profile. Open a job and press "Prepare a fresh draft" to get it on a resume made before today.</p>
+          <p className="muted small">{copy.summaryNote}</p>
         </>
       ) : (
         <>
