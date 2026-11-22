@@ -1678,7 +1678,7 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
     // on its later pages before are answered from saved info now, and anything still needed is asked in one list
     // before anything is typed. Not when the applicant is handing back a page they finished: that run is mid-form.
     if (n === 1 && !resumedFrom) {
-      const known = await rememberedQuestions(pool, form).catch((e) => {
+      const known = await rememberedQuestions(pool, form, [app.job_posting_id]).catch((e) => {
         applyLog.warn("workday.remembered_failed", { run: run.id, error: String(e).slice(0, 200) });
         return { fields: [] as FormField[], prefilled: new Set<string>() };
       });

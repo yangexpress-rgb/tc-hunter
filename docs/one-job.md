@@ -50,7 +50,7 @@ Workday checks each page before it shows the next, so its later pages can't be r
 filling the earlier ones. Instead, each form's questions are remembered (`form_question`: labels,
 types and choices only, never answers), keyed by the employer's Workday site. On the next
 application to that employer, once page 1 is read, the remembered questions from the later pages
-are put through the same answer ladder. Anything still needed is asked in one "Needs you" list
+are put through the same answer ladder (profile, resume, saved answers, answers given before). Anything still needed is asked in one "Needs you" list
 before anything is typed. Statements only the applicant may make still go to the Your-turn
 handover, as before.
 
@@ -58,8 +58,10 @@ Limits, said plainly:
 
 - The first application on an employer's form still finds its later pages' questions as it goes,
   and stops at a page it can't answer.
-- A remembered question that this particular job doesn't ask can be asked anyway. The answer is
-  only typed where the form actually shows that question.
+- Nothing is asked that isn't needed (Yong, 2026-11-22). A remembered question is asked up front only
+  once two different jobs on the employer's form showed it (or this same job did before). A question
+  only one other job showed may be that job's own, so it waits for the page that shows it, and is
+  answered there from the resume, profile and saved answers if it can be.
 - A question that only appears on the live form (one opened by another answer) still pauses mid-form,
   as before.
 
