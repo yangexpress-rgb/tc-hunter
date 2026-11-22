@@ -98,5 +98,5 @@ server's own retries still run.
   - A pasted Workday link is read by the desktop app.
   - Zero AI calls, zero `ai_usage` and zero `ai_refusal` rows throughout.
 
-P3 ("one job, one application": req-ID merge key, finder-resolution merge, collect-then-fill) builds
+P3 ("one job, one application": req-ID merge key, finder-resolution merge, collect-then-fill, see `docs/one-job.md`) builds
 on the requisition IDs and the found URL recorded here.

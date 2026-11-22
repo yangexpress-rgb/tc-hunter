@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isTransientLinkFailure, linksIn, reqIdsOf, trailWords, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isTransientLinkFailure, linksIn, reqIdsInUrl, reqIdsOf, trailWords, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type CareersLookup, type Fetcher, type SiteBrowser, type SourceSpec, type WorkdaySearch,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
@@ -22,6 +22,8 @@ import { approveSubmission, consumeSubmissionKey, DomainError, recordSubmitted }
 import { asApplicant, dataKeyFor } from "./profile";
 import { tz, weeklyBudget } from "./tracker";
 import { upsertSource } from "./jobs";
+import { findSameJob, foldCopies, mergeKnownCopies } from "./sameJob";
+import { formKey, rememberedQuestions, rememberFormQuestions } from "./formQuestions";
 import { closeHandover, endWithFallback, handoverFor, type Handover } from "./handover";
 
 const applyLog = createLogger();
@@ -139,6 +141,8 @@ export async function enqueueDueApplies(pool: pg.Pool): Promise<number> {
   const due = (await pool.query("SELECT enqueue_due_applies() AS n")).rows[0].n as number;
   // Jobs whose employer's careers site wasn't found look again by themselves (Yong, 2026-11-21).
   const again = (await pool.query("SELECT enqueue_employer_site_retries() AS n")).rows[0].n as number;
+  // Copies of one job already in the catalogue twice are folded, one live application each (Phase 3).
+  await mergeKnownCopies(pool).catch((e) => applyLog.warn("jobs.merge_copies_failed", { detail: String((e as Error)?.message ?? e).slice(0, 200) }));
   return due + again;
 }
 
@@ -427,7 +431,9 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   const site = siteName(jobSiteUrl);
   const board = isJobBoardHost(jobSiteUrl);
   const posting = await withApplicant(pool, auto, async (c) => (await c.query(
-    `SELECT p.id, p.title, p.location_raw, p.apply_url, p.employer_apply_url, p.employer_lookup, left(p.description_text, 20000) AS description FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as
+    // A copy folded into the employer's own posting (Phase 3) applies where that one does.
+    `SELECT p.id, p.title, p.location_raw, p.apply_url, coalesce(p.employer_apply_url, (SELECT r.employer_apply_url FROM job_posting r WHERE r.id = p.merged_into)) AS employer_apply_url,
+            p.employer_lookup, left(p.description_text, 20000) AS description FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as
     { id: string; title: string; location_raw: string | null; apply_url: string | null; employer_apply_url: string | null; employer_lookup: { found?: boolean; tries?: number } | null; description: string | null });
   // How many times the employer's posting has been looked for without luck, this time included.
   const tries = (posting.employer_lookup?.found === false ? (posting.employer_lookup.tries ?? 1) : 0) + 1;
@@ -508,7 +514,45 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
   }
   const host = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
   await run.note(`Found it on ${app.employer}'s own site (${host}): "${r.title}"${r.location ? `, ${r.location}` : ""}${r.by === "req_id" ? ", by its requisition ID" : ""}. Applying there`);
+  if (await sameJobFound(pool, auto, app, posting.id, r.url, reqIds, run)) return null;
   return r.url;
+}
+
+/**
+ * The link hunt found the employer's own posting (Phase 3: one job, one application). A copy of it already
+ * in TC Hunter (the employer's posting, or another job site's copy with the same requisition ID) is folded
+ * with this one, and the applicant keeps one live application for the job. Returns true when this run
+ * stops because another application is the one kept (it says which).
+ */
+async function sameJobFound(pool: pg.Pool, auto: RequestContext, app: AppRow, postingId: string, url: string, ids: string[], run: Run): Promise<boolean> {
+  const kept = await withApplicant(pool, auto, async (c) => {
+    const q = await findSameJob(c, { excludeId: postingId, employer: app.employer, reqIds: [...new Set([...ids, ...reqIdsInUrl(url)])], urls: [url] });
+    if (!q) return null;
+    // The copy found by the employer's own address or ID is canonical.
+    await foldCopies(c, postingId, q.id);
+    // Another application for the same job already sent or being filled: this one stops and is closed as the same job.
+    const other = (await c.query(
+      `SELECT a.id, a.public_ref FROM application a JOIN job_posting p ON p.id = a.job_posting_id
+        WHERE a.id <> $1 AND (p.id = $2 OR p.merged_into = $2) AND a.stage NOT IN ('closed_won','closed_lost','withdrawn','no_response')
+          AND (a.stage NOT IN ('interested','tailoring','ready_to_apply')
+               OR EXISTS (SELECT 1 FROM application_packet k WHERE k.application_id = a.id AND k.state IN ('filling','ready_to_submit','submitted','waiting_for_applicant'))
+               OR EXISTS (SELECT 1 FROM apply_run x WHERE x.application_id = a.id AND x.status IN ('running','handover')))
+        ORDER BY a.created_at LIMIT 1`, [app.id, q.id])).rows[0] as { id: string; public_ref: string } | undefined;
+    if (other) {
+      // The one step back automation may take: closing this copy's application as the same job (the database checks why).
+      await c.query("SELECT set_config('app.stage_reason', 'same_job', true), set_config('app.stage_note', $1, true)", [`Same job as ${other.public_ref}`]);
+      await c.query("UPDATE application SET stage = 'withdrawn', stage_set_by = 'automation', outcome_tag = 'other', duplicate_of = $2, updated_at = now() WHERE id = $1", [app.id, other.id]);
+      await c.query("SELECT set_config('app.stage_reason', '', true), set_config('app.stage_note', '', true)");
+      return other.public_ref;
+    }
+    const folded = (await c.query("SELECT count(*)::int AS n FROM application a JOIN job_posting p ON p.id = a.job_posting_id WHERE a.duplicate_of = $1 AND (p.id = $2 OR p.merged_into = $2)", [app.id, q.id])).rows[0].n as number;
+    if (folded) await run.note(`The same job was in TC Hunter twice (also found on ${(() => { try { return new URL(url).hostname; } catch { return url; } })()}). The two are now one job, and this is its one application`);
+    return null;
+  });
+  applyLog.info("apply.same_job", { kept_other: !!kept });
+  if (!kept) return false;
+  await run.end("failed", `This is the same job as ${kept}, which TC Hunter is already applying for or has sent. This copy is closed so the job gets one application, not two. Carry on with ${kept}.`);
+  return true;
 }
 
 /**
@@ -571,7 +615,8 @@ export function workdaySearchIn(browser: ApplyBrowser): WorkdaySearch {
 async function throughJobBoard(pool: pg.Pool, auto: RequestContext, app: AppRow, boardUrl: string, deps: ApplyDeps, run: Run): Promise<{ url: string; page: ApplyPage | null } | null> {
   const board = jobBoardName(boardUrl) ?? siteName(boardUrl);
   const posting = await withApplicant(pool, auto, async (c) => (await c.query(
-    `SELECT p.id, p.employer_apply_url FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as { id: string; employer_apply_url: string | null });
+    `SELECT p.id, coalesce(p.employer_apply_url, (SELECT r.employer_apply_url FROM job_posting r WHERE r.id = p.merged_into)) AS employer_apply_url
+       FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as { id: string; employer_apply_url: string | null });
   const usable = (u: string | null): u is string => !!u && /^https:\/\//i.test(u) && !isJobBoardHost(u) && !isNoFetchHost(u);
   if (usable(posting.employer_apply_url)) {
     await run.note(`Found on ${board}. Applying on ${app.employer}'s own site, where its link led earlier`);
@@ -590,6 +635,7 @@ async function throughJobBoard(pool: pg.Pool, auto: RequestContext, app: AppRow,
         [posting.id, here, JSON.stringify({ found: true, via: board, site: here, at: new Date() })]));
       applyLog.info("apply.job_board_followed", { board, host, hops: hop });
       await run.note(`${board}'s link led to ${app.employer}'s own posting (${host}). Applying there`);
+      if (await sameJobFound(pool, auto, app, posting.id, here, [], run)) { await page.close().catch(() => {}); return null; }
       return { url: here, page };
     }
     if (!isJobBoardHost(here) || !page.links || !page.goto) break;
@@ -667,7 +713,7 @@ class Run {
   }
 }
 
-interface AppRow { id: string; public_ref: string; match_id: string; job_ref: string; stage: string; apply_url: string | null; urls: string[]; employer: string; title: string }
+interface AppRow { id: string; public_ref: string; match_id: string; job_ref: string; job_posting_id: string; stage: string; apply_url: string | null; urls: string[]; employer: string; title: string }
 
 /**
  * "Your turn" (Yong, 2026-11-17) for one run: pauses at a step only the applicant may do, keeping the
@@ -793,7 +839,7 @@ async function runApplyOn(pool: pg.Pool, ctx: RequestContext, payload: { applica
   if (theirs && payload.handover !== theirs.handoverId) return { status: "handover" };
   const setup = await withApplicant(pool, auto, async (c) => {
     const app = (await c.query(
-      `SELECT a.id, a.public_ref, a.match_id, a.stage, p.public_ref AS job_ref, p.apply_url, p.employer_canonical AS employer, p.title,
+      `SELECT a.id, a.public_ref, a.match_id, a.stage, a.job_posting_id, p.public_ref AS job_ref, p.apply_url, p.employer_canonical AS employer, p.title,
               coalesce((SELECT array_agg(ps.url) FROM job_posting_source ps WHERE ps.job_posting_id = p.id), '{}') AS urls
          FROM application a JOIN job_posting p ON p.id = a.job_posting_id WHERE a.id = $1`, [payload.application_id])).rows[0] as AppRow | undefined;
     if (!app) return null;
@@ -1617,12 +1663,35 @@ async function runWorkday(pool: pg.Pool, auto: RequestContext, app: AppRow, mode
   const all: FormField[] = [];
   const prefilledAll = new Set<string>();
   const inferCache: InferCache = new Map();
+  // The form, by employer site: "workday:wiley". None when the site can't be told apart from others.
+  const form = formKey(sys.ats, sys.ats === "workday" ? workdayTenant(wd.url()) : tenant);
   for (let n = 1; n <= 12; n++) {
     const pg = await wd.page();
     if (pg.form.humanCheck || pg.form.captcha) { return hand.personCheck(wd, sys.ats); }
     if (pg.review) break;
     await run.step(`${sys.page} ${n}: ${pg.title || "questions"}`);
     const prefix = `p${n}|`;
+    // Remembered for the next application on this form (labels and choices only, no answers).
+    await rememberFormQuestions(pool, form, n, pg.title || null, pg.form.fields, app.job_posting_id)
+      .catch((e) => applyLog.warn("workday.remember_failed", { run: run.id, error: String(e).slice(0, 200) }));
+    // Collect, then fill; ask once (Phase 3): with the first page read, the questions this employer's form asked
+    // on its later pages before are answered from saved info now, and anything still needed is asked in one list
+    // before anything is typed. Not when the applicant is handing back a page they finished: that run is mid-form.
+    if (n === 1 && !resumedFrom) {
+      const known = await rememberedQuestions(pool, form).catch((e) => {
+        applyLog.warn("workday.remembered_failed", { run: run.id, error: String(e).slice(0, 200) });
+        return { fields: [] as FormField[], prefilled: new Set<string>() };
+      });
+      const ahead = known.fields.filter((f) => !f.key.startsWith("p1|"));
+      if (ahead.some((f) => f.required)) {
+        const here = pg.form.fields.map((f) => ({ ...f, key: `${prefix}${f.key}` }));
+        const pre = new Set([...known.prefilled, ...pg.form.fields.filter((f) => f.hasValue).map((f) => `${prefix}${f.key}`)]);
+        const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: [...here, ...ahead] }, sys.ats,
+          { workdayPage: true, prefilled: pre, inferCache, canHandOver: hand.possible(wd) });
+        applyLog.info("workday.collected", { run: run.id, form, ahead: ahead.length, stopped: "stop" in r && !!r.stop });
+        if ("stop" in r && r.stop) return r.stop;
+      }
+    }
     all.push(...pg.form.fields.map((f) => ({ ...f, key: `${prefix}${f.key}` })));
     for (const f of pg.form.fields) if (f.hasValue) prefilledAll.add(`${prefix}${f.key}`);
     const r = await prepare(pool, auto, deps, app, mode, run, { ...pg.form, fields: all }, sys.ats, { workdayPage: true, prefilled: prefilledAll, inferCache, canHandOver: hand.possible(wd) });

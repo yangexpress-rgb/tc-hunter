@@ -39,8 +39,25 @@ export async function ensureApplication(c: pg.PoolClient, jobRef: string, atLeas
   const m = (await c.query("SELECT m.id, m.job_posting_id, m.status FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
   if (!m) throw new DomainError("TC_NOT_FOUND");
   if (m.status === "new") await c.query("UPDATE match SET status = 'saved' WHERE id = $1", [m.id]);
-  const a = (await c.query("SELECT id, public_ref, stage FROM application WHERE job_posting_id = $1", [m.job_posting_id])).rows[0];
+  let a = (await c.query("SELECT id, public_ref, stage, duplicate_of FROM application WHERE job_posting_id = $1", [m.job_posting_id])).rows[0];
+  // One job, one application (Phase 3): another copy of this job already has the applicant's live application,
+  // or this copy's was closed as the same job. Tracking it, or Apply on it, goes to that one.
+  if (!a || a.duplicate_of) {
+    const live = (await c.query(
+      `SELECT a.id, a.public_ref, a.stage, NULL AS duplicate_of FROM application a JOIN job_posting p ON p.id = a.job_posting_id
+         JOIN job_posting me ON me.id = $1
+        WHERE (p.id = coalesce(me.merged_into, me.id) OR p.merged_into = coalesce(me.merged_into, me.id)) AND p.id <> me.id
+          AND a.stage NOT IN ('closed_won','closed_lost','withdrawn','no_response')
+        ORDER BY a.created_at LIMIT 1`, [m.job_posting_id])).rows[0];
+    if (live) return live.public_ref;
+  }
+  if (a?.duplicate_of) a = null;
   if (!a) {
+    if ((await c.query("SELECT 1 FROM application WHERE job_posting_id = $1", [m.job_posting_id])).rowCount) {
+      // This copy's own application was closed as the same job and nothing else is live: it opens again.
+      const r = await c.query("UPDATE application SET stage = $2, stage_set_by = 'applicant', duplicate_of = NULL, outcome_tag = NULL, updated_at = now() WHERE job_posting_id = $1 RETURNING public_ref", [m.job_posting_id, atLeast]);
+      return r.rows[0].public_ref;
+    }
     const r = await c.query(
       "INSERT INTO application (applicant_id, job_posting_id, match_id, stage, stage_set_by) VALUES (app_applicant_id(), $1, $2, $3, 'applicant') RETURNING public_ref",
       [m.job_posting_id, m.id, atLeast]);
@@ -122,6 +139,7 @@ export async function setNotes(pool: pg.Pool, cfg: AppConfig, session: Session, 
 const APP_SELECT = `
   SELECT a.*, p.public_ref AS job_ref, p.title, p.employer_canonical, p.location_raw, p.status AS posting_status, p.apply_url,
          m.score, m.ladder_tag, m.ladder_label, m.components,
+         (SELECT d.public_ref FROM application d WHERE d.id = a.duplicate_of) AS duplicate_ref,
          (SELECT array_agg(DISTINCT s.name) FROM job_posting_source ps JOIN job_source s ON s.id = ps.job_source_id WHERE ps.job_posting_id = p.id) AS sources
     FROM application a JOIN job_posting p ON p.id = a.job_posting_id LEFT JOIN match m ON m.id = a.match_id`;
 
@@ -190,7 +208,7 @@ export async function reportInput(pool: pg.Pool, session: Session, now = new Dat
     const gaps = (await c.query(
       `SELECT g AS skill, count(*)::int AS jobs, count(*) FILTER (WHERE m.ladder_tag = 'step_toward')::int AS step_toward
          FROM match m JOIN job_posting p ON p.id = m.job_posting_id, unnest(m.gap_skills) g
-        WHERE m.status IN ('new','saved') AND NOT m.filtered AND p.status = 'active' GROUP BY g ORDER BY jobs DESC, g LIMIT 15`)).rows
+        WHERE m.status IN ('new','saved') AND NOT m.filtered AND p.status = 'active' AND p.merged_into IS NULL GROUP BY g ORDER BY jobs DESC, g LIMIT 15`)).rows
       .map((g) => ({ skill: g.skill, jobs: g.jobs, stepToward: g.step_toward }));
     const approvedDocs = (await c.query("SELECT approved_at FROM document WHERE approved_at IS NOT NULL AND type IN ('tailored_resume','cover_letter')")).rows.map((r) => r.approved_at as Date);
     const saves = (await c.query("SELECT created_at FROM match_feedback WHERE action = 'save'")).rows.map((r) => r.created_at as Date);
@@ -198,7 +216,7 @@ export async function reportInput(pool: pg.Pool, session: Session, now = new Dat
       `SELECT DISTINCT ON (d.match_id) d.public_ref, p.title FROM document d JOIN job_posting p ON p.id = d.job_posting_id
         WHERE d.status = 'draft' AND d.type = 'tailored_resume' ORDER BY d.match_id, d.version DESC`)).rows.map((r) => ({ ref: r.public_ref, title: r.title }));
     const strongNew = (await c.query(
-      "SELECT count(*)::int AS n FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.status = 'new' AND NOT m.filtered AND p.status = 'active' AND m.score >= 80")).rows[0].n;
+      "SELECT count(*)::int AS n FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.status = 'new' AND NOT m.filtered AND p.status = 'active' AND p.merged_into IS NULL AND m.score >= 80")).rows[0].n;
     return { now, timeZone: zone, apps, events, sources, gaps, approvedDocs, saves, pending: { drafts, strongNew } };
   });
 }

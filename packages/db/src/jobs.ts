@@ -9,6 +9,7 @@ import {
   RulesRequirementsReader, MasterResumeProposer, SavedLetterProposer, NamedCompaniesOnly,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
+import { findSameJob, isEmployerCopy, postingKeys } from "./sameJob";
 import { runTailor, type TailorDeps } from "./documents";
 import { runDigest, type DigestDeps } from "./resumes";
 import type { Session } from "./auth";
@@ -62,8 +63,13 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
   // Seen from this source before: update it in place.
   const known = await c.query(
     `SELECT p.*, s.content_fingerprint AS source_fp FROM job_posting_source s JOIN job_posting p ON p.id = s.job_posting_id WHERE s.job_source_id = $1 AND s.external_id = $2`, [sourceId, raw.externalId]);
+  // Requisition IDs and the employer's name in comparable form (Phase 3: one job, one application).
+  const keys = postingKeys(raw);
   if (known.rows[0]) {
     const p = known.rows[0];
+    if (keys.reqIds.length || !p.employer_key) await c.query(
+      "UPDATE job_posting SET employer_key = coalesce(employer_key, $2), req_ids = (SELECT coalesce(array_agg(DISTINCT x), '{}') FROM unnest(req_ids || $3::text[]) x) WHERE id = $1",
+      [p.id, keys.employerKey, keys.reqIds]);
     await c.query("UPDATE job_posting_source SET last_seen_at = now(), active = true, url = $3, content_fingerprint = $4 WHERE job_source_id = $1 AND external_id = $2",
       [sourceId, raw.externalId, raw.url || p.apply_url || "", fp]);
     const reopened = p.status !== "active";
@@ -98,6 +104,25 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
     return { postingId: p.id, isNew: false, changed: true, eventIds: events };
   }
 
+  // The same requisition ID from the same employer is the same job, however different the two texts are
+  // (an aggregator's thin copy and the employer's own posting). The new copy joins it as another source;
+  // when it is the employer's own copy, its address becomes where the job is applied for.
+  const sameId = keys.reqIds.length ? await findSameJob(c, { employer: raw.employer, reqIds: keys.reqIds, urls: [] }) : null;
+  if (sameId) {
+    await c.query(
+      `INSERT INTO job_posting_source (job_posting_id, job_source_id, external_id, url, content_fingerprint) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (job_source_id, external_id) DO UPDATE SET last_seen_at = now(), active = true`,
+      [sameId.id, sourceId, raw.externalId, raw.url || raw.applyUrl || "", fp]);
+    const own = raw.applyUrl || raw.url;
+    await c.query(
+      `UPDATE job_posting SET last_seen_at = now(), employer_aliases = (SELECT array_agg(DISTINCT x) FROM unnest(employer_aliases || $2::text) x),
+              req_ids = (SELECT coalesce(array_agg(DISTINCT x), '{}') FROM unnest(req_ids || $3::text[]) x),
+              employer_apply_url = CASE WHEN employer_apply_url IS NULL AND $4::text IS NOT NULL THEN $4 ELSE employer_apply_url END
+        WHERE id = $1`,
+      [sameId.id, raw.employer, keys.reqIds, isEmployerCopy(own) && !isEmployerCopy(sameId.apply_url) ? own : null]);
+    return { postingId: sameId.id, isNew: false, changed: false, eventIds: events };
+  }
+
   // Same job already in the catalogue from another source? (design 5.2 dedupe rule, F3)
   const candidates = await c.query("SELECT id, status, description_text FROM job_posting WHERE dedupe_key = $1 ORDER BY first_seen_at DESC", [key]);
   let reposted: string | null = null;
@@ -122,12 +147,12 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
   const ins = await c.query(
     `INSERT INTO job_posting (employer_canonical, employer_aliases, title, title_normalized, location_raw, locations_normalized, workplace_type, seniority,
        description_text, description_fingerprint, requirements, requirements_hash, parser_version, salary_min, salary_max, salary_currency, salary_period,
-       posted_at, apply_url, ats_type, dedupe_key, reposted_from)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) RETURNING id`,
+       posted_at, apply_url, ats_type, dedupe_key, reposted_from, req_ids, employer_key)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) RETURNING id`,
     [raw.employer, [raw.employer], raw.title, normalizeTitle(raw.title), raw.locationRaw, JSON.stringify(raw.locationRaw ? [normalizeLocation(raw.locationRaw)] : []),
       raw.workplaceType, levelOf(raw.title), raw.descriptionText, fp, JSON.stringify(req), rh, newReader.version,
       raw.salary?.min ?? null, raw.salary?.max ?? null, raw.salary?.currency ?? null, raw.salary?.period ?? null,
-      raw.postedAt && !Number.isNaN(Date.parse(raw.postedAt)) ? raw.postedAt : null, raw.applyUrl || raw.url || null, raw.atsType, key, reposted]);
+      raw.postedAt && !Number.isNaN(Date.parse(raw.postedAt)) ? raw.postedAt : null, raw.applyUrl || raw.url || null, raw.atsType, key, reposted, keys.reqIds, keys.employerKey]);
   const id = ins.rows[0].id;
   await c.query("INSERT INTO job_posting_source (job_posting_id, job_source_id, external_id, url, content_fingerprint) VALUES ($1, $2, $3, $4, $5)",
     [id, sourceId, raw.externalId, raw.url || raw.applyUrl || "", fp]);
@@ -226,14 +251,14 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
   const adjustments: Adjustment[] = (await c.query("SELECT id, kind, target, delta, label FROM preference_adjustment WHERE active")).rows;
   const cal = await activeWeights(c);
   const postings = postingIds
-    ? (await c.query("SELECT * FROM job_posting WHERE id = ANY($1::uuid[])", [postingIds])).rows
+    ? (await c.query("SELECT DISTINCT p.* FROM job_posting d JOIN job_posting p ON p.id = coalesce(d.merged_into, d.id) WHERE d.id = ANY($1::uuid[])", [postingIds])).rows
     : (await c.query(
         `SELECT DISTINCT p.* FROM job_posting p
            JOIN job_posting_source ps ON ps.job_posting_id = p.id
            JOIN applicant_job_source f ON f.job_source_id = ps.job_source_id AND NOT f.muted
-          WHERE p.status = 'active'
+          WHERE p.status = 'active' AND p.merged_into IS NULL
          UNION
-         SELECT p.* FROM job_posting p JOIN match m ON m.job_posting_id = p.id`)).rows;
+         SELECT p.* FROM job_posting p JOIN match m ON m.job_posting_id = p.id WHERE p.merged_into IS NULL`)).rows;
   const existing = new Map((await c.query("SELECT id, job_posting_id, status, found_by FROM match")).rows.map((m) => [m.job_posting_id, m]));
   const applied = new Set((await c.query("SELECT job_posting_id FROM application WHERE stage NOT IN ('interested','tailoring','ready_to_apply')")).rows.map((r) => r.job_posting_id));
   const wanted = goalTargets(prefs);
@@ -822,7 +847,7 @@ export async function runIngestLink(pool: pg.Pool, ctx: RequestContext, payload:
     const sourceId = await upsertSource(c, { type: "pasted_link", kind: "pasted_link", key: host, name: host, url: `https://${host}` });
     const o = await ingestPosting(c, sourceId, raw!, deps.reader);
     await matchApplicant(c, deps.now?.() ?? new Date(), [o.postingId], "pasted_link");
-    const m = await c.query("SELECT m.id, p.public_ref FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.job_posting_id = $1", [o.postingId]);
+    const m = await c.query("SELECT m.id, p.public_ref FROM match m JOIN job_posting p ON p.id = m.job_posting_id JOIN job_posting d ON coalesce(d.merged_into, d.id) = p.id WHERE d.id = $1", [o.postingId]);
     return { matchId: m.rows[0]?.id ?? null, ref: m.rows[0]?.public_ref ?? null };
   });
 }
