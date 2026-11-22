@@ -9,6 +9,7 @@ import {
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
   AI_MODES, currentAiProvider, scopedProvider, withAiProvider, type AiMode,
+  personalKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { hasFreshStepUp, type Session } from "./auth";
@@ -1171,6 +1172,8 @@ interface Prepared { stop?: undefined; packetId: string; fill: FillItem[]; requi
  * kept, then approved by the standing setting (hands-free) or left for the applicant to approve.
  * Returns what to type, or why it stopped.
  */
+const PERSONAL_FIRST = "A personal question you haven't answered before. Answer it once here; TC Hunter keeps your answer and uses it on every form from now on.";
+
 async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app: AppRow, mode: ApplyMode,
   run: Run, form: PageForm, ats: Ats, opts: { workdayPage?: boolean; prefilled?: Set<string>; inferCache?: InferCache; canHandOver?: boolean } = {}): Promise<Prepared | { stop: Status }> {
   const keyPrefix = "";
@@ -1205,7 +1208,12 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
       willFill({ step: f.step_kind as never, answer: f.answer_value_enc ? "x" : null, confidence: Number(f.confidence ?? 0), source: f.source as never });
     // Required questions with no answer TC Hunter is sure of (a value the site filled in itself, as Workday does from the resume, counts).
     // A statement only the applicant may make (no standing answer) is theirs to do on the page itself when it can be handed to them.
-    const personal = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && PERSONAL_STEPS.has(f.step_kind ?? ""));
+    // A personal question with the form's own choices (gender, race, veteran status…) never answered before is asked
+    // once in TC Hunter instead, where the answer is kept as theirs for every later form (Yong, 2026-11-22: "same thing
+    // for gender"); an answer chosen on their page couldn't be kept. Statements and consents stay on their page.
+    const askedHere = (f: { step_kind: string | null; options: unknown; question_as_shown: string }) =>
+      f.step_kind === "eeo" && Array.isArray(f.options) && f.options.length > 0 && !!personalKind(String(f.question_as_shown));
+    const personal = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && PERSONAL_STEPS.has(f.step_kind ?? "") && !askedHere(f));
     const missing = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && !(opts.canHandOver && personal.includes(f)));
     // Coverage (Answer-First, Yong 2026-11-22): what the form asks, what came from the applicant's own information,
     // and each question asked of them with why nothing covered it.
@@ -1216,7 +1224,8 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
       siteFilled: rows.filter((f) => !fill(f) && prefilled.has(f.field_key)).length,
       leftEmpty: rows.filter((f) => !fill(f) && !prefilled.has(f.field_key) && !f.required).length,
       asked: rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key))
-        .map((f) => ({ label: String(f.question_as_shown), why: String(f.note || (f.step_kind ? "a statement only you can make" : NEW_QUESTION)) })),
+        .map((f) => ({ label: String(f.question_as_shown), why: askedHere(f) ? PERSONAL_FIRST
+          : String(f.note || (f.step_kind ? "a statement only you can make" : NEW_QUESTION)) })),
     };
     await c.query("UPDATE apply_run SET coverage = $2 WHERE id = $1", [run.id, JSON.stringify(coverage)]);
     if (missing.length) {

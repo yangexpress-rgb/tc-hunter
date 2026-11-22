@@ -14,6 +14,8 @@ const EXTRA_COUNTRY_NAMES: Record<string, string[]> = {
 };
 
 const OTHER: string[][] = [
+  ["Male", "Man"],
+  ["Female", "Woman"],
   ["Yes", "Y", "True", "Yes, I am", "Yes I am", "Yes, I do", "Yes I do", "Yes, I will", "Yes I will", "Yes, I have", "Yes I have"],
   ["No", "N", "False", "No, I am not", "No I am not", "No, I do not", "No I do not", "No, I don't", "No I don't", "No, I will not", "No I will not", "No, I won't", "No I won't"],
   ["Prefer not to say", "Prefer not to answer", "I prefer not to say", "I prefer not to answer", "Decline to answer", "Decline to self-identify", "I don't wish to answer", "I do not wish to answer"],

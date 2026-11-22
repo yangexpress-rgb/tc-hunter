@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   acceptCalibration, acceptEmailSignal, answerAndContinue, storyText, giveUpHandover, handBackHandover, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
-  resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, savePersonalAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -133,6 +133,7 @@ export async function answerHereAction(form: FormData) {
       const text = typed || (story ? (await storyText(pool, cfg, s, story)).trim() : "");
       if (!text) throw Object.assign(new Error("TC_ANSWER_MISSING"), { code: "TC_ANSWER_MISSING" });
       if (form.get(`wa_${id}`)) { await saveWorkAuthAnswer(pool, cfg, s, String(form.get(`q_${id}`) ?? ""), text); workAuth = true; continue; }
+      if (form.get(`pa_${id}`)) { await savePersonalAnswer(pool, cfg, s, String(form.get(`q_${id}`) ?? ""), text); workAuth = true; continue; }
       answers.push({ fieldId: id, text, keep: form.get(`keep_${group || id}`) === "1" });
     }
     const done = await answerAndContinue(pool, cfg, s, ref, answers);

@@ -7,7 +7,7 @@ import {
 } from "@tc-hunter/domain";
 import {
   addFact, aiProviderSource, aiRefusalSink, aiUsageSink, answerAndContinue, applyStatus, approveDocument, approvePacket, continueAfterAnswers, getPacket, listDocuments,
-  listMatches, markDiffViewed, requestApply, requestLink, requestTailor, runNextWork, saveAbout, saveAnswer, saveApplyMode, saveWorkAuthAnswer, setAiProvider,
+  listMatches, markDiffViewed, requestApply, requestLink, requestTailor, runNextWork, saveAbout, saveAnswer, saveApplyMode, savePersonalAnswer, saveWorkAuthAnswer, setAiProvider,
   setStandingAnswer, trackJob, type AppConfig, type ApplyDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -163,6 +163,31 @@ describe("the send path reuses the approved packet (A-000017)", () => {
     await runApplies();
     expect(await applyStatus(pool, yong, next)).toMatchObject({ stuckKeys: [] });
     expect((await getPacket(pool, cfg, yong, next))!.fields.find((x) => x.key === "#v")).toMatchObject({ answer: "No", source: "answer_bank" });
+  });
+
+  it("gender, the first time: asked once in TC Hunter (not handed to their page), kept, and never asked again (Yong: \"same thing for gender\")", async () => {
+    const G1 = "Please select your gender.*";
+    form = [...BASICS, { key: "#gender", label: G1, type: "select", options: ["Select One", "Male", "Female", "I do not wish to answer"], required: true }];
+    const app = await application("Bristol Myers Squibb", "bms-4", "Executive Director, Corporate Functions");
+    await requestApply(pool, yong, app).catch(() => undefined);
+    await runApplies();
+    const s = await applyStatus(pool, yong, app);
+    expect(s).toMatchObject({ waitingFor: "answers", stuckKeys: ["#gender"] });
+    expect(s.coverage!.asked).toEqual([{ label: G1, why: expect.stringMatching(/haven't answered before\. Answer it once here/) }]);
+    // As the application page does for a personal question: kept as theirs, then carried on.
+    expect(await savePersonalAnswer(pool, cfg, yong, G1, "Male")).toBe(true);
+    await answerAndContinue(pool, cfg, yong, app, []);
+    await requestApply(pool, yong, app).catch(() => undefined);
+    await runApplies();
+    expect(await applyStatus(pool, yong, app)).toMatchObject({ stuckKeys: [] });
+    expect((await getPacket(pool, cfg, yong, app))!.fields.find((x) => x.key === "#gender")).toMatchObject({ answer: "Male", source: "answer_bank", step: null });
+    // Another employer asks it in other words, with other choices: answered from it, asked of nobody.
+    form = [...BASICS, { key: "#sex", label: "Gender", type: "select", options: ["Man", "Woman", "Decline to self-identify"], required: true }];
+    const next = await application("Initrode", "initrode-2", "Director, Digital Communications");
+    await requestApply(pool, yong, next).catch(() => undefined);
+    await runApplies();
+    expect(await applyStatus(pool, yong, next)).toMatchObject({ stuckKeys: [] });
+    expect((await getPacket(pool, cfg, yong, next))!.fields.find((x) => x.key === "#sex")).toMatchObject({ answer: "Man", source: "answer_bank" });
   });
 
   it("zero AI calls throughout", async () => {
