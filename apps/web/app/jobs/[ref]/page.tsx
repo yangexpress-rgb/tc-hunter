@@ -10,7 +10,7 @@ import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { tailorAction } from "@/app/documents/actions";
 import { trackAction } from "@/app/applications/actions";
-import { journeyFor, reachedOf, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
+import { isStuck, journeyFor, reachedOf, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
 import { DocChecklist } from "@/components/applications/DocChecklist";
 
 type FitPart = { key: string; label: string; weight: number; points: number; detail: string[] };
@@ -43,13 +43,16 @@ export default async function JobPage(props: Props) {
   let packetLine: { state: string; drafted?: number } | null | undefined;
   let resumeState: string | null | undefined;
   let letterState: string | null | undefined;
+  let stuck = false;
   if (tracked) {
     const [full, facts, applying, signals, sum] = await Promise.all([getApplication(pool, cfg, session, tracked.public_ref), journeyFacts(pool, session, tracked.public_ref),
       applyStatus(pool, session, tracked.public_ref), listEmailSignals(pool, session, tracked.public_ref), trackerSummary(pool, session)]);
     const f = facts[tracked.public_ref];
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: sum.timeZone }).format(new Date());
+    const run = runLineOf(applying);
     journey = journeyFor(full ?? tracked, f, { today, timeZone: sum.timeZone },
-      { run: runLineOf(applying), signal: signals.length ? signals[signals.length - 1] : undefined, reached: full ? reachedOf(full.events) : undefined });
+      { run, signal: signals.length ? signals[signals.length - 1] : undefined, reached: full ? reachedOf(full.events) : undefined });
+    stuck = isStuck(journey, tracked, run) && f?.packet?.failureReason !== "outcome_unknown";
     packetLine = f?.packet ? { state: f.packet.state, drafted: f.packet.draftsToCheck } : null;
     resumeState = f?.docs.resume;
     letterState = f?.docs.letter;
@@ -107,7 +110,7 @@ export default async function JobPage(props: Props) {
       {work?.status === "failed" && !preparing ? <p className="error" role="alert">We couldn&apos;t prepare {Array.isArray(work.kinds) && work.kinds.length === 1 && work.kinds[0] === "letter" ? "your cover letter" : "your resume and cover letter"} this time. Try again below.</p> : null}
       {tracked && journey ? (
         <>
-          <StatusBlock j={journey} appRef={tracked.public_ref} back={`/applications/${tracked.public_ref}`} card />
+          <StatusBlock j={journey} appRef={tracked.public_ref} back={`/applications/${tracked.public_ref}`} card stuck={stuck} />
           <Stepper j={journey} base={`/applications/${tracked.public_ref}`} />
         </>
       ) : (

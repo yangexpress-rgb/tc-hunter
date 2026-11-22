@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import {
-  acceptCalibration, acceptEmailSignal, answerAndContinue, storyText, giveUpHandover, handBackHandover, answerPacketField, approvePacket, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
+  acceptCalibration, acceptEmailSignal, answerAndContinue, storyText, giveUpHandover, handBackHandover, answerPacketField, approvePacket, passApplication, removeApplication, restoreApplication, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
   resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, savePersonalAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
@@ -244,4 +244,43 @@ export async function giveUpAction(form: FormData) {
     const id = await giveUpHandover(app().pool, s, ref);
     await toWorker(id, s.applicantId, "close");
   }, `/applications/${ref}#applying`, "gave_up");
+}
+
+/**
+ * A stuck application's other ways on (Yong, 2026-11-22): Pass this job (as on Jobs, with Undo and an
+ * optional reason), Remove from tracker (after a confirm; the job stays in Jobs), and Undo for either.
+ * Nothing already sent can be passed or removed; the database refuses it.
+ */
+export async function passAppAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  const page = `/applications/${ref}`;
+  let target: string;
+  try {
+    const { matchId } = await passApplication(app().pool, s, ref);
+    target = matchId ? withParam(page, "done", matchId) : withParam(page, "passed", "1");
+  } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("applications.action_failed", { code });
+    target = withParam(page, "e", code);
+  }
+  redirect(target);
+}
+
+export async function removeAppAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  let target = `/applications?removed=${encodeURIComponent(ref)}`;
+  try { await removeApplication(app().pool, s, ref); } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("applications.action_failed", { code });
+    target = withParam(`/applications/${ref}`, "e", code);
+  }
+  redirect(target);
+}
+
+export async function restoreAppAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  await act(form, () => restoreApplication(app().pool, s, ref), `/applications/${ref}`, "restored");
 }

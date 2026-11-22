@@ -8,6 +8,7 @@ import type { Session } from "./auth";
 import type { AppConfig } from "./config";
 import { withApplicant } from "./context";
 import { matchApplicant } from "./jobs";
+import { giveFeedback } from "./matches";
 export { activeWeights } from "./jobs";
 import { DomainError } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
@@ -39,7 +40,13 @@ export async function ensureApplication(c: pg.PoolClient, jobRef: string, atLeas
   const m = (await c.query("SELECT m.id, m.job_posting_id, m.status FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
   if (!m) throw new DomainError("TC_NOT_FOUND");
   if (m.status === "new") await c.query("UPDATE match SET status = 'saved' WHERE id = $1", [m.id]);
-  let a = (await c.query("SELECT id, public_ref, stage, duplicate_of FROM application WHERE job_posting_id = $1", [m.job_posting_id])).rows[0];
+  let a = (await c.query("SELECT id, public_ref, stage, duplicate_of, outcome_tag FROM application WHERE job_posting_id = $1", [m.job_posting_id])).rows[0];
+  // Passed on or removed from the tracker, then tracked (or tailored, or applied for) again: it opens again.
+  if (a && a.stage === "withdrawn" && SET_ASIDE.includes(a.outcome_tag)) {
+    await c.query("UPDATE application SET stage = $2, stage_set_by = 'applicant', updated_at = now() WHERE id = $1", [a.id, atLeast]);
+    if (a.outcome_tag === "passed") await c.query("UPDATE match SET status = 'saved' WHERE id = $1 AND status IN ('dismissed','not_a_fit')", [m.id]);
+    return a.public_ref;
+  }
   // One job, one application (Phase 3): another copy of this job already has the applicant's live application,
   // or this copy's was closed as the same job. Tracking it, or Apply on it, goes to that one.
   if (!a || a.duplicate_of) {
@@ -108,6 +115,63 @@ export async function setOutcome(pool: pg.Pool, session: Session, appRef: string
   });
 }
 
+/**
+ * A stuck application's other ways on (Yong, 2026-11-22): pass on the job, or take it off the tracker.
+ * Only for an application that was never sent: nothing submitted, no Submit pressed, no unclear send, and
+ * TC Hunter not working on it right now. A paused run is stopped so nothing picks it up again.
+ */
+async function setAside(c: pg.PoolClient, appRef: string, tag: "passed" | "removed"): Promise<{ id: string; matchId: string | null }> {
+  const a = (await c.query("SELECT id, stage, applied_at, match_id FROM application WHERE public_ref = $1 FOR UPDATE", [appRef])).rows[0];
+  if (!a) throw new DomainError("TC_NOT_FOUND");
+  const sent = !!a.applied_at || !["interested", "tailoring", "ready_to_apply"].includes(a.stage) || !!(await c.query(
+    `SELECT 1 FROM application_packet WHERE application_id = $1
+        AND (state = 'submitted' OR submit_clicked_at IS NOT NULL OR submission_key_used_at IS NOT NULL OR failure_reason = 'outcome_unknown')
+     UNION ALL SELECT 1 FROM apply_run WHERE application_id = $1 AND status IN ('sent','unclear')`, [a.id])).rowCount;
+  if (sent) throw new DomainError("TC_ALREADY_SUBMITTED_OR_UNKNOWN");
+  const busy = (await c.query(
+    `SELECT 1 FROM apply_run WHERE application_id = $1 AND status IN ('queued','running','handover')
+     UNION ALL SELECT 1 FROM work_item WHERE kind = 'apply' AND payload->>'application_id' = $1::text AND status IN ('queued','running')`, [a.id])).rowCount;
+  if (busy) throw new DomainError("TC_APPLY_BUSY");
+  await c.query("UPDATE apply_run SET status = 'stopped', finished_at = coalesce(finished_at, now()), updated_at = now() WHERE application_id = $1 AND status = 'waiting'", [a.id]);
+  await c.query(
+    "UPDATE application SET stage = 'withdrawn', stage_set_by = 'applicant', next_step = NULL, next_step_due = NULL, outcome_tag = $2, updated_at = now() WHERE id = $1",
+    [a.id, tag]);
+  await recordAudit(c, `application.${tag}`, { objectType: "application", objectId: a.id, payload: { application_ref: appRef, from: a.stage } });
+  return { id: a.id, matchId: a.match_id ?? null };
+}
+
+/**
+ * "Pass this job" on a stuck application: the job is passed exactly as Pass on Jobs does it (it leaves the list
+ * and teaches it), and the application closes as Passed. Undo puts both back.
+ */
+export async function passApplication(pool: pg.Pool, session: Session, appRef: string): Promise<{ matchId: string | null; learned: Array<{ id: string; label: string }> }> {
+  const { matchId } = await withApplicant(pool, asApplicant(session), (c) => setAside(c, appRef, "passed"));
+  const { learned } = matchId ? await giveFeedback(pool, session, matchId, "dismiss") : { learned: [] };
+  return { matchId, learned };
+}
+
+/** "Remove from tracker": the application closes and leaves the tracker's lists. The job stays in Jobs. */
+export async function removeApplication(pool: pg.Pool, session: Session, appRef: string): Promise<void> {
+  await withApplicant(pool, asApplicant(session), (c) => setAside(c, appRef, "removed"));
+}
+
+/** Undo a Pass or a Remove: the application goes back to the stage it was in; a passed job is saved again. */
+export async function restoreApplication(pool: pg.Pool, session: Session, appRef: string): Promise<"passed" | "removed"> {
+  const r = await withApplicant(pool, asApplicant(session), async (c) => {
+    const a = (await c.query("SELECT id, stage, outcome_tag, match_id FROM application WHERE public_ref = $1 FOR UPDATE", [appRef])).rows[0];
+    if (!a || a.stage !== "withdrawn" || !SET_ASIDE.includes(a.outcome_tag)) throw new DomainError("TC_NOT_FOUND");
+    const before = (await c.query(
+      "SELECT from_stage FROM application_stage_event WHERE application_id = $1 AND to_stage = 'withdrawn' AND from_stage IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1", [a.id])).rows[0]?.from_stage;
+    const stage = ["interested", "tailoring", "ready_to_apply"].includes(before) ? before : "interested";
+    await c.query("UPDATE application SET stage = $2, stage_set_by = 'applicant', updated_at = now() WHERE id = $1", [a.id, stage]);
+    await recordAudit(c, "application.restored", { objectType: "application", objectId: a.id, payload: { application_ref: appRef, was: a.outcome_tag, to: stage } });
+    return { tag: a.outcome_tag as "passed" | "removed", matchId: a.match_id as string | null };
+  });
+  // The Pass is taken back the way Jobs keeps a job: saved, and the newest feedback says so.
+  if (r.tag === "passed" && r.matchId) await giveFeedback(pool, session, r.matchId, "save");
+  return r.tag;
+}
+
 export async function setNextStep(pool: pg.Pool, session: Session, appRef: string, step: string | null, due: string | null): Promise<void> {
   if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) throw new DomainError("TC_BAD_INPUT");
   await withApplicant(pool, asApplicant(session), async (c) => {
@@ -136,6 +200,10 @@ export async function setNotes(pool: pg.Pool, cfg: AppConfig, session: Session, 
   });
 }
 
+/** Passing on a job or removing it from the tracker closes an application that was never sent, and says which. */
+const SET_ASIDE = ["passed", "removed"];
+const NOT_REMOVED = "a.outcome_tag IS DISTINCT FROM 'removed'";
+
 const APP_SELECT = `
   SELECT a.*, p.public_ref AS job_ref, p.title, p.employer_canonical, p.location_raw, p.status AS posting_status, p.apply_url,
          m.score, m.ladder_tag, m.ladder_label, m.components,
@@ -143,8 +211,9 @@ const APP_SELECT = `
          (SELECT array_agg(DISTINCT s.name) FROM job_posting_source ps JOIN job_source s ON s.id = ps.job_source_id WHERE ps.job_posting_id = p.id) AS sources
     FROM application a JOIN job_posting p ON p.id = a.job_posting_id LEFT JOIN match m ON m.id = a.match_id`;
 
+/** The tracker's list: everything but applications the applicant removed from it. */
 export async function listApplications(pool: pg.Pool, session: Session) {
-  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(`${APP_SELECT} ORDER BY a.updated_at DESC`)).rows);
+  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(`${APP_SELECT} WHERE ${NOT_REMOVED} ORDER BY a.updated_at DESC`)).rows);
 }
 
 export async function getApplication(pool: pg.Pool, cfg: AppConfig, session: Session, appRef: string) {
@@ -191,7 +260,7 @@ export async function budgetNow(pool: pg.Pool, session: Session) {
 export async function reportInput(pool: pg.Pool, session: Session, now = new Date()): Promise<ReportInput> {
   return withApplicant(pool, asApplicant(session), async (c) => {
     const zone = await tz(c);
-    const apps: TrackApp[] = (await c.query(`${APP_SELECT} ORDER BY a.created_at`)).rows.map((a) => ({
+    const apps: TrackApp[] = (await c.query(`${APP_SELECT} WHERE ${NOT_REMOVED} ORDER BY a.created_at`)).rows.map((a) => ({
       ref: a.public_ref, jobRef: a.job_ref, title: a.title, employer: a.employer_canonical, stage: a.stage,
       appliedAt: a.applied_at, closedAt: a.closed_at, outcomeTag: a.outcome_tag, createdAt: a.created_at,
       score: a.score ?? null, ladderTag: a.ladder_tag ?? null, sources: a.sources ?? [],
@@ -199,7 +268,7 @@ export async function reportInput(pool: pg.Pool, session: Session, now = new Dat
       components: (a.components ?? []).map((x: { key: string; raw: number }) => ({ key: x.key, raw: Number(x.raw) })),
     }));
     const events: StageEvent[] = (await c.query(
-      "SELECT a.public_ref, e.from_stage, e.to_stage, e.source, e.created_at FROM application_stage_event e JOIN application a ON a.id = e.application_id WHERE NOT e.conflict_flag ORDER BY e.created_at")).rows
+      `SELECT a.public_ref, e.from_stage, e.to_stage, e.source, e.created_at FROM application_stage_event e JOIN application a ON a.id = e.application_id WHERE NOT e.conflict_flag AND ${NOT_REMOVED} ORDER BY e.created_at`)).rows
       .map((e) => ({ appRef: e.public_ref, from: e.from_stage, to: e.to_stage, source: e.source, at: e.created_at }));
     const sources = (await c.query(
       `SELECT s.name AS source, count(DISTINCT m.id)::int AS found, count(DISTINCT m.id) FILTER (WHERE m.status = 'saved')::int AS saved

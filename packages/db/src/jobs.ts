@@ -285,7 +285,7 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
          UNION
          SELECT p.* FROM job_posting p JOIN match m ON m.job_posting_id = p.id WHERE p.merged_into IS NULL`)).rows;
   const existing = new Map((await c.query("SELECT id, job_posting_id, status, found_by FROM match")).rows.map((m) => [m.job_posting_id, m]));
-  const applied = new Set((await c.query("SELECT job_posting_id FROM application WHERE stage NOT IN ('interested','tailoring','ready_to_apply')")).rows.map((r) => r.job_posting_id));
+  const applied = new Set((await c.query("SELECT job_posting_id FROM application WHERE stage NOT IN ('interested','tailoring','ready_to_apply') AND outcome_tag IS DISTINCT FROM 'removed'")).rows.map((r) => r.job_posting_id));
   const wanted = goalTargets(prefs);
   const targets = wanted.length ? wanted : profile.experience.map((e) => e.title);
   const industries = await employerIndustries(c);

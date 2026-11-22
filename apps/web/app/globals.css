@@ -423,6 +423,16 @@ table.compact-rows button.small { padding: 2px 8px; font-size: 13px; }
 .status-card.is-problem .sb-status { color: var(--error); }
 .status-card + p.status { margin-top: -4px; }
 @media (max-width: 640px) { .status-block .sb-action { flex-basis: 100%; } }
+/* A stuck application's ways on: all four as buttons in one row under the reason (Yong, 2026-11-22). */
+.status-block .stuck-choices { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-top: 4px; }
+.status-block .stuck-choices form.inline { display: inline-flex; margin: 0; }
+.status-block .confirm-remove { margin: 0; border: 0; background: none; }
+.status-block .stuck-choices .button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.status-block .confirm-remove > summary { list-style: none; cursor: pointer; display: inline-block; padding: 10px 18px; color: var(--text); }
+.status-block .confirm-remove > summary::-webkit-details-marker { display: none; }
+.status-block .confirm-remove[open] { flex-basis: 100%; }
+.status-block .confirm-remove .confirm-body { margin-top: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.status-block .confirm-remove .confirm-body p { margin: 0 0 8px; }
 /* Needs you: amber-tinted, pinned first. */
 .needs-you { background: var(--amber-bg); border-color: var(--amber-border); }
 .needs-you h2 { margin-top: 0; }

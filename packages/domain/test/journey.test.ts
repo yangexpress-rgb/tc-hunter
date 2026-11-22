@@ -194,3 +194,15 @@ describe("'Ready to apply' means stage 2 only", () => {
     expect(j({ stage: "ready_to_apply", docs: approvedDocs, packet: pk("packet_ready_for_review") }).stage).toBe("ready_to_apply");
   });
 });
+
+describe("passed on or removed before anything was sent (Yong, 2026-11-22)", () => {
+  it("closes with its own reason and one tap to undo; nothing was sent", () => {
+    const passed = journeyOf({ ...base, stage: "withdrawn", outcomeTag: "passed", closedAt: NOW }, ctx);
+    expect(passed).toMatchObject({ stage: "closed", chip: "Closed · Passed", tone: "done", action: { kind: "restore", label: "Undo the pass" } });
+    expect(passed.status).toMatch(/Nothing was sent\.$/);
+    const removed = journeyOf({ ...base, stage: "withdrawn", outcomeTag: "removed", closedAt: NOW }, ctx);
+    expect(removed).toMatchObject({ chip: "Closed · Removed", action: { kind: "restore", label: "Put it back in the tracker" } });
+    // An ordinary withdrawal is unchanged.
+    expect(journeyOf({ ...base, stage: "withdrawn", outcomeTag: "withdrew", closedAt: NOW }, ctx)).toMatchObject({ chip: "Closed · Withdrew", action: null });
+  });
+});

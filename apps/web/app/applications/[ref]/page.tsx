@@ -10,7 +10,8 @@ import { ApplyPanel } from "@/components/applications/ApplyPanel";
 import { PacketCard } from "@/components/applications/Packet";
 import { AnswerHere, answerHereFields } from "@/components/applications/AnswerHere";
 import { DocChecklist } from "@/components/applications/DocChecklist";
-import { EmailAttach, journeyFor, reachedOf, RunRecord, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
+import { EmailAttach, isStuck, journeyFor, reachedOf, RunRecord, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
+import { PassReasons } from "@/components/jobs/JobBits";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { interviewAction, nextStepAction, notesAction, outcomeAction, stageAction } from "../actions";
@@ -84,6 +85,10 @@ export default async function ApplicationPage(props: Props) {
   const packetDone = !!packet && !["packet_draft", "packet_ready_for_review"].includes(packet.state);
   const problem = j.tone === "problem";
   const working = ["queued", "running"].includes(String(applying.status));
+  // Stuck before anything was sent: every way on as a button, not one (Yong, 2026-11-22, Siemens).
+  const stuck = isStuck(j, a, runLine) && !packet?.outcomeUnknown;
+  const setAside = stage === "withdrawn" && (a.outcome_tag === "passed" || a.outcome_tag === "removed");
+  const passedMatch = setAside && a.outcome_tag === "passed" && /^[0-9a-f-]{36}$/.test(params.done ?? "") && params.done === a.match_id ? params.done : null;
   // One-time notes after an action, shown only while they still match where it is now: never "Approved"
   // next to a "waiting for your approval" chip, and never good news above a failure (Huron, 2026-11-19).
   const notes = [
@@ -100,6 +105,7 @@ export default async function ApplicationPage(props: Props) {
     params.gave_up === "1" && "Their page is closed. Choose Finish it yourself to apply on their site with your packet one tap away.",
     params.dismissed === "1" && "Noted. That email suggestion is gone.",
     params.answered === "1" && "Saved. Check all your answers below and approve them; TC Hunter then carries on.",
+    params.restored === "1" && !setAside && "Put back. It's where it was before; choose what to do next.",
   ].filter((x): x is string => typeof x === "string");
 
   return (
@@ -114,7 +120,7 @@ export default async function ApplicationPage(props: Props) {
       ) : null}
 
       {/* The status card: the same block as this application's row on the list, full size. */}
-      <StatusBlock j={j} appRef={a.public_ref} back={back} card>
+      <StatusBlock j={j} appRef={a.public_ref} back={back} card stuck={stuck}>
         {MOVES[stage] ? (
           <div className="inline-actions sb-moves" aria-label="What happened next">
             {MOVES[stage]!.map((m) => (
@@ -131,6 +137,12 @@ export default async function ApplicationPage(props: Props) {
         {signal && j.action?.kind !== "email" ? <EmailAttach s={signal} back={back} /> : null}
       </StatusBlock>
 
+      {passedMatch ? (
+        <div className="status" role="status">
+          <p>Passed. The job is off your Jobs list and nothing was sent. Undo the pass above to bring both back.</p>
+          <PassReasons matchId={passedMatch} back={back} why={params.why || undefined} />
+        </div>
+      ) : null}
       {notes.length ? notes.map((n) => <p key={n} className="status" role="status">{n}</p>) : null}
 
       {packet && stuckHere.length ? <AnswerHere p={packet} fields={stuckHere} back={back} fresh={hasFreshStepUp(session, cfg)} mfa={!!session.mfaEnabled} today={today} /> : null}
@@ -239,7 +251,7 @@ export default async function ApplicationPage(props: Props) {
           <h2>{j.chip}</h2>
           <p className="muted">What happened? Optional. It helps your reports.</p>
           <div className="inline-actions">
-            {Object.entries(OUTCOME_LABEL).map(([k, l]) => (
+            {Object.entries(OUTCOME_LABEL).filter(([k]) => k !== "passed" && k !== "removed").map(([k, l]) => (
               <form key={k} action={outcomeAction}>
                 <Hidden appRef={a.public_ref} back={back} />
                 <input type="hidden" name="outcome" value={k} />

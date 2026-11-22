@@ -8,7 +8,7 @@ import type { JourneyFacts } from "@tc-hunter/db";
 import {
   JOURNEY_LABEL, JOURNEY_STAGES, NOTHING_NEEDED, journeyOf, type ApplicationStage, type Journey, type JourneyAction, type JourneyInput, type JourneyStage,
 } from "@tc-hunter/domain";
-import { applyNowAction, emailSignalAction, nextStepAction } from "@/app/applications/actions";
+import { applyNowAction, emailSignalAction, nextStepAction, passAppAction, removeAppAction, restoreAppAction } from "@/app/applications/actions";
 
 const SAYS: Record<string, string> = {
   acknowledgement: "confirmed they received your application",
@@ -86,6 +86,14 @@ function Action({ a, appRef, back }: { a: JourneyAction; appRef: string; back: s
       </form>
     );
   }
+  if (a.kind === "restore") {
+    return (
+      <form action={restoreAppAction} className="inline">
+        <input type="hidden" name="app" value={appRef} /><input type="hidden" name="back" value={`/applications/${appRef}`} />
+        <button className="secondary">{a.label}</button>
+      </form>
+    );
+  }
   if (a.kind === "email") {
     return (
       <span className="inline-actions">
@@ -103,11 +111,59 @@ function Action({ a, appRef, back }: { a: JourneyAction; appRef: string; back: s
 }
 
 /**
+ * Stuck: the journey shows a problem before anything was sent, and TC Hunter isn't working on it right now.
+ * The same test on every page, so the list, the job page and the application page offer the same choices.
+ */
+export function isStuck(j: Journey, a: { stage: string; applied_at?: Date | null }, run?: { status: string } | null): boolean {
+  return j.tone === "problem" && ["getting_ready", "ready_to_apply", "applying"].includes(j.stage)
+    && ["interested", "tailoring", "ready_to_apply"].includes(a.stage) && !a.applied_at
+    && !["queued", "running", "handover", "sent", "unclear"].includes(String(run?.status ?? ""));
+}
+
+/**
+ * A stuck application never has only one way on (Yong, 2026-11-22, Siemens): start it again, pass on the job,
+ * take it off the tracker, or finish it on their site. The journey's own next step leads; the rest sit beside it.
+ * Shown only while nothing has been sent, so none of these can touch an application that went out.
+ */
+export function StuckChoices({ j, appRef, back }: { j: Journey; appRef: string; back: string }) {
+  const lead = j.action;
+  const finishFirst = lead?.kind === "link" && lead.href === `/applications/${appRef}/finish`;
+  const again = (
+    <form action={applyNowAction} className="inline" key="again">
+      <input type="hidden" name="app" value={appRef} /><input type="hidden" name="back" value={back} />
+      <button className={finishFirst ? "secondary" : ""}>{lead?.kind === "apply" ? lead.label : "Try again"}</button>
+    </form>
+  );
+  const finish = <a key="finish" className={`button${finishFirst ? "" : " secondary"}`} href={`/applications/${appRef}/finish`}>Finish it yourself</a>;
+  return (
+    <div className="stuck-choices" aria-label="What to do now">
+      {finishFirst ? [finish, again] : [again, finish]}
+      <form action={passAppAction} className="inline">
+        <input type="hidden" name="app" value={appRef} />
+        <button className="secondary">Pass this job</button>
+      </form>
+      <details className="confirm-remove">
+        <summary className="button secondary">Remove from tracker</summary>
+        <div className="confirm-body small">
+          <p>Take this application off your tracker? Nothing was sent, and the job stays in Jobs. You can put it back.</p>
+          <form action={removeAppAction} className="inline">
+            <input type="hidden" name="app" value={appRef} />
+            <button className="danger">Yes, remove it</button>
+          </form>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/**
  * The one status block: stage chip, one status line (whose turn), and the one next action.
  * `card` is the application page's full-size status card; otherwise it's a list row.
  */
-export function StatusBlock({ j, appRef, back, title, employer, card = false, children }: {
-  j: Journey; appRef: string; back: string; title?: string; employer?: string; card?: boolean; children?: ReactNode;
+export function StatusBlock({ j, appRef, back, title, employer, card = false, stuck = false, children }: {
+  j: Journey; appRef: string; back: string; title?: string; employer?: string; card?: boolean;
+  /** Stuck and never sent: every way on as a button (StuckChoices) in place of the one action. */
+  stuck?: boolean; children?: ReactNode;
 }) {
   const yours = j.owner === "applicant";
   return (
@@ -117,9 +173,11 @@ export function StatusBlock({ j, appRef, back, title, employer, card = false, ch
         <div className="sb-line"><StageChip j={j} /> <span className={`sb-status${card ? " reason big" : ""}${j.tone === "problem" ? " error" : ""}`} role={j.tone === "problem" && card ? "alert" : undefined}>{j.status}</span></div>
         {j.note ? <div className="small muted sb-note">{j.note}</div> : null}
       </div>
-      <div className="sb-action">
-        {j.action ? <Action a={j.action} appRef={appRef} back={back} /> : <span className="small muted">{NOTHING_NEEDED}</span>}
-      </div>
+      {stuck ? <StuckChoices j={j} appRef={appRef} back={back} /> : (
+        <div className="sb-action">
+          {j.action ? <Action a={j.action} appRef={appRef} back={back} /> : <span className="small muted">{NOTHING_NEEDED}</span>}
+        </div>
+      )}
       {children}
     </div>
   );

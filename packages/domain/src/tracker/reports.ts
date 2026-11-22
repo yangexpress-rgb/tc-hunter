@@ -44,6 +44,7 @@ export const STAGE_LABEL: Record<ApplicationStage, string> = {
 export const OUTCOME_LABEL: Record<string, string> = {
   no_reply: "No reply", rejected_before_screen: "Turned down before a screen", rejected_after_screen: "Turned down after a screen",
   rejected_after_interview: "Turned down after an interview", offer_declined: "I turned down the offer", withdrew: "I withdrew", other: "Other",
+  passed: "You passed on this job", removed: "Removed from your tracker",
 };
 
 /** Every stage an application has been in, from its history and where it is now. */
