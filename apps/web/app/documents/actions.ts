@@ -31,7 +31,7 @@ export async function tailorAction(form: FormData) {
   const s = await requireSession();
   const job = String(form.get("job") ?? "");
   const kinds = form.getAll("kind").map(String).filter((k): k is DocKind => k === "resume" || k === "letter");
-  await act(form, () => requestTailor(app().pool, s, job, kinds.length ? kinds : ["resume", "letter"]), `/jobs/${job}`, "preparing");
+  await act(form, () => requestTailor(app().pool, s, job, kinds.length ? kinds : ["resume", "letter"], String(form.get("goal") ?? "").trim() || null), `/jobs/${job}`, "preparing");
 }
 
 /**

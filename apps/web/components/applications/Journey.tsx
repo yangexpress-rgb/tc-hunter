@@ -1,3 +1,4 @@
+import { GoalChip } from "@/components/jobs/JobBits";
 /**
  * The application journey on screen (Tracker UI Redesign v1): the shared status block used on every
  * Applications row and as the application page's status card, the pipeline strip and the stage stepper.
@@ -160,8 +161,10 @@ export function StuckChoices({ j, appRef, back }: { j: Journey; appRef: string; 
  * The one status block: stage chip, one status line (whose turn), and the one next action.
  * `card` is the application page's full-size status card; otherwise it's a list row.
  */
-export function StatusBlock({ j, appRef, back, title, employer, card = false, stuck = false, children }: {
+export function StatusBlock({ j, appRef, back, title, employer, card = false, stuck = false, goal, children }: {
   j: Journey; appRef: string; back: string; title?: string; employer?: string; card?: boolean;
+  /** The goal this application is pursued under, when the applicant has more than one (multi-goal brief §6). */
+  goal?: string | null;
   /** Stuck and never sent: every way on as a button (StuckChoices) in place of the one action. */
   stuck?: boolean; children?: ReactNode;
 }) {
@@ -169,7 +172,7 @@ export function StatusBlock({ j, appRef, back, title, employer, card = false, st
   return (
     <div className={`status-block${card ? " status-card card" : ""}${yours ? " is-yours" : ""}${j.tone === "problem" ? " is-problem" : ""}`} id={card ? "now" : undefined} aria-label={card ? "Where it is now" : undefined}>
       <div className="sb-main">
-        {title ? <div className="sb-head"><a className="job-title" href={`/applications/${appRef}`}>{title}</a>{employer ? <span className="job-meta"> · {employer}</span> : null}</div> : null}
+        {title ? <div className="sb-head"><a className="job-title" href={`/applications/${appRef}`}>{title}</a>{employer ? <span className="job-meta"> · {employer}</span> : null}{goal ? <> <GoalChip label={goal} /></> : null}</div> : null}
         <div className="sb-line"><StageChip j={j} /> <span className={`sb-status${card ? " reason big" : ""}${j.tone === "problem" ? " error" : ""}`} role={j.tone === "problem" && card ? "alert" : undefined}>{j.status}</span></div>
         {j.note ? <div className="small muted sb-note">{j.note}</div> : null}
       </div>
@@ -184,11 +187,13 @@ export function StatusBlock({ j, appRef, back, title, employer, card = false, st
 }
 
 /** Eight segments with a count each; tapping one filters the list to that stage. */
-export function PipelineStrip({ counts, active }: { counts: Record<JourneyStage, number>; active: JourneyStage | null }) {
+export function PipelineStrip({ counts, active, keep = "" }: { counts: Record<JourneyStage, number>; active: JourneyStage | null; keep?: string }) {
+  // `keep`: other filters to carry along (the goal, "goal=…").
+  const href = (stage?: string) => { const q = [stage ? `stage=${stage}` : "", keep].filter(Boolean).join("&"); return q ? `/applications?${q}` : "/applications"; };
   return (
     <nav className="pipeline" aria-label="Applications by stage">
       {JOURNEY_STAGES.map((s) => (
-        <a key={s} href={active === s ? "/applications" : `/applications?stage=${s}`} aria-current={active === s ? "true" : undefined}
+        <a key={s} href={active === s ? href() : href(s)} aria-current={active === s ? "true" : undefined}
           className={`pipe-seg${counts[s] ? " has" : ""}${active === s ? " on" : ""}`}>
           <span className="pipe-n">{counts[s]}</span>
           <span className="pipe-l">{JOURNEY_LABEL[s]}</span>

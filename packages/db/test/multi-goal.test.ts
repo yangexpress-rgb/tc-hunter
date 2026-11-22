@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FIT_VERSION } from "@tc-hunter/domain";
-import { listGoals, listMatches, matchApplicant, matchGoals, saveGoal, withApplicant, type GoalInput, type Session } from "../src";
+import { listApplications, listGoals, listMatches, matchApplicant, matchGoals, saveGoal, saveOwnLetter, setApplicationGoal, trackJob, withApplicant, type GoalInput, type Session } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
 /**
@@ -195,5 +195,84 @@ describe("the Jobs list in a goal context (stage 3)", () => {
     const page = readFileSync(join(ROOT, "apps", "web", "app", "jobs", "page.tsx"), "utf8");
     expect(page).not.toMatch(/r\.goal_id === goal/);
     expect(page).toMatch(/showFiltered, goal \}/);
+  });
+});
+
+describe("applications carry their goal (stage 4)", () => {
+  const ref = async (key: string) => (await ownerQuery("SELECT public_ref FROM job_posting WHERE id = $1", [ids.get(key)])).rows[0].public_ref as string;
+  const app = async (r: string) => (await listApplications(pool, yong)).find((a) => a.public_ref === r)!;
+  let j2App = "";
+
+  it("tracking J2 from Goal-B's list makes one application stamped Goal-B; tracking it again from Goal-A's changes nothing", async () => {
+    j2App = await trackJob(pool, yong, await ref("J2"), "interested", B);
+    expect((await app(j2App)).goal_id).toBe(B);
+    expect(await trackJob(pool, yong, await ref("J2"), "interested", A)).toBe(j2App);
+    const j2Ref = await ref("J2");
+    expect((await listApplications(pool, yong)).filter((a) => a.job_ref === j2Ref)).toHaveLength(1);
+    expect((await app(j2App)).goal_id).toBe(B);
+  });
+
+  it("with no goal chosen, or one the job wasn't scored against, the job's primary goal is used", async () => {
+    const r1 = await trackJob(pool, yong, await ref("J1"));
+    expect((await app(r1)).goal_id).toBe(A);
+    const other = await saveGoal(pool, yong, goal({ roles: ["Somebody else"], active: false }));
+    const r3 = await trackJob(pool, yong, await ref("J3"), "interested", other);
+    expect((await app(r3)).goal_id).toBe(B);
+    const r3again = await trackJob(pool, yong, await ref("J3"), "interested", "not-a-goal");
+    expect(r3again).toBe(r3);
+    await ownerQuery("DELETE FROM hunt_goal WHERE id = $1", [other]);
+  });
+
+  it("a rescore that changes the job's primary goal never moves the stamp", async () => {
+    const b = (await listGoals(pool, yong)).find((g) => g.id === B)!;
+    await saveGoal(pool, yong, { ...b, active: false }, B);
+    await rematch();
+    expect((await matchOf("J2")).goal_id).toBe(A);
+    expect((await app(j2App)).goal_id).toBe(B);
+    await saveGoal(pool, yong, { ...b, active: true }, B);
+    await rematch();
+  });
+
+  it("the applicant moves it to Goal-A: later documents carry Goal-A, earlier ones keep Goal-B", async () => {
+    // A resume prepared under Goal-B (a draft resume; the letter below doesn't replace it).
+    const before = (await withApplicant(pool, { userAccountId: yong.userAccountId, applicantId: yong.applicantId, actor: "applicant" }, (c) => c.query(
+      `INSERT INTO document (applicant_id, type, job_posting_id, match_id, created_by) VALUES (app_applicant_id(), 'tailored_resume', $1, (SELECT id FROM match WHERE job_posting_id = $1), 'app') RETURNING goal_id`,
+      [ids.get("J2")]))).rows[0];
+    expect(before.goal_id).toBe(B);
+    await setApplicationGoal(pool, yong, j2App, A);
+    expect((await app(j2App)).goal_id).toBe(A);
+    expect((await listApplications(pool, yong)).filter((a) => a.goal_id === A).map((a) => a.public_ref)).toContain(j2App);
+    expect((await listApplications(pool, yong)).filter((a) => a.goal_id === B).map((a) => a.public_ref)).not.toContain(j2App);
+    // A letter prepared now (the applicant's own: no AI) carries Goal-A.
+    await saveOwnLetter(pool, yong, await ref("J2"), "Dear team,\n\nI would like to lead product management for your SaaS platform.\n\nYong");
+    const docs = (await ownerQuery("SELECT type, goal_id FROM document WHERE job_posting_id = $1 ORDER BY created_at", [ids.get("J2")])).rows;
+    expect(docs.map((d) => [d.type, d.goal_id])).toEqual([["tailored_resume", B], ["cover_letter", A]]);
+  });
+
+  it("only the applicant's own goals can be chosen", async () => {
+    const leo = (await newApplicant(pool, testConfig(), "Leo")).session;
+    const leoGoal = await saveGoal(pool, leo, goal({ roles: ["Analyst"] }));
+    await expect(setApplicationGoal(pool, yong, j2App, leoGoal)).rejects.toThrow("TC_NOT_FOUND");
+    await expect(setApplicationGoal(pool, yong, j2App, "nonsense")).rejects.toThrow("TC_NOT_FOUND");
+    await expect(setApplicationGoal(pool, leo, j2App, leoGoal)).rejects.toThrow("TC_NOT_FOUND");
+    expect((await app(j2App)).goal_id).toBe(A);
+  });
+
+  it("the migration stamps older applications with their job's primary goal", async () => {
+    await ownerQuery("UPDATE application SET goal_id = NULL");
+    const sql = readFileSync(join(__dirname, "..", "migrations", "093_application_goal.sql"), "utf8");
+    await ownerQuery(sql.slice(sql.indexOf("UPDATE application a")));
+    for (const a of await listApplications(pool, yong)) {
+      expect(a.goal_id).toBe((await ownerQuery("SELECT goal_id FROM match WHERE id = $1", [a.match_id])).rows[0].goal_id);
+    }
+  });
+
+  it("goal names: Goal-A by its own name, Goal-B by the name made from its roles", async () => {
+    const { goalLabel } = await import("@tc-hunter/domain");
+    const names = new Map((await listGoals(pool, yong)).map((g) => [g.id, goalLabel(g)]));
+    expect([names.get(A), names.get(B)]).toEqual(["Goal-A", "VP Product Management"]);
+    // The score's own words name them the same way.
+    expect((await goalRows("J1")).get(A)!.g_summary).toMatch(/Goal-A/);
+    expect((await goalRows("J2")).get(B)!.g_summary).toMatch(/VP Product Management/);
   });
 });

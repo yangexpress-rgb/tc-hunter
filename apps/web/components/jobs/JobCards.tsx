@@ -81,7 +81,7 @@ export function FitLines({ r }: { r: Row }) {
 
 function CardActions({ r, back }: { r: Row; back: string }) {
   const hidden = (<><input type="hidden" name="match_id" value={r.id} /><input type="hidden" name="back" value={back} /></>);
-  const open = <a className="button apply" href={`/jobs/${r.public_ref}`} title="Open the job to get your application ready. Nothing is sent without you.">Apply</a>;
+  const open = <a className="button apply" href={r.job_href ?? `/jobs/${r.public_ref}`} title="Open the job to get your application ready. Nothing is sent without you.">Apply</a>;
   if (r.status !== "new") {
     return (
       <div className="card-actions">
@@ -112,7 +112,7 @@ export function JobCard({ r, back }: { r: Row; back: string }) {
         <span className="company-name" title={r.employer_canonical}>{r.employer_canonical}</span>
         <FitChip r={r} />
       </div>
-      <a className="job-card-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>
+      <a className="job-card-title" href={r.job_href ?? `/jobs/${r.public_ref}`}>{r.title}</a>
       <div className="job-card-tags">
         <GoalChip label={r.goal_label} />
         {level !== "none" ? <span className="chip">{jobLevelLabel(level)}</span> : null}

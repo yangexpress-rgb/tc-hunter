@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { applyStatus, budgetNow, getApplication, hasFreshStepUp, getPacket, journeyFacts, listDevices, listEmailSignals, trackerSummary } from "@tc-hunter/db";
-import { APPLICATION_STAGES, CLOSED, aiIsOff, JOURNEY_STAGES, OUTCOME_LABEL, STAGE_LABEL, journeyTimeline, type ApplicationStage, type JourneyStage } from "@tc-hunter/domain";
+import { applyStatus, budgetNow, getApplication, hasFreshStepUp, getPacket, journeyFacts, listDevices, listEmailSignals, listGoals, trackerSummary } from "@tc-hunter/db";
+import { APPLICATION_STAGES, CLOSED, aiIsOff, goalLabel, JOURNEY_STAGES, OUTCOME_LABEL, STAGE_LABEL, journeyTimeline, type ApplicationStage, type JourneyStage } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -11,10 +11,10 @@ import { PacketCard } from "@/components/applications/Packet";
 import { AnswerHere, answerHereFields } from "@/components/applications/AnswerHere";
 import { DocChecklist } from "@/components/applications/DocChecklist";
 import { EmailAttach, isStuck, journeyFor, reachedOf, RunRecord, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
-import { PassReasons } from "@/components/jobs/JobBits";
+import { GoalChip, PassReasons } from "@/components/jobs/JobBits";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { interviewAction, nextStepAction, notesAction, outcomeAction, stageAction } from "../actions";
+import { goalAction, interviewAction, nextStepAction, notesAction, outcomeAction, stageAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -50,8 +50,12 @@ export default async function ApplicationPage(props: Props) {
   const { pool, cfg } = app();
   const [{ saved, error, params }, a, sum, signals, packet, devices, facts] = await Promise.all([flashOf(props), getApplication(pool, cfg, session, ref),
     trackerSummary(pool, session), listEmailSignals(pool, session, ref), getPacket(pool, cfg, session, ref), listDevices(pool, session), journeyFacts(pool, session, ref)]);
-  const [applying, noAi] = await Promise.all([applyStatus(pool, session, ref), aiIsOff()]);
+  const [applying, noAi, goals] = await Promise.all([applyStatus(pool, session, ref), aiIsOff(), listGoals(pool, session)]);
   if (!a) notFound();
+  // The goal it's pursued under (multi-goal brief §6): shown, and changeable, when there's more than one goal.
+  const goalChoices = goals.filter((g) => g.active || g.id === a.goal_id);
+  const manyGoals = goalChoices.length > 1;
+  const goalName = a.goal_id ? goals.find((g) => g.id === a.goal_id) : undefined;
   const tz = sum.timeZone;
   const back = `/applications/${a.public_ref}`;
   const stage = a.stage as ApplicationStage;
@@ -114,7 +118,18 @@ export default async function ApplicationPage(props: Props) {
       <p><a href="/applications">← All applications</a></p>
       <Flash saved={saved} error={error} />
       <h1>{a.title}</h1>
-      <p className="job-meta">{a.employer_canonical} · <a href={`/jobs/${a.job_ref}`}>See the job</a></p>
+      <p className="job-meta">{a.employer_canonical} · <a href={`/jobs/${a.job_ref}`}>See the job</a>{manyGoals && goalName ? <> <GoalChip label={goalLabel(goalName)} /></> : null}</p>
+      {manyGoals ? (
+        <form action={goalAction} className="inline-form goal-change">
+          <input type="hidden" name="app" value={a.public_ref} /><input type="hidden" name="back" value={back} />
+          <label>Goal <select name="goal" defaultValue={a.goal_id ?? ""}>
+            {a.goal_id ? null : <option value="" disabled>Pick a goal</option>}
+            {goalChoices.map((g) => <option key={g.id} value={g.id}>{goalLabel(g)}</option>)}
+          </select></label>
+          <button className="small secondary">Save</button>
+          <span className="hint">The goal this application is for. Documents already prepared keep the goal they were made under.</span>
+        </form>
+      ) : null}
       {a.duplicate_ref ? (
         <p className="note">Same job as <a href={`/applications/${a.duplicate_ref}`}>{a.duplicate_ref}</a>. TC Hunter found this job twice and closed this copy, so it gets one application. Carry on with {a.duplicate_ref}.</p>
       ) : null}
