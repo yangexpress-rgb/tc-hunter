@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ANSWER_PRESETS, applicantStepFor, workAuthKind, confirmationIn, FILL_CONFIDENCE, packetHash, profileFieldFor, proposeField, proposeFields, questionNames, receiptPdf, willFill, type PacketProfile } from "../src";
+import { ANSWER_PRESETS, applicantStepFor, workAuthKind, confirmationIn, FILL_CONFIDENCE, NEW_QUESTION, packetHash, profileFieldFor, proposeField, proposeFields, questionNames, receiptPdf, willFill, type PacketProfile } from "../src";
 
 const preset = (k: string) => [...ANSWER_PRESETS.find((p) => p.key === k)!.patterns];
 const profile = (over: Partial<PacketProfile> = {}): PacketProfile => ({
@@ -54,7 +54,7 @@ describe("proposing answers (design 5.5)", () => {
   it("never invents: drafts, unknown questions and missing facts are left for the applicant", () => {
     const p = profile({ phone: null });
     expect(proposeField({ key: "a", label: "Desired salary expectation", type: "text" }, p)).toMatchObject({ answer: null, note: "Your saved answer is still a draft." });
-    expect(proposeField({ key: "b", label: "Favourite colour", type: "text" }, p)).toMatchObject({ answer: null, note: "New question. Type your answer." });
+    expect(proposeField({ key: "b", label: "Favourite colour", type: "text" }, p)).toMatchObject({ answer: null, note: NEW_QUESTION });
     expect(proposeField({ key: "c", label: "Phone", type: "tel" }, p)).toMatchObject({ answer: null, note: "Not in your profile yet." });
   });
 
@@ -80,8 +80,10 @@ describe("proposing answers (design 5.5)", () => {
     const yes = proposeField({ key: "w", label: "Are you legally authorised to work in this country?", type: "select", options: ["Yes", "No"] }, profile());
     expect(yes).toMatchObject({ answer: "Yes", source: "answer_bank", sourceRefId: "a3", step: null });
     expect(willFill(yes)).toBe(true);
-    // Stale: theirs to answer until they look at it again.
-    expect(proposeField({ key: "s", label: "Will you require sponsorship?", type: "select", options: ["Yes", "No"] }, profile())).toMatchObject({ step: "work_auth", answer: null });
+    // Saved over 90 days ago: still their answer (Answer-First, Yong 2026-11-22), and its age is said.
+    const old = proposeField({ key: "s", label: "Will you require sponsorship?", type: "select", options: ["Yes", "No"] }, profile());
+    expect(old).toMatchObject({ step: null, answer: "No", source: "answer_bank", sourceRefId: "a4" });
+    expect(old.note).toMatch(/over 90 days ago/);
     // None saved, or a draft: theirs.
     expect(proposeField({ key: "w", label: "Are you authorized to work in the US?", type: "text" }, profile({ answers: [] }))).toMatchObject({ step: "work_auth", answer: null });
     const draft = profile(); draft.answers[2]!.approved = false;

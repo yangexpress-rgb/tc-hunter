@@ -3,8 +3,8 @@ import type pg from "pg";
 import {
   ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isTransientLinkFailure, linksIn, reqIdsInUrl, reqIdsOf, trailWords, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
-  type CareersLookup, type Fetcher, type SiteBrowser, type SourceSpec, type WorkdaySearch,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, coverageLine, NEW_QUESTION, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isTransientLinkFailure, linksIn, reqIdsInUrl, reqIdsOf, trailWords, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
+  type Coverage, type CareersLookup, type Fetcher, type SiteBrowser, type SourceSpec, type WorkdaySearch,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
   type ApplyBrowser, type ApplyMode, type ApplyPage, type Ats, type FillItem, type FormField, type PageForm, type SecretStore, type StandingKind, type WorkdayPage,
@@ -171,6 +171,8 @@ export interface ApplyStatus {
   stuckKeys: string[];
   /** The employer's posting wasn't found yet: TC Hunter looks again by itself then (redesign §B). */
   lookAgainAt: string | null;
+  /** The questions on their form, answered from the applicant's information, and asked of them with why (Answer-First). */
+  coverage: Coverage | null;
 }
 
 export async function applyStatus(pool: pg.Pool, session: Session, appRef: string): Promise<ApplyStatus> {
@@ -178,7 +180,7 @@ export async function applyStatus(pool: pg.Pool, session: Session, appRef: strin
     const mode = ((await c.query("SELECT mode FROM apply_setting")).rows[0]?.mode ?? DEFAULT_APPLY_MODE) as ApplyMode;
     const r = (await c.query(
       `SELECT r.* FROM apply_run r JOIN application a ON a.id = r.application_id WHERE a.public_ref = $1 ORDER BY r.created_at DESC LIMIT 1`, [appRef])).rows[0];
-    if (!r) return { runId: null, status: "none", step: null, problem: null, waitingFor: null, steps: [], shots: [], host: null, startedAt: null, finishedAt: null, mode, packetId: null, handover: null, finishYourself: false, stuckKeys: [], lookAgainAt: null };
+    if (!r) return { runId: null, status: "none", step: null, problem: null, waitingFor: null, steps: [], shots: [], host: null, startedAt: null, finishedAt: null, mode, packetId: null, handover: null, finishYourself: false, stuckKeys: [], lookAgainAt: null, coverage: null };
     const handover = await handoverFor(c, appRef);
     // A run silent for 10 minutes has stopped (the worker picks the work up again after a restart).
     const silent = r.status === "running" && Date.now() - new Date(r.updated_at).getTime() > 10 * 60_000;
@@ -193,6 +195,7 @@ export async function applyStatus(pool: pg.Pool, session: Session, appRef: strin
       finishYourself: r.status === "unclear" || !!r.finish_yourself,
       stuckKeys: (r.stuck_keys as string[] | null) ?? [],
       lookAgainAt: r.status === "failed" && r.look_again_at ? new Date(r.look_again_at).toISOString() : null,
+      coverage: (r.coverage as Coverage | null) ?? null,
     };
   });
 }
@@ -1204,8 +1207,20 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     // A statement only the applicant may make (no standing answer) is theirs to do on the page itself when it can be handed to them.
     const personal = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && PERSONAL_STEPS.has(f.step_kind ?? ""));
     const missing = rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key) && !(opts.canHandOver && personal.includes(f)));
+    // Coverage (Answer-First, Yong 2026-11-22): what the form asks, what came from the applicant's own information,
+    // and each question asked of them with why nothing covered it.
+    const coverage: Coverage = {
+      onForm: rows.length,
+      fromYourInfo: rows.filter((f) => fill(f) && f.source !== "applicant_typed").length,
+      youAnswered: rows.filter((f) => fill(f) && f.source === "applicant_typed").length,
+      siteFilled: rows.filter((f) => !fill(f) && prefilled.has(f.field_key)).length,
+      leftEmpty: rows.filter((f) => !fill(f) && !prefilled.has(f.field_key) && !f.required).length,
+      asked: rows.filter((f) => f.required && !fill(f) && !prefilled.has(f.field_key))
+        .map((f) => ({ label: String(f.question_as_shown), why: String(f.note || (f.step_kind ? "a statement only you can make" : NEW_QUESTION)) })),
+    };
+    await c.query("UPDATE apply_run SET coverage = $2 WHERE id = $1", [run.id, JSON.stringify(coverage)]);
     if (missing.length) {
-      return { stop: "waiting" as Status, waitingFor: "answers", stuck: missing.map((f) => String(f.field_key)),
+      return { stop: "waiting" as Status, waitingFor: "answers", stuck: missing.map((f) => String(f.field_key)), coverage,
         problem: (() => {
           // A date asked in parts is one question to the applicant ("Date", not "Date: Month", "Date: Day", "Date: Year").
           const names = questionNames(missing.map((f) => String(f.question_as_shown)));
@@ -1238,6 +1253,8 @@ async function prepare(pool: pg.Pool, auto: RequestContext, deps: ApplyDeps, app
     };
   });
   if ("stop" in result && result.stop) {
+    const cov = (result as { coverage?: Coverage }).coverage;
+    if (cov) await run.note(coverageLine(cov));
     if ((result as { stuck?: string[] }).stuck?.length) await run.stuck((result as { stuck: string[] }).stuck);
     await run.end(result.stop, result.problem ?? null, result.waitingFor, (result as { step?: string }).step);
     return { stop: result.stop };
@@ -1266,6 +1283,9 @@ async function markFilled(pool: pg.Pool, auto: RequestContext, packetId: string,
 
 /** The form is filled: record its fingerprint, and approve sending it if the setting allows, or ask. */
 async function readyForSend(pool: pg.Pool, auto: RequestContext, cfg: AppConfig, app: AppRow, mode: ApplyMode, filled: string, run: Run): Promise<"go" | Status> {
+  // The run's coverage, said once the whole form is filled (Answer-First, Yong 2026-11-22).
+  const cov = await withApplicant(pool, auto, async (c) => (await c.query("SELECT coverage FROM apply_run WHERE id = $1", [run.id])).rows[0]?.coverage as Coverage | null);
+  if (cov) await run.note(coverageLine(cov));
   const r = await withApplicant(pool, auto, async (c) => {
     const k = (await c.query(
       "SELECT * FROM application_packet WHERE application_id = $1 AND state IN ('filling','ready_to_submit') ORDER BY version DESC LIMIT 1 FOR UPDATE", [app.id])).rows[0];

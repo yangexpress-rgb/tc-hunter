@@ -19,7 +19,9 @@
       { "id": "a-ess", "key": "essential_functions", "patterns": ["essential (functions|duties) of the (job|position|role)"], "text": "Yes", "approved": true, "stale": false, "isApplicantStep": false },
       { "id": "a-nc", "key": "restrictive_agreement", "patterns": ["non-?compete", "non-?solicit", "(prohibit|restrict)\\w* you from (recruiting|hiring|soliciting|competing)"], "text": "No", "approved": true, "stale": false, "isApplicantStep": false },
       { "id": "a-2nd", "key": "custom:Do you currently have a second job or other outside employment", "patterns": ["^Do you currently have a second job or other outside employment"], "text": "Yes", "detail": "Co-founder of SyntriForce LLC, an early-stage software company", "approved": true, "stale": false, "isApplicantStep": false },
-      { "id": "a-acme", "key": "employer:prior_employment", "patterns": ["^have you ever worked for <employer>$"], "text": "Yes", "employerKey": "acme", "approved": true, "stale": false, "isApplicantStep": false }
+      { "id": "a-acme", "key": "employer:prior_employment", "patterns": ["^have you ever worked for <employer>$"], "text": "Yes", "employerKey": "acme", "approved": true, "stale": false, "isApplicantStep": false },
+      {"id": "a-reloc", "key": "custom:Are you willing to relocate to Hoboken, NJ", "patterns": ["^Are you willing to relocate to Hoboken, NJ"], "text": "Yes", "approved": true, "stale": false, "isApplicantStep": false},
+      {"id": "a-hybrid", "key": "custom:Are you comfortable working in a hybrid environment", "patterns": ["^Are you comfortable working in a hybrid environment"], "text": "Yes", "approved": true, "stale": false, "isApplicantStep": false}
     ]
   },
   "sets": [
@@ -77,6 +79,21 @@
       "fields": [
         { "key": "m1", "label": "Have you ever worked for Acme?*", "type": "select", "options": ["Yes", "No"], "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-acme" } },
         { "key": "m2", "label": "Have you ever worked for ACME Inc?", "type": "select", "options": ["Yes", "No"], "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-acme" } }
+      ]
+    },
+    {"name": "Answer-First: a question answered before is not asked again in other words (Yong, 2026-11-22)", "employer": "Globex", "fields": [
+        {"key": "r1", "label": "Would you be willing to relocate to Hoboken NJ?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": {"answer": "Yes", "source": "answer_bank", "ref": "a-reloc"}},
+        {"key": "r2", "label": "Are you comfortable with a hybrid work environment?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": {"answer": "Yes", "source": "answer_bank", "ref": "a-hybrid"}},
+        {"key": "r3", "label": "Are you willing to relocate to Austin, TX?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": {"answer": null}},
+        {"key": "r4", "label": "Are you not willing to relocate to Hoboken, NJ?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": {"answer": null}}
+      ]
+    },
+    {"name": "Basic Qualifications standing rule: every must-have matches (Yong, 2026-11-22)", "employer": "Capital One", "standing": [{"kind": "basic_qualifications", "text": "Yes"}], "qualifications": {"met": true, "why": "all 4 must-haves match your profile"}, "fields": [
+        {"key": "c9", "label": "Do you meet the Basic Qualifications for this role as specified in the job description?*", "type": "select", "options": ["Select One", "Yes", "No"], "required": true, "expect": {"answer": "Yes", "source": "standing_answer", "note": "Your standing rule — all of this job's must-haves match your profile."}}
+      ]
+    },
+    {"name": "Basic Qualifications standing rule: a must-have is missing, so it is asked", "employer": "Capital One", "standing": [{"kind": "basic_qualifications", "text": "Yes"}], "qualifications": {"met": false, "why": "not matched in your profile: Kubernetes"}, "fields": [
+        {"key": "c9", "label": "Do you meet the Basic Qualifications for this role as specified in the job description?*", "type": "select", "options": ["Select One", "Yes", "No"], "required": true, "expect": {"answer": null, "step": "attestation", "note": "Your standing rule for this question didn't apply: not matched in your profile: Kubernetes So this one is yours."}}
       ]
     }
   ]

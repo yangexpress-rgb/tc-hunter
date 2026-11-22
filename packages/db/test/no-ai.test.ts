@@ -254,7 +254,8 @@ describe("A fixture application, end to end in No AI mode", () => {
     // The written answer isn't drafted: it's theirs, with their stories offered word for word.
     expect(f("Tell us about a time")).toMatchObject({ answer: null, essay: true, willFill: false });
     expect(p.stories.map((x) => x.title)).toEqual(["Faster supply review"]);
-    expect(leftForYou(p.fields)).toEqual({ short: 1, written: 1, required: 1 });
+    // Only what the form requires is left for them (Answer-First, Yong 2026-11-22): the optional written answer isn't.
+    expect(leftForYou(p.fields)).toEqual({ short: 1, written: 0, required: 1 });
     expect(p.fields.some((x) => x.source === "inferred" || x.source === "drafted")).toBe(false);
     expect(browser.pages.at(-1)!.clicks).toBe(0);
     expect(NO_AI_PACKET_LINE).toBe("These answers came only from your saved information. Nothing was written or checked by AI.");

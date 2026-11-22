@@ -145,7 +145,8 @@ export class ClaudeEssayDrafter implements EssayDrafter {
  * other steps that are always the applicant's are counted apart (they were never the cascade's to answer).
  */
 export function leftForYou(fields: Array<{ willFill: boolean; step?: string | null; essay: boolean; required?: boolean }>): { short: number; written: number; required: number } {
-  const left = fields.filter((f) => !f.willFill && !f.step);
+  // Only what the form needs (Answer-First, Yong 2026-11-22): a question that may be left empty is never left "for you".
+  const left = fields.filter((f) => !f.willFill && !f.step && f.required);
   return { short: left.filter((f) => !f.essay).length, written: left.filter((f) => f.essay).length, required: left.filter((f) => f.required).length };
 }
 
@@ -155,4 +156,31 @@ export function leftForYouLine(n: { short: number; written: number }): string {
   if (!total) return "";
   const parts = [n.short ? `${n.short} short` : "", n.written ? `${n.written} written ${n.written === 1 ? "answer" : "answers"}` : ""].filter(Boolean);
   return `${total === 1 ? "1 question was" : `${total} questions were`} left for you: ${parts.join(" and ")}.`;
+}
+
+/**
+ * A run's coverage (Answer-First, Yong 2026-11-22): the questions on the employer's form, how many TC Hunter
+ * answered from the applicant's own information, and each one asked of them with why nothing covered it.
+ */
+export interface Coverage {
+  onForm: number;
+  /** From the profile, resume, saved and earlier answers, approved documents, standing answers and facts worked out from them. */
+  fromYourInfo: number;
+  /** Answered by the applicant on this application. */
+  youAnswered: number;
+  /** Their form already had an answer. */
+  siteFilled: number;
+  /** Optional questions nothing covered: left empty, never asked. */
+  leftEmpty: number;
+  asked: Array<{ label: string; why: string }>;
+}
+
+/** "18 questions on their form: 16 answered from your information, 1 you answered, 1 asked: "…" (why)." */
+export function coverageLine(c: Coverage): string {
+  const parts = [`${c.fromYourInfo} answered from your information`];
+  if (c.youAnswered) parts.push(`${c.youAnswered} you answered`);
+  if (c.siteFilled) parts.push(`${c.siteFilled} already filled in by their site`);
+  if (c.leftEmpty) parts.push(`${c.leftEmpty} optional left empty`);
+  parts.push(c.asked.length ? `${c.asked.length} asked of you: ${c.asked.map((a) => `"${a.label.replace(/[\s*:]+$/, "")}" (${a.why.replace(/\.$/, "")})`).join("; ")}` : "none asked of you");
+  return `${c.onForm} ${c.onForm === 1 ? "question" : "questions"} on their form: ${parts.join(", ")}.`;
 }

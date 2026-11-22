@@ -2,7 +2,7 @@ import { FORM_DATE, START_QUESTION, startDateFrom, startDatePart } from "./dates
 import { countryForRegion, matchChoice } from "./equivalents";
 import {
   CURRENT_EMPLOYER, CURRENT_TITLE, NEVER_DERIVED, answerEmployerKey, bankMatch, claimPolarity, currentRole, deriveFact, embeddedFact, isDerived, isFollowUp, isYesNo,
-  questionCategory, saysNo, saysYes, type BankAnswer, type QuestionCategory,
+  questionCategory, saysNo, saysYes, type BankAnswer, type QualificationsCheck, type QuestionCategory,
 } from "./ladder";
 import { createHmac } from "node:crypto";
 import { canonicalJson } from "../fingerprint";
@@ -22,7 +22,7 @@ export type StepKind = "attestation" | "work_auth" | "eeo" | "consent" | "signat
 /** "derived": worked out in code from the profile (prior employment, degree, years, current role), with the derivation in its note. */
 export type FieldSource = "master_profile" | "answer_bank" | "tailored_doc" | "applicant_typed" | "standing_answer" | "inferred" | "drafted" | "derived";
 /** Standing answers (Yong, 2026-11-15): kinds of question that are always the applicant's own, unless they set an answer for them in Settings. */
-export type StandingKind = "site_account" | "attestation" | "consent" | "background_check" | "signature" | "eeo";
+export type StandingKind = "site_account" | "attestation" | "consent" | "background_check" | "signature" | "eeo" | "basic_qualifications";
 
 export interface FormField { key: string; label: string; type: FieldType; options?: string[]; required?: boolean;
   /** The site already shows a value here (Workday fills some questions from the resume). Server browser only. */
@@ -51,6 +51,8 @@ export interface PacketProfile {
   experience?: Array<{ id: string; title: string; employer: string | null; location: string | null; start: string | null; end: string | null; description: string | null }>;
   /** Today (YYYY-MM-DD) where the applicant lives, for a form's own date and a start date counted from today. */
   today?: string;
+  /** Whether every must-have this job's requirements name is matched in their profile (checkQualifications), for the Basic Qualifications standing rule. */
+  qualifications?: QualificationsCheck | null;
 }
 
 export interface ProposedField {
@@ -154,20 +156,29 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     // 2026-11-21) takes the saved "authorised to work" answer, and any "require sponsorship" the saved sponsorship one.
     // Worded the other way round ("…without sponsorship", "not authorised"): a saved Yes/No is never turned upside down.
     const saved = /\b(not|without|unable|cannot|can't|never)\b/i.test(f.label) ? undefined : bankMatch(f.label, p.answers, p.employer)?.answer;
-    if (saved?.approved && !saved.stale) {
+    // Answer-First (Yong, 2026-11-22): a saved answer is the applicant's answer however old it is; its age is said, never a reason to ask.
+    if (saved?.approved) {
       const chosen = pick(f.options, saved.text);
-      if (chosen) return { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9, note: "From your saved right-to-work answer." };
+      if (chosen) return { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9, note: `From your saved right-to-work answer.${saved.stale ? OLD_NOTE : ""}` };
       return { ...base, step, note: "Your saved right-to-work answer isn't one of the choices, so you answer this one." };
     }
     if (!saved && /\b(not|without|unable|cannot|can't|never)\b/i.test(f.label)) return { ...base, step, note: "It's worded the other way round from your saved right-to-work answers, so you answer this one: a saved Yes or No is never turned upside down." };
     return { ...base, step, note: !saved ? "Add your right-to-work answer under Saved answers and TC Hunter will fill it next time."
-      : !saved.approved ? "Your saved right-to-work answer is still a draft, so you answer this one."
-      : "Your saved right-to-work answer is over 90 days old. Check it first; until then you answer this one." };
+      : "Your saved right-to-work answer is still a draft, so you answer this one." };
   }
-  // "Do you meet the basic qualifications?" is a judgment: always the applicant's, never a standing answer (§C2).
+  // "Do you meet the basic qualifications?" is the applicant's own judgment, unless their standing rule answers it
+  // (Yong, 2026-11-22): "Yes" only when every must-have this job names matches their profile, with no gaps.
   const category = questionCategory(f.label, p.employer);
   if (category === "basic_qualifications") {
-    return { ...base, step: "attestation", note: "Whether you meet the qualifications is your own judgment, so this one is always yours." };
+    const rule = (p.standing ?? []).some((x) => x.kind === "basic_qualifications");
+    const q = p.qualifications ?? null;
+    if (rule && q?.met) {
+      const yes = !f.options?.length ? "Yes" : f.options.find((o) => /^(yes|y|true)\b/i.test(o.trim())) ?? null;
+      if (yes) return { ...base, answer: yes, source: "standing_answer", sourceRefId: null, confidence: 0.9, standingKind: "basic_qualifications", note: BASIC_QUALIFICATIONS_NOTE };
+    }
+    return { ...base, step: "attestation", note: rule
+      ? `Your standing rule for this question didn't apply: ${q?.why ?? "this job's must-haves weren't read."} So this one is yours.`
+      : "Whether you meet the qualifications is your own judgment, so this one is yours. You can let TC Hunter answer Yes when every must-have matches your profile, under Settings, Applying." };
   }
   if (step) {
     // The standing-answer fence (§C2, Wiley 2026-11-21): a block that also asks a fact about the applicant
@@ -218,15 +229,14 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
   const numeric = !f.options?.length && f.type !== "checkbox" && NUMBER_QUESTION.test(f.label);
   // The bank (§C step 3-4): this employer's answers, then the applicant's own, then the presets; by words, then by meaning.
   const saved = bankMatch(f.label, p.answers, p.employer, (a) => !a.isApplicantStep && (!numeric || /\d/.test(a.text)))?.answer;
-  if (saved && numeric && saved.approved && !saved.stale) {
+  if (saved && numeric && saved.approved) {
     return { ...base, answer: saved.text.match(/\d+(?:\.\d+)?/)![0], source: "answer_bank", sourceRefId: saved.id, confidence: 0.9 };
   }
   // A draft or empty saved answer for "how did you hear" doesn't stop it: the default below answers it.
-  if (saved && !(HEARD_ABOUT.test(label) && (!saved.approved || saved.stale || !saved.text.trim() || !pick(f.options, saved.text)))) {
+  if (saved && !(HEARD_ABOUT.test(label) && (!saved.approved || !saved.text.trim() || !pick(f.options, saved.text)))) {
     if (!saved.approved) return { ...base, note: "Your saved answer is still a draft." };
-    if (saved.stale) return { ...base, note: "Your saved answer is over 90 days old. Check it first." };
     const chosen = pick(f.options, saved.text);
-    return chosen ? { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9 }
+    return chosen ? { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9, ...(saved.stale ? { note: `From your saved answer.${OLD_NOTE}` } : {}) }
       : { ...base, note: "Your saved answer isn't one of the choices." };
   }
   // Facts worked out in code (§C step 5): prior employment, degree, years of experience. Never relatives,
@@ -236,7 +246,7 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     const d = deriveFact(derivedCat, f.options, factsOf(p), f.label);
     if (isDerived(d)) return { ...base, answer: d.answer, source: "derived", sourceRefId: d.ref, confidence: 0.9, note: d.note };
     if (d) return { ...base, note: d.why };
-    if (NEVER_DERIVED.has(derivedCat)) return { ...base, note: NEVER_NOTE[derivedCat] ?? "New question. Type your answer." };
+    if (NEVER_DERIVED.has(derivedCat)) return { ...base, note: NEVER_NOTE[derivedCat] ?? NEW_QUESTION };
   }
   // The language of the form itself (Workday's disability self-identification page asks "Language*" with
   // English / Spanish / ...): the applicant applies in English, their resume and profile are in English
@@ -251,8 +261,15 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     const chosen = !f.options?.length ? "Job Board" : HEARD_DEFAULTS.map((re) => f.options!.find((o) => re.test(o))).find(Boolean) ?? f.options[0] ?? null;
     if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.86, note: "TC Hunter found this job on a job site. Save your own answer under Saved answers to change it." };
   }
-  return { ...base, note: "New question. Type your answer." };
+  return { ...base, note: NEW_QUESTION };
 }
+
+/** Why a question reaches the applicant when nothing answers it (Answer-First: each asked question says why). */
+export const NEW_QUESTION = "New question: nothing in your profile, resume, saved answers or earlier answers covers it. Type your answer and it is kept for next time.";
+/** Said beside a saved answer kept over 90 days ago: used all the same (Answer-First, Yong 2026-11-22). */
+const OLD_NOTE = " You saved it over 90 days ago; change it under Saved answers if it has changed.";
+/** Where the Basic Qualifications answer came from, in plain words (Yong, 2026-11-22). */
+export const BASIC_QUALIFICATIONS_NOTE = "Your standing rule — all of this job's must-haves match your profile.";
 
 /** A degree question by its label (the same rule the AI path used, PR #70). */
 const DEGREE_LABEL = /^(highest )?(degree|level of (education|degree)|education(al)? level|highest (level of )?(education|degree)( (obtained|completed|earned))?)\b/i;
@@ -287,8 +304,8 @@ function fence(f: FormField, step: StepKind, p: PacketProfile): Partial<Proposed
   if (fact === "unknown") return whole("TC Hunter can't settle it from your information.");
   // The fact: a saved answer (this employer's first), else worked out in code.
   const yesNoOpts = ["Yes", "No"];
-  const saved = bankMatch(f.label, p.answers, p.employer, (a) => a.approved && !a.stale)?.answer
-    ?? p.answers.find((a) => a.approved && !a.stale && (a.key === fact || a.key === `employer:${fact}`) && (!a.employerKey || a.employerKey === answerEmployerKey(p.employer)));
+  const saved = bankMatch(f.label, p.answers, p.employer, (a) => a.approved)?.answer
+    ?? p.answers.find((a) => a.approved && (a.key === fact || a.key === `employer:${fact}`) && (!a.employerKey || a.employerKey === answerEmployerKey(p.employer)));
   let value: string | null = null, factNote = "", ref: string | null = null, src: FieldSource = "answer_bank";
   if (saved && (saysYes(saved.text) || saysNo(saved.text))) { value = saysYes(saved.text) ? "Yes" : "No"; factNote = `${value}, your saved answer`; ref = saved.id; }
   else {
@@ -337,7 +354,7 @@ const BACKGROUND = /\b(background (check|screen|investigation)|criminal|credit (
 
 /** Which standing answer kind covers a question that would otherwise be the applicant's own step. */
 export function standingKindFor(step: StepKind, label: string): StandingKind | null {
-  if (step === "attestation") return "attestation";
+  if (step === "attestation") return questionCategory(label) === "basic_qualifications" ? "basic_qualifications" : "attestation";
   if (step === "signature") return "signature";
   if (step === "eeo") return "eeo";
   if (step === "consent") return BACKGROUND.test(label) ? "background_check" : "consent";

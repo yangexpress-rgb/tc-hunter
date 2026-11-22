@@ -11,7 +11,7 @@ import { AiOffError, aiClient, proposeFields, setAiClientsForTest, withAiProvide
 type Expect = { answer: string | null; source?: string; ref?: string; step?: string; parent?: string; note?: string };
 type Case = FormField & { expect: Expect };
 const G = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "fixtures", "questions-golden", "cases.json"), "utf8")) as {
-  profile: PacketProfile; sets: Array<{ name: string; employer: string; standing?: PacketProfile["standing"]; fields: Case[] }>;
+  profile: PacketProfile; sets: Array<{ name: string; employer: string; standing?: PacketProfile["standing"]; qualifications?: PacketProfile["qualifications"]; fields: Case[] }>;
 };
 
 describe("question golden set (No AI)", () => {
@@ -21,7 +21,7 @@ describe("question golden set (No AI)", () => {
       setAiClientsForTest({ claude: new Proxy({}, { get: () => { calls++; throw new Error("AI called"); } }) as never, openai: new Proxy({}, { get: () => { calls++; throw new Error("AI called"); } }) as never });
       try {
         await withAiProvider("none", async () => {
-          const profile: PacketProfile = { ...G.profile, employer: set.employer, standing: set.standing ?? [] };
+          const profile: PacketProfile = { ...G.profile, employer: set.employer, standing: set.standing ?? [], qualifications: set.qualifications ?? null };
           const fields = set.fields.map(({ expect: _e, ...f }) => f as FormField);
           const got = proposeFields(fields, profile);
           // Same posting + same profile + same mode ⇒ the same proposals, every time (and whatever order the bank is in).

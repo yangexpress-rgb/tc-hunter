@@ -53,6 +53,10 @@ export const STANDING_ANSWERS: Array<{ kind: StandingKind; title: string; does: 
     does: "For gender, ethnicity, veteran status, disability and similar questions, chooses the form's own \"I don't wish to answer\" choice. If a form has no such choice, the question stays yours.",
     risk: "Low. Your answer to these questions is voluntary and doesn't count for or against you, but you won't be counted in the employer's diversity figures.",
     defaultText: () => "I don't wish to answer" },
+  { kind: "basic_qualifications", title: "Answer Yes to \"Do you meet the basic qualifications?\" when every must-have matches",
+    does: "Answers Yes to \"Do you meet the basic (or minimum) qualifications?\" and similar, only when every must-have TC Hunter read from the job, and its years and education, match your profile with no gaps. If anything is missing, unclear or couldn't be read, the question stays yours.",
+    risk: "You confirm you meet the job's requirements. TC Hunter checks against the requirements it read from the posting and your profile; if either is incomplete, you may have confirmed something that isn't quite true.",
+    defaultText: () => "Yes" },
 ];
 
 // ---------------------------------------------------------------------------

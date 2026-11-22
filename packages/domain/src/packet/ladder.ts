@@ -135,16 +135,84 @@ export function orderedBank<T extends BankAnswer>(answers: T[], employer?: strin
  * The saved answer for a question: by its words (raw, or with the employer's name masked on both sides),
  * then by its meaning (the category). `filter` narrows the candidates (applicant-step answers or not).
  */
-export function bankMatch<T extends BankAnswer>(label: string, answers: T[], employer: string | null | undefined, filter: (a: T) => boolean = () => true): { answer: T; by: "words" | "category" } | null {
+export function bankMatch<T extends BankAnswer>(label: string, answers: T[], employer: string | null | undefined, filter: (a: T) => boolean = () => true): { answer: T; by: "words" | "category" | "same_question" } | null {
   const ordered = orderedBank(answers, employer).filter(filter);
   const masked = normalQuestion(label, employer);
   const byWords = ordered.find((a) => a.patterns.some((re) => tests(re, label) || tests(re, masked)));
   if (byWords) return { answer: byWords, by: "words" };
   const cat = questionCategory(label, employer);
-  if (!cat) return null;
   const ek = answerEmployerKey(employer);
-  const byCat = ordered.find((a) => a.key === cat || (a.employerKey === ek && a.key === `employer:${cat}`));
-  return byCat ? { answer: byCat, by: "category" } : null;
+  const byCat = cat ? ordered.find((a) => a.key === cat || (a.employerKey === ek && a.key === `employer:${cat}`)) : undefined;
+  if (byCat) return { answer: byCat, by: "category" };
+  // The same question in other words (Answer-First, Yong 2026-11-22): a question answered before is never asked
+  // again because its wording changed. Only the applicant's own kept answers, compared word by word.
+  const bySense = ordered.find((a) => a.key.startsWith("custom:") || a.key.startsWith("employer:") && !/^employer:[a-z_]+$/.test(a.key)
+    ? sameQuestion(label, keptQuestion(a), employer) : false);
+  return bySense ? { answer: bySense, by: "same_question" } : null;
+}
+
+/** The question a kept answer was saved under, in words ("custom:Are you willing to relocate", or its pattern). */
+function keptQuestion(a: BankAnswer): string {
+  const fromKey = a.key.replace(/^(custom|employer):/, "");
+  const fromPattern = (a.patterns[0] ?? "").replace(/^\^|\$$/g, "").replace(/\\(.)/g, "$1");
+  return fromPattern.length > fromKey.length ? fromPattern : fromKey;
+}
+
+/** Words that don't change what is asked. Negations, times ("ever", "currently") and places are kept. */
+const FILLER = new Set(("a an the and or of to in on at for with by from as is are be been being am was were will would could should can may might shall do does did " +
+  "you your yours i me my we us our this that these those it its please kindly if any there here have has had").split(" "));
+const stem = (w: string) => (w.length > 5 && w.endsWith("ing") ? w.slice(0, -3) : w.length > 4 && w.endsWith("ed") ? w.slice(0, -2)
+  : w.length > 3 && w.endsWith("s") && !w.endsWith("ss") ? w.slice(0, -1) : w);
+const sense = (q: string, employer?: string | null) => new Set(normalQuestion(q, employer).split(" ").filter((w) => w && !FILLER.has(w)).map(stem));
+
+/**
+ * Two wordings of one question: the same words that carry meaning (filler, word endings, punctuation, case and
+ * the employer's own name aside), nearly all shared, and neither one negated where the other isn't. Places,
+ * numbers and times stay words that count, so "relocate to Austin" is never "relocate to Hoboken".
+ */
+export function sameQuestion(a: string, b: string, employer?: string | null): boolean {
+  const x = sense(a, employer), y = sense(b, employer);
+  if (x.size < 2 || y.size < 2) return false;
+  const neg = (s: Set<string>) => ["not", "no", "never", "without", "unable", "cannot", "cant", "dont", "doesnt"].some((w) => s.has(w));
+  if (neg(x) !== neg(y)) return false;
+  const ca = questionCategory(a, employer), cb = questionCategory(b, employer);
+  if (ca !== cb) return false;
+  let both = 0;
+  for (const w of x) if (y.has(w)) both++;
+  return both / (x.size + y.size - both) >= 0.8;
+}
+
+// ---------------------------------------------------------------------------
+// Basic Qualifications (Yong's standing rule, 2026-11-22)
+// ---------------------------------------------------------------------------
+
+export interface QualificationsCheck { met: boolean; why: string }
+
+/**
+ * Whether every must-have this job's requirements name is matched in the applicant's profile, with no gaps:
+ * the same must-have list the match and gap display uses (`matched` and `gaps` are that match's), plus its
+ * years and education. Anything unmatched, unsure or unread means no.
+ */
+export function checkQualifications(job: {
+  mustHave: string[]; matched: string[]; gaps: string[]; years: number | null; education: string | null; confidence: "high" | "low" | null;
+}, p: DeriveProfile): QualificationsCheck {
+  if (!job.mustHave.length || job.confidence !== "high") return { met: false, why: "this job's requirements couldn't be read in full" };
+  if (job.gaps.length) return { met: false, why: `not matched in your profile: ${job.gaps.slice(0, 5).join(", ")}` };
+  const seen = new Set(job.matched.map((m) => m.toLowerCase()));
+  const unsure = job.mustHave.filter((m) => !seen.has(m.toLowerCase()));
+  if (unsure.length) return { met: false, why: `not matched in your profile: ${unsure.slice(0, 5).join(", ")}` };
+  if (job.years) {
+    const y = yearsWorked(p);
+    if (y === null) return { met: false, why: `it asks for ${job.years}+ years and your work history has no dates` };
+    if (y < job.years) return { met: false, why: `it asks for ${job.years}+ years and your work history shows ${Math.floor(y)}` };
+  }
+  if (job.education) {
+    const need = degreeLevel(job.education);
+    if (need === null) return { met: false, why: `its education requirement ("${job.education.slice(0, 80)}") couldn't be matched to a degree` };
+    const have = Math.max(0, ...(p.education ?? []).map((e) => degreeLevel(e.degree) ?? 0));
+    if (have < need) return { met: false, why: `it asks for "${job.education.slice(0, 80)}" and your education doesn't show it` };
+  }
+  return { met: true, why: `all ${job.mustHave.length} must-haves match your profile` };
 }
 
 // ---------------------------------------------------------------------------
