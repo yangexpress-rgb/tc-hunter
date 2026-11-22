@@ -7,7 +7,7 @@ import {
 } from "@tc-hunter/domain";
 import {
   addFact, aiProviderSource, aiRefusalSink, aiUsageSink, answerAndContinue, applyStatus, approveDocument, getApplication, getPacket, listDocuments, listMatches,
-  markDiffViewed, mergeKnownCopies, requestApply, requestLink, requestTailor, runNextWork, saveAbout, saveAnswer, saveApplyMode, savePreferences, setAiProvider, trackJob,
+  markDiffViewed, mergeKnownCopies, rememberedQuestions, requestApply, requestLink, requestTailor, runNextWork, saveAbout, saveAnswer, saveApplyMode, savePreferences, setAiProvider, trackJob,
   type AppConfig, type ApplyDeps, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -188,6 +188,11 @@ describe("the link hunt lands on a posting TC Hunter already has (finder resolut
     expect(lRef).not.toBe(ownRef);
     second = await approveAndTrack(lRef);
     expect(second).not.toBe(first);
+    // Another Wiley job's form showed the relocation question too: asked up front from now on. (One job alone
+    // isn't enough: it may be that job's own question, and Yong is never asked anything that isn't needed.)
+    const key = "workday:wiley.wd1.myworkdayjobs.com";
+    expect((await rememberedQuestions(pool, key, [])).fields.map((f) => f.key)).toEqual([]);   // seen on one job only: not asked up front
+    await ownerQuery("UPDATE form_question SET job_posting_ids = job_posting_ids || gen_random_uuid() WHERE field_key = 'relocate'");
     browser.pages.length = 0;
     await runApplies();
 

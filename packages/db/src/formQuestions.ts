@@ -8,9 +8,10 @@ import type { FormField } from "@tc-hunter/domain";
  * at the start, not a stop on page 3 and another on page 5.
  *
  * Workday checks each page before it shows the next, so its later pages can't be read without filling the
- * earlier ones. What is remembered is what earlier runs on the same form saw; a question one of the employer's
- * jobs asked and another doesn't may be asked up front anyway (answering it does no harm: an answer to a
- * question this form doesn't show is never typed anywhere).
+ * earlier ones. What is remembered is what earlier runs on the same form saw. Yong (2026-11-22): never ask
+ * anything that isn't needed. A question only one other job showed may be that job's own, so it is asked up
+ * front only once two different jobs on the form showed it (or this same job did before); otherwise it waits
+ * for the page that shows it, and is answered there from saved information if it can be.
  */
 
 export function formKey(ats: string, tenant: string | null | undefined): string | null {
@@ -39,16 +40,16 @@ export async function rememberFormQuestions(pool: pg.Pool, key: string | null, p
 }
 
 /**
- * The questions to ask before filling: everything earlier runs saw on this form, keyed as the run keys them
- * ("p2|…"). Questions the site filled itself are returned as prefilled.
+ * The questions to ask before filling: those two jobs on this form showed, or this job showed before, keyed
+ * as the run keys them ("p2|…"). Questions the site filled itself are returned as prefilled.
  */
-export async function rememberedQuestions(pool: pg.Pool, key: string | null): Promise<{ fields: FormField[]; prefilled: Set<string> }> {
+export async function rememberedQuestions(pool: pg.Pool, key: string | null, postingIds: string[]): Promise<{ fields: FormField[]; prefilled: Set<string> }> {
   const prefilled = new Set<string>();
   if (!key) return { fields: [], prefilled };
   const rows = (await pool.query(
     `SELECT page, field_key, label, field_type, options, required, site_filled FROM form_question
-      WHERE form_key = $1
-      ORDER BY page, last_seen_at, field_key`, [key])).rows;
+      WHERE form_key = $1 AND (cardinality(job_posting_ids) >= 2 OR job_posting_ids && $2::uuid[])
+      ORDER BY page, last_seen_at, field_key`, [key, postingIds])).rows;
   const fields = rows.map((r) => {
     const k = `p${r.page}|${r.field_key}`;
     if (r.site_filled) prefilled.add(k);
