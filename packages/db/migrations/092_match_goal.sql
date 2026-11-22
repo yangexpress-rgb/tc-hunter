@@ -26,6 +26,7 @@ CREATE TABLE match_goal (
   reason_line     text,
   computed_at     timestamptz NOT NULL DEFAULT now(),
   fit_version     text,
+  created_at      timestamptz NOT NULL DEFAULT now(),
   UNIQUE (match_id, goal_id),
   FOREIGN KEY (match_id, applicant_id) REFERENCES match(id, applicant_id) ON DELETE CASCADE
 );
