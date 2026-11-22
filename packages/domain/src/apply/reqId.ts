@@ -108,3 +108,24 @@ export function reqIdHits(ids: string[], postings: RawPosting[]): RawPosting[] {
   }
   return hits;
 }
+
+/**
+ * The requisition IDs a posting is filed under in the catalogue (Phase 3: one job, one application): the
+ * IDs its address and its reader give, plus an ID its text names when it names exactly one (a text that
+ * names several may be listing other openings).
+ */
+export function ingestReqIds(p: RawPosting): string[] {
+  const own = postingReqIds(p);
+  const inText = reqIdsInText(p.descriptionText);
+  return [...new Set([...own, ...(inText.length === 1 ? inText : [])])];
+}
+
+/** A job address in the form two copies are compared in: host and path, no query, no language segment, no trailing slash. */
+export function sameJobUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.split("/").filter((s) => s && !/^[a-z]{2}-[A-Za-z]{2}$/.test(s)).join("/").toLowerCase();
+    return `${u.hostname.toLowerCase().replace(/^www\./, "")}/${path}`;
+  } catch { return null; }
+}

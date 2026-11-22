@@ -109,6 +109,9 @@ export default async function ApplicationPage(props: Props) {
       <Flash saved={saved} error={error} />
       <h1>{a.title}</h1>
       <p className="job-meta">{a.employer_canonical} · <a href={`/jobs/${a.job_ref}`}>See the job</a></p>
+      {a.duplicate_ref ? (
+        <p className="note">Same job as <a href={`/applications/${a.duplicate_ref}`}>{a.duplicate_ref}</a>. TC Hunter found this job twice and closed this copy, so it gets one application. Carry on with {a.duplicate_ref}.</p>
+      ) : null}
 
       {/* The status card: the same block as this application's row on the list, full size. */}
       <StatusBlock j={j} appRef={a.public_ref} back={back} card>

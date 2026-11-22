@@ -22,7 +22,7 @@ const SORT: Record<MatchSort, string> = {
 
 export async function listMatches(pool: pg.Pool, session: Session, f: MatchFilter = {}) {
   return withApplicant(pool, asApplicant(session), async (c) => {
-    const where: string[] = ["p.status = 'active' OR m.status = 'saved'"];
+    const where: string[] = ["p.status = 'active' OR m.status = 'saved'", "p.merged_into IS NULL"];
     const args: unknown[] = [];
     const st = f.status ?? "new";
     if (st === "new") where.push("m.status = 'new'");
@@ -44,7 +44,7 @@ export async function listMatches(pool: pg.Pool, session: Session, f: MatchFilte
               count(*) FILTER (WHERE m.status = 'saved')::int AS saved,
               count(*) FILTER (WHERE m.status IN ('dismissed','not_a_fit'))::int AS passed,
               count(*) FILTER (WHERE m.filtered AND m.status = 'new' AND p.status = 'active')::int AS filtered
-         FROM match m JOIN job_posting p ON p.id = m.job_posting_id`)).rows[0];
+         FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.merged_into IS NULL`)).rows[0];
     return { rows: r.rows, counts };
   });
 }
