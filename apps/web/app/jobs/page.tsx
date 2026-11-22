@@ -149,7 +149,7 @@ export default async function JobsPage(props: PageProps) {
         const first = sort === "g" ? "Jobs at your level and in your domain come first." : "Sort by G-score to put jobs at your level and in your domain first.";
         return (
           <p className="goal-targets">
-            {shown.length === 1 ? <>Your goal: {shown[0]![1]}. </> : <>Your goals: {shown.map(([g, l]) => `${goalLabel(g)}: ${l}`).join("; ")}. </>}
+            {shown.length === 1 ? <>Your goal{manyGoals ? `, ${goalLabel(shown[0]![0])}` : ""}: {shown[0]![1]}. </> : <>Your goals: {shown.map(([g, l]) => `${goalLabel(g)}: ${l}`).join("; ")}. </>}
             {first}
           </p>
         );
