@@ -610,3 +610,11 @@ ul.learned { margin: 8px 0 0; }
 ul.learned li { padding: 4px 0; }
 .stack-tight { display: grid; gap: 4px; }
 .fit-lines .adjusted { color: var(--muted); margin-top: 2px; }
+
+/* Goals on applications (multi-goal brief §6): the Goal filter, and changing an application's goal in one compact line. */
+.goal-seg { margin: 8px 0 12px; }
+.goal-change { align-items: center; margin-top: 4px; }
+.goal-change label { flex: 0 1 auto; display: inline-flex; gap: 8px; align-items: center; font-weight: 600; }
+.goal-change select { width: auto; min-width: 200px; }
+.goal-change .hint { flex-basis: 100%; }
+.goal-block:first-child { border-top: 0; padding-top: 0; margin-top: 0; }

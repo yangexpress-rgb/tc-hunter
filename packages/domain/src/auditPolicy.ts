@@ -23,6 +23,7 @@ export const AUDIT_ALLOWED_KEYS = {
   "application.passed": ["application_ref", "from"],
   "application.removed": ["application_ref", "from"],
   "application.restored": ["application_ref", "was", "to"],
+  "application.goal_changed": ["application_ref"],
   "calibration.changed": ["active", "rules_version"],
   "email.connected": ["provider", "how"],
   "email.disconnected": [],

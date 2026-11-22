@@ -218,11 +218,11 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
 }
 
 /** Asks for drafts for a job the applicant chose (by its job ref). */
-export async function requestTailor(pool: pg.Pool, session: Session, jobRef: string, kinds: DocKind[] = ["resume", "letter"]): Promise<string> {
+export async function requestTailor(pool: pg.Pool, session: Session, jobRef: string, kinds: DocKind[] = ["resume", "letter"], goal?: string | null): Promise<string> {
   return withApplicant(pool, asApplicant(session), async (c) => {
     const m = (await c.query("SELECT m.id FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
     if (!m) throw new DomainError("TC_NOT_FOUND");
-    await ensureApplication(c, jobRef, "tailoring");
+    await ensureApplication(c, jobRef, "tailoring", goal);
     const r = await c.query(
       `INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING RETURNING id`,
       [JSON.stringify({ match_id: m.id, kinds })]);

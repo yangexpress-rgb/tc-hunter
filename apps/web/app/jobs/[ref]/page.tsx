@@ -39,6 +39,9 @@ export default async function JobPage(props: Props) {
   // With more than one goal in use, the G-score is shown goal by goal, primary first (multi-goal brief §5.2).
   const manyGoals = goals.filter((g) => g.active).length > 1 && perGoal.length > 0;
   const labelOf = new Map(goals.map((g) => [g.id, goalLabel(g)]));
+  // Opened from a goal's list: tracking or preparing it here stamps the application with that goal (§6).
+  const ctxGoal = manyGoals && perGoal.some((x) => x.goal_id === params.goal) ? params.goal : undefined;
+  const goalInput = ctxGoal ? <input type="hidden" name="goal" value={ctxGoal} /> : null;
   const lastResult = (work?.status === "done" ? work.result ?? {} : {}) as { empty?: boolean };
   const tracked = apps.find((a) => a.job_ref === m.public_ref);
   // A tracked job shows the application's own status card, stepper and "Your documents", worked out exactly as the
@@ -80,7 +83,7 @@ export default async function JobPage(props: Props) {
   return (
     <>
       <TopBar signedIn />
-      <p><a href="/jobs">← All jobs</a></p>
+      <p><a href={ctxGoal ? `/jobs?goal=${ctxGoal}` : "/jobs"}>← All jobs</a></p>
       <Flash saved={saved} error={error} />
       <div className="job-head">
         <FitScores r={m} />
@@ -149,7 +152,7 @@ export default async function JobPage(props: Props) {
         </>
       ) : (
         <form action={trackAction} className="inline-actions">
-          <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
+          <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />{goalInput}
           <button className="secondary">Track this job</button>
           <span className="hint">Adds it to your applications so you can keep notes and follow-ups.</span>
         </form>
@@ -162,7 +165,7 @@ export default async function JobPage(props: Props) {
           packet={tracked ? packetLine ?? null : undefined} packetHref={tracked ? `/applications/${tracked.public_ref}#packet` : "#packet"} problem={journey?.tone === "problem"}>
           {!preparing && m.posting_status === "active" ? (
             <form action={tailorAction} id="prepare" className="doc-prepare">
-              <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />
+              <input type="hidden" name="job" value={m.public_ref} /><input type="hidden" name="back" value={back} />{goalInput}
               {minScore !== null && m.score < minScore && !docs.length ? <p className="muted">This job scores below the {minScore} you set for preparing resumes.</p> : null}
               <button className={docs.length ? "secondary" : ""}>{docs.length ? "Prepare a fresh draft" : "Prepare a resume for this job"}</button>
               <p className="hint">Makes a resume and a cover letter from your profile as it is now, in its own words. Nothing is sent anywhere.</p>

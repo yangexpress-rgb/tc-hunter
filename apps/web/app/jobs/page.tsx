@@ -78,7 +78,12 @@ export default async function JobsPage(props: PageProps) {
     : undefined;
   // The rows are already in the goal context's order and numbers (SQL); the chip names that goal, or the primary one.
   const rows = sortRows(doneRow ? [...filtered, doneRow] : filtered, ...SORT_KEY[sort])
-    .map((r) => manyGoals && r.goal_id && labelOf.has(r.goal_id) ? { ...r, goal_label: labelOf.get(r.goal_id) } : r);
+    .map((r): Record<string, any> => ({
+      ...r,
+      ...(manyGoals && r.goal_id && labelOf.has(r.goal_id) ? { goal_label: labelOf.get(r.goal_id) } : {}),
+      // Opened from a goal's list, the job page knows the goal, so tracking or preparing it stamps that goal (§6).
+      ...(goal ? { job_href: `/jobs/${r.public_ref}?goal=${goal}` } : {}),
+    }));
   const at = doneRow ? rows.findIndex((r) => r.id === doneRow.id) : -1;
   const nextId: string | undefined = at >= 0 ? (rows[at + 1] ?? rows[at - 1])?.id : undefined;
   const narrowed = filtered.length !== matched.rows.length;
@@ -144,7 +149,7 @@ export default async function JobsPage(props: PageProps) {
         const first = sort === "g" ? "Jobs at your level and in your domain come first." : "Sort by G-score to put jobs at your level and in your domain first.";
         return (
           <p className="goal-targets">
-            {shown.length === 1 ? <>Your goal: {shown[0]![1]}. </> : <>Your goals: {shown.map(([g, l]) => `${goalLabel(g)}: ${l}`).join("; ")}. </>}
+            {shown.length === 1 ? <>Your goal{manyGoals ? `, ${goalLabel(shown[0]![0])}` : ""}: {shown[0]![1]}. </> : <>Your goals: {shown.map(([g, l]) => `${goalLabel(g)}: ${l}`).join("; ")}. </>}
             {first}
           </p>
         );
@@ -175,7 +180,7 @@ export default async function JobsPage(props: PageProps) {
             <li key={r.id} id={`job-${r.id}`} className={`job-row${r.filtered ? " is-filtered" : ""}${r.seen_at ? "" : " is-unseen"}`}>
               <FitScores r={r} />
               <div className="job-main">
-                <a className="job-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>
+                <a className="job-title" href={r.job_href ?? `/jobs/${r.public_ref}`}>{r.title}</a>
                 <div className="job-meta">{jobLevelKey(r.title ?? "") !== "none" ? `${jobLevelLabel(jobLevelKey(r.title ?? ""))} · ` : ""}{r.employer_canonical} · {place(r)}{pay(r) ? ` · ${pay(r)}` : ""} · {posted(r.posted_at)}</div>
                 {r.goal_label ? <div className="job-tags"><GoalChip label={r.goal_label} /></div> : null}
                 <FitLines r={r} />

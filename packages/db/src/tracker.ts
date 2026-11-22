@@ -31,19 +31,34 @@ export async function tz(c: pg.PoolClient): Promise<string> {
 }
 
 /** Track a job: one application per job (database-unique). Saves the match too. Returns the application ref. */
-export async function trackJob(pool: pg.Pool, session: Session, jobRef: string, stage: ApplicationStage = "interested"): Promise<string> {
-  return withApplicant(pool, asApplicant(session), async (c) => ensureApplication(c, jobRef, stage));
+export async function trackJob(pool: pg.Pool, session: Session, jobRef: string, stage: ApplicationStage = "interested", goal?: string | null): Promise<string> {
+  return withApplicant(pool, asApplicant(session), async (c) => ensureApplication(c, jobRef, stage, goal));
 }
 
-/** Used by tracking, and when the applicant starts tailoring or approves a resume: moves forward only, never back. */
-export async function ensureApplication(c: pg.PoolClient, jobRef: string, atLeast: ApplicationStage): Promise<string> {
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The goal a new application is stamped with (multi-goal brief §6): the goal the applicant was looking
+ * at (the Jobs goal filter, passed through), if it's theirs and the job was scored against it; else the
+ * job's primary goal.
+ */
+async function goalToStamp(c: pg.PoolClient, matchId: string, wanted?: string | null): Promise<string | null> {
+  if (wanted && UUID.test(wanted) && (await c.query("SELECT 1 FROM match_goal WHERE match_id = $1 AND goal_id = $2", [matchId, wanted])).rowCount) return wanted;
+  return (await c.query("SELECT goal_id FROM match WHERE id = $1", [matchId])).rows[0]?.goal_id ?? null;
+}
+
+/**
+ * Used by tracking, and when the applicant starts tailoring or approves a resume: moves forward only, never back.
+ * A new application is stamped with its goal (`goal`, see goalToStamp); an existing one keeps its stamp.
+ */
+export async function ensureApplication(c: pg.PoolClient, jobRef: string, atLeast: ApplicationStage, goal?: string | null): Promise<string> {
   const m = (await c.query("SELECT m.id, m.job_posting_id, m.status FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
   if (!m) throw new DomainError("TC_NOT_FOUND");
   if (m.status === "new") await c.query("UPDATE match SET status = 'saved' WHERE id = $1", [m.id]);
   let a = (await c.query("SELECT id, public_ref, stage, duplicate_of, outcome_tag FROM application WHERE job_posting_id = $1", [m.job_posting_id])).rows[0];
   // Passed on or removed from the tracker, then tracked (or tailored, or applied for) again: it opens again.
   if (a && a.stage === "withdrawn" && SET_ASIDE.includes(a.outcome_tag)) {
-    await c.query("UPDATE application SET stage = $2, stage_set_by = 'applicant', updated_at = now() WHERE id = $1", [a.id, atLeast]);
+    await c.query("UPDATE application SET stage = $2, stage_set_by = 'applicant', goal_id = coalesce(goal_id, $3), updated_at = now() WHERE id = $1", [a.id, atLeast, await goalToStamp(c, m.id, goal)]);
     if (a.outcome_tag === "passed") await c.query("UPDATE match SET status = 'saved' WHERE id = $1 AND status IN ('dismissed','not_a_fit')", [m.id]);
     return a.public_ref;
   }
@@ -62,12 +77,13 @@ export async function ensureApplication(c: pg.PoolClient, jobRef: string, atLeas
   if (!a) {
     if ((await c.query("SELECT 1 FROM application WHERE job_posting_id = $1", [m.job_posting_id])).rowCount) {
       // This copy's own application was closed as the same job and nothing else is live: it opens again.
-      const r = await c.query("UPDATE application SET stage = $2, stage_set_by = 'applicant', duplicate_of = NULL, outcome_tag = NULL, updated_at = now() WHERE job_posting_id = $1 RETURNING public_ref", [m.job_posting_id, atLeast]);
+      const r = await c.query("UPDATE application SET stage = $2, stage_set_by = 'applicant', duplicate_of = NULL, outcome_tag = NULL, goal_id = coalesce(goal_id, $3), updated_at = now() WHERE job_posting_id = $1 RETURNING public_ref",
+        [m.job_posting_id, atLeast, await goalToStamp(c, m.id, goal)]);
       return r.rows[0].public_ref;
     }
     const r = await c.query(
-      "INSERT INTO application (applicant_id, job_posting_id, match_id, stage, stage_set_by) VALUES (app_applicant_id(), $1, $2, $3, 'applicant') RETURNING public_ref",
-      [m.job_posting_id, m.id, atLeast]);
+      "INSERT INTO application (applicant_id, job_posting_id, match_id, stage, stage_set_by, goal_id) VALUES (app_applicant_id(), $1, $2, $3, 'applicant', $4) RETURNING public_ref",
+      [m.job_posting_id, m.id, atLeast, await goalToStamp(c, m.id, goal)]);
     return r.rows[0].public_ref;
   }
   const order = ["interested", "tailoring", "ready_to_apply"];
@@ -210,6 +226,19 @@ const APP_SELECT = `
          (SELECT d.public_ref FROM application d WHERE d.id = a.duplicate_of) AS duplicate_ref,
          (SELECT array_agg(DISTINCT s.name) FROM job_posting_source ps JOIN job_source s ON s.id = ps.job_source_id WHERE ps.job_posting_id = p.id) AS sources
     FROM application a JOIN job_posting p ON p.id = a.job_posting_id LEFT JOIN match m ON m.id = a.match_id`;
+
+/**
+ * The applicant changes which goal an application serves (multi-goal brief §6). Only the applicant
+ * does this: rescoring never moves the stamp. Documents already prepared keep the goal they were made under.
+ */
+export async function setApplicationGoal(pool: pg.Pool, session: Session, appRef: string, goalId: string): Promise<void> {
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    if (!UUID.test(goalId) || !(await c.query("SELECT 1 FROM hunt_goal WHERE id = $1", [goalId])).rowCount) throw new DomainError("TC_NOT_FOUND");
+    const r = await c.query("UPDATE application SET goal_id = $2, updated_at = now() WHERE public_ref = $1 RETURNING id", [appRef, goalId]);
+    if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");
+    await recordAudit(c, "application.goal_changed", { objectType: "application", objectId: r.rows[0].id, payload: { application_ref: appRef } });
+  });
+}
 
 /** The tracker's list: everything but applications the applicant removed from it. */
 export async function listApplications(pool: pg.Pool, session: Session) {

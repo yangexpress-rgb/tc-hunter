@@ -2,7 +2,7 @@
 import { redirect } from "next/navigation";
 import {
   acceptCalibration, acceptEmailSignal, answerAndContinue, storyText, giveUpHandover, handBackHandover, answerPacketField, approvePacket, passApplication, removeApplication, restoreApplication, approveSending, approveServerSend, continueAfterAnswers, continueIfAnswered, getApplySettings, markSubmitted, requestApply,
-  resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, savePersonalAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setStage, trackJob,
+  resolveOutcome, dismissEmailSignal, resetCalibration, saveWorkAuthAnswer, savePersonalAnswer, setStandingAnswer, setInterview, setNextStep, setNotes, setOutcome, setApplicationGoal, setStage, trackJob,
 } from "@tc-hunter/db";
 import { errorCode, type ApplicationStage } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
@@ -36,7 +36,8 @@ export async function trackAction(form: FormData) {
   const s = await requireSession();
   const job = String(form.get("job") ?? "");
   let ref = "";
-  try { ref = await trackJob(app().pool, s, job); } catch (e) {
+  // The goal the applicant was looking at on Jobs, if any: the application is stamped with it (multi-goal §6).
+  try { ref = await trackJob(app().pool, s, job, "interested", str(form, "goal")); } catch (e) {
     redirect(withParam(backTo(form, `/jobs/${job}`), "e", errorCode(e) ?? "TC_UNKNOWN"));
   }
   redirect(`/applications/${ref}?saved=1`);
@@ -68,6 +69,13 @@ export async function interviewAction(form: FormData) {
   const s = await requireSession();
   const ref = String(form.get("app") ?? "");
   await act(form, () => setInterview(app().pool, s, ref, form.get("clear") === "1" ? null : str(form, "interview_at")), `/applications/${ref}`);
+}
+
+/** The applicant moves an application to another of their goals (multi-goal brief §6). */
+export async function goalAction(form: FormData) {
+  const s = await requireSession();
+  const ref = String(form.get("app") ?? "");
+  await act(form, () => setApplicationGoal(app().pool, s, ref, String(form.get("goal") ?? "")), `/applications/${ref}`);
 }
 
 export async function notesAction(form: FormData) {
