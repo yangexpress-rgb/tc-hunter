@@ -100,7 +100,7 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     expect(pref.detail[0]).toBe("Closest to your goal: Operations Analyst.");
     expect(d!.ladder_tag).not.toBeNull();  // from the someday goal (COO), though it isn't used to find jobs
     // G-score against the goal it fits, C-score against the applicant's record (Yong, 2026-11-18).
-    expect(ops.fit_version).toBe("fit-3");
+    expect(ops.fit_version).toBe("fit-4");
     expect(ops.g_score).toBeGreaterThanOrEqual(60);
     expect(ops.g_summary).toMatch(/for Operations Analyst/);
     expect(typeof ops.c_score).toBe("number");

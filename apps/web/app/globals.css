@@ -294,6 +294,12 @@ button.link.danger { color: var(--error); }
 .dialog-body { padding: 16px 20px 20px; }
 .dialog-body .fields label { display: block; margin-bottom: 12px; }
 .dialog-body input, .dialog-body select, .dialog-body textarea { width: 100%; }
+/* Tick boxes keep their own size, sit beside their label, and line up in columns (Yong, 2026-11-22). */
+.dialog-body input[type="checkbox"], .dialog-body input[type="radio"] { width: auto; flex: none; margin: 0; }
+.dialog-body fieldset { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px 16px; align-items: start; }
+.dialog-body fieldset > legend, .dialog-body fieldset > .hint { grid-column: 1 / -1; }
+.dialog-body fieldset label.check { justify-content: flex-start; align-items: flex-start; text-align: left; line-height: 1.3; }
+.dialog-body fieldset label.check input { margin-top: 2px; }
 .dialog-remove { display: block; margin-top: 12px; }
 .dialog-section { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 .dialog-section h3 { margin: 0 0 6px; font-size: 16px; }

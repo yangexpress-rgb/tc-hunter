@@ -1,29 +1,117 @@
 {
-  "about": "Ranking fixtures (2026-11-22), run in No AI mode. Goal shaped like Yong's: enterprise solution and product leadership, digital and agentic transformation; no level boxes ticked (the band comes from the roles: Director to VP); industries 'Information technology' (domains: enterprise_it). The same description is used for #1 and #2 so their skill overlap is identical.",
+  "about": "Ranking fixtures (2026-11-22), run in No AI mode. Goal shaped like Yong's: enterprise solution and product leadership, digital and agentic transformation; no level boxes ticked (the band comes from the roles: Director to VP); industries Information technology, IT products, Digital transformation, Agentic transformation, Technology professional services (domains: the technology family). The same description is used for #1 and #2 so their skill overlap is identical.",
   "goal": {
-    "roles": ["Director of Enterprise Solutions", "VP, Digital & Agentic Transformation", "Head of Product, Enterprise Platform"],
+    "roles": [
+      "Director of Enterprise Solutions",
+      "VP, Digital & Agentic Transformation",
+      "Head of Product, Enterprise Platform"
+    ],
     "occupation": "Enterprise solution and product leadership",
-    "industries": ["Information technology"],
+    "industries": [
+      "Information technology",
+      "IT products",
+      "Digital transformation",
+      "Agentic transformation",
+      "Technology professional services"
+    ],
     "levels": []
   },
   "sharedDescription": "Lead product strategy and roadmap for a portfolio of enterprise products. Partner with engineering, sales and customer success. Drive transformation programs, stakeholder management and executive communication. 12+ years of product leadership.",
   "jobs": [
-    { "id": 1, "title": "Senior Director, Product Management - Enterprise Systems", "employer": "CRM Cloud Co", "employerIndustry": "enterprise_it", "useShared": true, "expectTier": 1 },
-    { "id": 2, "title": "Senior Director, Product Management - Medical Devices", "employer": "MedTech Devices", "useShared": true, "expectTier": 3, "expectReason": "different_domain" },
-    { "id": 3, "title": "Senior Software Engineer, Platform", "employer": "Platform Software", "description": "Build platform services in Java, Kotlin and AWS. Kubernetes, microservices, CI/CD, SQL, Python. Enterprise platform, product strategy, transformation, stakeholder management.", "expectTier": 3, "expectReason": "off_track_engineering" },
-    { "id": 4, "title": "Operations Analyst", "employer": "Ops Group", "description": "Weekly reporting, Excel and process improvement for the operations team. 1-2 years of experience.", "years": 2, "expectTier": 3, "expectReason": "below_level" },
-    { "id": 5, "title": "VP, Digital Transformation", "employer": "Mercy Health System", "employerIndustry": "healthcare_medical", "description": "Lead the health system's digital transformation: enterprise platforms, cloud, data and AI.", "expectTier": 1 },
-    { "id": 6, "title": "Director, Supply Chain Operations", "employer": "Freight Logistics", "description": "Lead supply chain, logistics, warehouse and procurement operations.", "expectTier": 3, "expectReason": "different_domain" }
+    {
+      "id": 1,
+      "title": "Senior Director, Product Management - Enterprise Systems",
+      "employer": "CRM Cloud Co",
+      "employerIndustry": "enterprise_it",
+      "useShared": true,
+      "expectTier": 1
+    },
+    {
+      "id": 2,
+      "title": "Senior Director, Product Management - Medical Devices",
+      "employer": "MedTech Devices",
+      "useShared": true,
+      "expectTier": 3,
+      "expectReason": "different_domain"
+    },
+    {
+      "id": 3,
+      "title": "Senior Software Engineer, Platform",
+      "employer": "Platform Software",
+      "description": "Build platform services in Java, Kotlin and AWS. Kubernetes, microservices, CI/CD, SQL, Python. Enterprise platform, product strategy, transformation, stakeholder management.",
+      "expectTier": 3,
+      "expectReason": "off_track_engineering"
+    },
+    {
+      "id": 4,
+      "title": "Operations Analyst",
+      "employer": "Ops Group",
+      "description": "Weekly reporting, Excel and process improvement for the operations team. 1-2 years of experience.",
+      "years": 2,
+      "expectTier": 3,
+      "expectReason": "below_level"
+    },
+    {
+      "id": 5,
+      "title": "VP, Digital Transformation",
+      "employer": "Mercy Health System",
+      "employerIndustry": "healthcare_medical",
+      "description": "Lead the health system's digital transformation: enterprise platforms, cloud, data and AI.",
+      "expectTier": 1
+    },
+    {
+      "id": 6,
+      "title": "Director, Supply Chain Operations",
+      "employer": "Freight Logistics",
+      "description": "Lead supply chain, logistics, warehouse and procurement operations.",
+      "expectTier": 3,
+      "expectReason": "different_domain"
+    }
   ],
-  "expectOrder": [5, 1, 2, 6, 3, 4],
+  "expectOrder": [
+    5,
+    1,
+    2,
+    6,
+    3,
+    4
+  ],
   "adjacent": {
-    "goal": { "roles": ["Director of Product Management"], "industries": ["Healthcare"], "levels": ["director", "senior_director"] },
-    "job": { "title": "Director, Product Management - Life Sciences Platform", "employer": "LabCloud", "description": "Own the roadmap for our platform used by pharma and biotech research teams." },
+    "goal": {
+      "roles": [
+        "Director of Product Management"
+      ],
+      "industries": [
+        "Healthcare"
+      ],
+      "levels": [
+        "director",
+        "senior_director"
+      ]
+    },
+    "job": {
+      "title": "Director, Product Management - Life Sciences Platform",
+      "employer": "LabCloud",
+      "description": "Own the roadmap for our platform used by pharma and biotech research teams."
+    },
     "expectTier": 2,
     "expectReason": "near_domain"
   },
   "noTargets": {
-    "goal": { "roles": ["Operations Analyst", "Business Analyst"], "industries": [], "levels": [] },
-    "titles": ["Operations Analyst", "Senior Software Engineer, Platform", "Director, Supply Chain Operations", "Business Analyst II", "VP, Digital Transformation"]
+    "goal": {
+      "roles": [
+        "Operations Analyst",
+        "Business Analyst"
+      ],
+      "industries": [],
+      "levels": []
+    },
+    "titles": [
+      "Operations Analyst",
+      "Senior Software Engineer, Platform",
+      "Director, Supply Chain Operations",
+      "Business Analyst II",
+      "VP, Digital Transformation"
+    ]
   }
 }
