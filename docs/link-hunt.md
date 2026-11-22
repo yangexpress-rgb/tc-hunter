@@ -30,6 +30,16 @@ record. The status line itself stays plain.
 
 `findOnEmployerSite` never throws. A site that breaks mid-read ends in `read_failed`.
 
+**The hunt uses up the ladder before a run ends** (Yong, 2026-11-22 review). A miss on one board
+(`job_not_listed`, `ambiguous`, or a refused or broken read) goes on the trail and the hunt moves to
+the next step, searching each newly found board the same way (requisition ID first). A board already
+searched in the run is skipped and noted ("… already searched"); the step 3 and 4 probes skip it too,
+so they go on to the next board. When every step is used up without a match, the run ends with the
+most telling miss: `ambiguous`, then "listed only elsewhere", then not listed, then a refused or
+broken read. The retry policy below then applies to that class, unchanged. A board that no longer
+answers is still passed over; `sends_back` and `unsupported` still end the run at once; the page and
+effort bounds are unchanged.
+
 ## One retry policy
 
 The five transient failure classes are retried the same way:
@@ -88,6 +98,9 @@ server's own retries still run.
 - `packages/domain/test/link-hunt.test.ts`: requisition IDs (and what is never taken for one), the
   ID outranking titles, consistency (same input gives the same decision and trail, in any order),
   each ladder step, and each failure class. No careers lookup is passed (No AI).
+  Using up the ladder: the remembered board doesn't list the job and a later step finds it on
+  another board in the same run (both boards on the trail); no board lists it (same `job_not_listed`
+  class, each board searched once); the most telling of several misses ends the run.
 - `packages/db/test/link-hunt.test.ts`, in No AI mode with trap AI clients:
   - Acceptance fixture 3, the retry replay: a board that refuses the first read, then a job posted
     between tries, is found and applied for with no one pressing anything, and the status card

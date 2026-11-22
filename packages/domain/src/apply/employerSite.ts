@@ -240,7 +240,9 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
         : pick.why === "elsewhere" ? `${q.employer}'s careers site (${where}) lists ${pick.near}, which isn't in ${q.location}`
         : `"${q.title}" isn't on ${q.employer}'s careers site (${where}) now${pick.near ? `; the closest is "${pick.near}"` : ""}. It may be closed, or listed only on the job site`;
       log(7, pick.why === "several" ? `several fit: ${(pick.rivals ?? []).join("; ")}` : pick.why === "elsewhere" ? `only elsewhere: ${pick.near}` : `not listed${pick.near ? ` (closest: "${pick.near}")` : ""}`);
-      return fail(pick.why === "several" ? "ambiguous" : "job_not_listed", 7, reason, spec);
+      const miss = fail(pick.why === "several" ? "ambiguous" : "job_not_listed", 7, reason, spec);
+      if (pick.why === "elsewhere") elsewhere.add(miss);
+      return miss;
     }
     log(7, pick.by === "req_id" ? `matched by requisition ID: "${pick.posting.title}"` : `matched by title: "${pick.posting.title}"`);
     return done(pick.posting, pick.score, pick.by, spec);
@@ -249,6 +251,47 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
     const url = p.applyUrl && !isNoFetchHost(p.applyUrl) ? p.applyUrl : p.url;
     if (isNoFetchHost(url)) return fail("sends_back", 7, `${q.employer}'s own listing sends applicants back to the job site`, spec);
     return { found: true, url, title: p.title, location: p.locationRaw, score, spec, by, trail };
+  };
+
+  // Every board this run has searched ("greenhouse:acme"), and the match failures met on the way. A
+  // failure on one board doesn't end the hunt (Yong, 2026-11-22 review): the ladder goes on, and only
+  // when every step is used up does the run end, with the most telling failure of all it met.
+  const searched = new Set<string>();
+  const misses: Array<{ r: EmployerJobResult; rank: number }> = [];
+  /** Misses where the job is listed, but only somewhere else (more telling than not listed at all). */
+  const elsewhere = new WeakSet<EmployerJobResult>();
+  const rankOf = (r: EmployerJobResult): number => {
+    if (r.found) return 99;
+    if (r.failure === "ambiguous") return 4;
+    if (r.failure === "job_not_listed") return elsewhere.has(r) ? 3 : 2;
+    return r.failure === "board_refused" ? 1 : 0;
+  };
+  /** Search one board unless this run already has. A found job or a final end is returned; a miss is kept and null lets the ladder go on. */
+  const tryBoard = async (spec: SourceSpec, at: number): Promise<EmployerJobResult | null> => {
+    const id = `${spec.kind}:${spec.key}`;
+    if (searched.has(id)) { log(at, `${hostOf(spec.url)} already searched`); return null; }
+    searched.add(id);
+    const r = await searchBoard(spec, at);
+    if (r === "gone") { log(at, `${hostOf(spec.url)} no longer lists jobs`); return null; }
+    return keep(r);
+  };
+  const keep = (r: EmployerJobResult): EmployerJobResult | null => {
+    if (r.found || r.failure === "sends_back" || r.failure === "unsupported") return r;
+    misses.push({ r, rank: rankOf(r) });
+    return null;
+  };
+  /** The run's end with no match: the most telling failure (ambiguous, then elsewhere, then not listed, then a refusal or a broken read). */
+  const best = (): EmployerJobResult | null => {
+    if (!misses.length) return null;
+    const top = misses.reduce((a, b) => (b.rank > a.rank ? b : a));
+    return { ...top.r, trail } as EmployerJobResult;
+  };
+  const avature = async (base: string): Promise<EmployerJobResult | null> => {
+    const id = `avature:${base.replace(/\/$/, "")}`;
+    if (searched.has(id)) { log(5, `${hostOf(base)} already searched`); return null; }
+    searched.add(id);
+    log(5, "searching it");
+    return keep(withTrail(await findOnAvature(q, base, f), trail));
   };
 
   try {
@@ -270,22 +313,27 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
     const known = opts.known && SUPPORTED.has(opts.known.kind) && !isNoFetchHost(opts.known.url) ? opts.known : null;
     let careersUrl: string | null = known?.kind === "careers_page" ? known.url : null;
     // An Avature careers site (Siemens) is searched directly: its job list isn't a feed TC Hunter reads otherwise.
-    if (careersUrl && isAvature(careersUrl)) { log(1, hostOf(careersUrl)); log(5, "searching it"); return withTrail(await findOnAvature(q, careersUrl, f), trail); }
+    if (careersUrl && isAvature(careersUrl)) {
+      log(1, hostOf(careersUrl));
+      const r = await avature(careersUrl);
+      if (r) return r;
+    }
     for (const board of [known, fromPosting].filter((x): x is SourceSpec => !!x && x.kind !== "careers_page")) {
       log(1, hostOf(board.url));
-      const r = await searchBoard(board, 1);
-      if (r !== "gone") return r;
-      log(1, `${hostOf(board.url)} no longer lists jobs`);
+      const r = await tryBoard(board, 1);
+      if (r) return r;
     }
     if (!known && !fromPosting) log(1, "nothing yet");
 
-    // 3. The usual board names on Greenhouse, Lever, Ashby, SmartRecruiters and Workday.
+    // 3. The usual board names on Greenhouse, Lever, Ashby, SmartRecruiters and Workday. Boards this
+    // run already searched are skipped, so a miss on the remembered board moves on to the next one.
     let spec: SourceSpec | null = known?.kind === "careers_page" ? known : null;
     let system: string | null = null;
     try {
       if (!spec) {
-        spec = await findBoard({ name: q.employer }, f);
-        log(3, spec ? hostOf(spec.url) : "none answered");
+        spec = await findBoard({ name: q.employer }, f, new Set(searched));
+        log(3, spec ? hostOf(spec.url) : searched.size ? "no other board answered" : "none answered");
+        if (spec) { const r = await tryBoard(spec, 3); if (r) return r; spec = null; }
       }
       // An AI mode only: the careers lookup's hints, checked like any guess. No AI never asks.
       if (!spec && opts.lookup) {
@@ -293,50 +341,63 @@ export async function findOnEmployerSite(q: EmployerJobQuery, f: Fetcher, opts: 
         if (idea) {
           careersUrl = idea.careersUrl ?? careersUrl;
           system = idea.careersUrl ? unreadableCareersSystem(idea.careersUrl) : null;
-          spec = await findBoard({ name: q.employer, boards: idea.boards, careersUrl: idea.careersUrl }, f);
+          spec = await findBoard({ name: q.employer, boards: idea.boards, careersUrl: idea.careersUrl }, f, new Set(searched));
           log(3, `AI hint: ${spec ? hostOf(spec.url) : "nothing that checked out"}`);
+          if (spec && spec.kind !== "careers_page") { const r = await tryBoard(spec, 3); if (r) return r; spec = null; }
         }
       }
       // 4. The employer's usual careers addresses (capitalonecareers.com, careers.acme.com…), each read
-      // for a link to its hiring system or for jobs, following Careers links.
+      // for a link to its hiring system or for jobs, following Careers links. Each board found is searched
+      // straight away; a miss there moves on to the next address.
       if (!spec && !careersUrl) {
-        const tried = new Set(tokenGuesses(q.employer).flatMap((t) => ["greenhouse", "lever", "ashby", "smartrecruiters"].map((k) => `${k}:${t}`)));
+        const guessed = tokenGuesses(q.employer).flatMap((t) => ["greenhouse", "lever", "ashby", "smartrecruiters"].map((k) => `${k}:${t}`));
+        let led = false;
         for (const guess of careersGuesses(q.employer)) {
-          spec = await findBoard({ name: q.employer, careersUrl: guess }, f, tried).catch((e) => { if (e instanceof SourceRefusedError) return null; throw e; });
-          if (spec) break;
+          const found = await findBoard({ name: q.employer, careersUrl: guess }, f, new Set([...guessed, ...searched])).catch((e) => { if (e instanceof SourceRefusedError) return null; throw e; });
+          if (!found) continue;
+          led = true;
+          log(4, hostOf(found.url));
+          if (found.kind === "careers_page") { spec = found; break; }
+          const r = await tryBoard(found, 4);
+          if (r) return r;
         }
-        log(4, spec ? hostOf(spec.url) : "none led to a hiring site");
+        if (!led) log(4, "none led to a hiring site");
       }
     } catch (e) {
       if (e instanceof SourceRefusedError) {
         log(3, "its careers site turned it away");
-        return fail(refusedWhy(e), 3, `${q.employer}'s careers site turned it away`);
-      }
-      throw e;
+        const r = keep(fail(refusedWhy(e), 3, `${q.employer}'s careers site turned it away`));
+        if (r) return r;
+      } else throw e;
     }
     // 5. Avature, when the careers site is one.
     if ((!spec || spec.kind === "careers_page") && careersUrl) {
       const base = await avatureBase(careersUrl, f).catch(() => null);
-      if (base) { log(5, "searching it"); return withTrail(await findOnAvature(q, base, f), trail); }
+      if (base) { const r = await avature(base); if (r) return r; }
     }
     // 6. Still nothing: look around the employer's own website in a real browser, as a person would
     // (Yong, 2026-11-21: "the right link should be searched … automatically").
     if (!spec && !system && opts.browse) {
       const home = tokenGuesses(q.employer)[0];
       const starts = [...(opts.hints ?? []), ...(careersUrl ? [careersUrl] : []), ...(home ? [`https://www.${home}.com/`] : []), ...careersGuesses(q.employer)];
-      spec = await hiringSiteByBrowsing(starts, q.employer, opts.browse()).catch(() => null);
-      log(6, spec ? hostOf(spec.url) : "no careers link led to a hiring site");
+      const walked = await hiringSiteByBrowsing(starts, q.employer, opts.browse()).catch(() => null);
+      log(6, walked ? hostOf(walked.url) : "no careers link led to a hiring site");
+      if (walked) { const r = await tryBoard(walked, 6); if (r) return r; }
     }
-    if (!spec) {
-      return system
-        ? fail("unsupported", 3, `${q.employer}'s careers site runs on ${system}, which it can't search yet`)
-        : fail("no_board", 6, `it couldn't find ${q.employer}'s careers site`);
+    // A careers page with its own jobs (no hiring system behind it) is searched last.
+    if (spec) {
+      const r = await tryBoard(spec, 3);
+      if (r) return r;
     }
-    const r = await searchBoard(spec, 3);
-    return r === "gone" ? fail("no_board", 3, `it couldn't find ${q.employer}'s careers site`) : r;
+    // Every step used up: the most telling miss, or why there was no board to search at all.
+    const miss = best();
+    if (miss) return miss;
+    if (system) return fail("unsupported", 3, `${q.employer}'s careers site runs on ${system}, which it can't search yet`);
+    return fail("no_board", searched.size ? 3 : 6, `it couldn't find ${q.employer}'s careers site`);
   } catch (e) {
     log(trail.at(-1)?.step ?? 0, `a site couldn't be reached (${String((e as Error)?.message ?? e).slice(0, 80)})`);
-    return fail("read_failed", trail.at(-1)?.step ?? 0, `${q.employer}'s site couldn't be reached just now`);
+    keep(fail("read_failed", trail.at(-1)?.step ?? 0, `${q.employer}'s site couldn't be reached just now`));
+    return best()!;
   }
 }
 

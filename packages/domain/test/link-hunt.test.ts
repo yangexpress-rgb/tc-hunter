@@ -159,3 +159,60 @@ describe("one failure class for each way it can fail (§B retry policy)", () => 
     for (const x of ["sends_back", "unsupported"]) expect(isTransientLinkFailure(x)).toBe(false);
   });
 });
+
+describe("the hunt uses up the ladder before it ends (Yong, 2026-11-22 review)", () => {
+  const q = { employer: "Acme", title: "Operations Analyst", location: "Remote" };
+  // The board TC Hunter remembers for Acme ("acmecorp") answers, but this job isn't on it.
+  const remembered: SourceSpec = { ...acme, key: "acmecorp", url: "https://job-boards.greenhouse.io/acmecorp" };
+  const outcomes = (r: EmployerJobResult) => r.trail.map((t) => `${t.step}: ${t.outcome}`);
+
+  it("the remembered board doesn't list the job, a later step finds it on another board: found in the same run, both boards on the trail", async () => {
+    const f = sites({ ...ghBoard("acmecorp", [ghJob(42, "Data Engineer", "Remote", "acmecorp")]), ...ghBoard("acme", [ghJob(41, "Operations Analyst", "Remote")]) });
+    const r = await findOnEmployerSite(q, f, { known: remembered });
+    expect(r).toMatchObject({ found: true, url: "https://job-boards.greenhouse.io/acme/jobs/41", by: "title" });
+    expect(outcomes(r)).toEqual([
+      "0: it has no link to the employer",
+      "1: job-boards.greenhouse.io",
+      "2: the posting names none",
+      '7: not listed',
+      "3: boards.greenhouse.io",
+      "2: the posting names none",
+      '7: matched by title: "Operations Analyst"',
+    ]);
+  });
+
+  it("no board lists the job: the same failure class as before, after every step was tried", async () => {
+    const f = sites(ghBoard("acme", [ghJob(42, "Data Engineer", "Remote")]));
+    const r = await findOnEmployerSite(q, f, { known: acme });
+    expect(r).toMatchObject({ found: false, failure: "job_not_listed", step: 7 });
+    expect(isTransientLinkFailure(r.found ? null : r.failure)).toBe(true);
+    // The remembered board was searched once; the name guesses and careers addresses were still tried.
+    expect(f.calls.filter((u) => u === `${GH("acme")}?content=true`)).toHaveLength(1);
+    expect(f.calls.some((u) => u.includes("api.lever.co/v0/postings/acme"))).toBe(true);
+    expect(steps(r)).toContain(4);
+    expect(outcomes(r)).toContain("3: no other board answered");
+  });
+
+  it("a board already searched in this run isn't searched again", async () => {
+    const f = sites(ghBoard("acme", [ghJob(42, "Data Engineer", "Remote")]));
+    const r = await findOnEmployerSite(q, f, { known: acme, links: ["https://job-boards.greenhouse.io/acme"] });
+    expect(outcomes(r)).toContain("1: job-boards.greenhouse.io already searched");
+    expect(f.calls.filter((u) => u === `${GH("acme")}?content=true`)).toHaveLength(1);
+  });
+
+  it("several misses: the most telling one ends the run (ambiguous over elsewhere over not listed)", async () => {
+    const f = sites({
+      ...ghBoard("acmecorp", [ghJob(42, "Data Engineer", "Remote", "acmecorp")]),
+      ...ghBoard("acme", [ghJob(41, "Operations Analyst", "Austin, TX"), ghJob(43, "Operations Analyst", "Denver, CO")]),
+    });
+    const r = await findOnEmployerSite(q, f, { known: remembered });
+    expect(r).toMatchObject({ found: false, failure: "ambiguous" });
+    expect(r.trail.filter((t) => t.step === 7).map((t) => t.outcome)).toEqual(["not listed", expect.stringMatching(/^several fit/)]);
+    const g = sites({
+      ...ghBoard("acmecorp", [ghJob(41, "Operations Analyst", "Austin, TX", "acmecorp")]),
+      ...ghBoard("acme", [ghJob(42, "Data Engineer", "Remote")]),
+    });
+    const e = await findOnEmployerSite({ ...q, location: "Seattle, WA" }, g, { known: remembered });
+    expect(e).toMatchObject({ found: false, failure: "job_not_listed", reason: expect.stringContaining("which isn't in Seattle, WA") });
+  });
+});

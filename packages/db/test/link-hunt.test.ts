@@ -148,8 +148,10 @@ describe("retry replay (acceptance fixture 3)", () => {
     expect(s.problem).toMatch(/isn't on Acme Retry's careers site .* now.*looks again by itself in about 4 hours/);
     lookup = (await ownerQuery("SELECT employer_lookup FROM job_posting WHERE employer_canonical = 'Acme Retry'")).rows[0].employer_lookup;
     expect(lookup).toMatchObject({ found: false, failure: "job_not_listed", tries: 2, retry: true });
-    // The board remembered from try 1 short-circuits the ladder.
-    expect(lookup.trail.map((t: { step: number }) => t.step)).toEqual([0, 1, 2, 7]);
+    // The board remembered from try 1 is searched first; its miss doesn't end the run, the rest of the
+    // ladder is still tried (Yong, 2026-11-22 review) and the board isn't searched twice.
+    expect(lookup.trail.map((t: { step: number }) => t.step)).toEqual([0, 1, 2, 7, 3, 4, 6]);
+    expect(lookup.trail.filter((t: { step: number }) => t.step === 7)).toHaveLength(1);
 
     // Try 3: posted meanwhile. Found and applied, with no one pressing anything.
     phase = "posted";
