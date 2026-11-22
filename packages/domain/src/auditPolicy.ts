@@ -27,7 +27,7 @@ export const AUDIT_ALLOWED_KEYS = {
   "email.suggestion_dismissed": ["kind"],
   "extension.paired": [],
   "extension.revoked": [],
-  "packet.built": ["application_ref", "packet_version", "fields", "left_for_applicant"],
+  "packet.built": ["application_ref", "packet_version", "fields", "left_for_applicant", "kept_from_approved", "differed_from_saved"],
   "packet.filled": ["application_ref", "packet_version", "filled", "left_for_applicant"],
   "packet.ready": ["application_ref", "packet_version", "ats"],
   "packet.submit_started": ["application_ref", "packet_version", "ats", "by"],

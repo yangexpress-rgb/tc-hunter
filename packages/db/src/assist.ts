@@ -148,7 +148,7 @@ export async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantI
     firstName: parts[0] ?? "", lastName: parts.length > 1 ? parts[parts.length - 1]! : "", fullName: full, preferredName: a.preferred_name,
     email: dec("applicant.email", a.email_enc), phone: dec("applicant.phone", a.phone_enc), city: a.city, region: a.region, country: a.country,
     links: { linkedin: linkOf(/linkedin/i), github: linkOf(/github/i), website: linkOf(/^(website|portfolio|site|web)$/i) },
-    answers, employer, education, workHistoryComplete: !!a.work_history_complete, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing, experience,
+    answers, employer, education, workHistoryComplete: !!a.work_history_complete, workAuthSummary: dec("applicant.work_auth_summary", a.work_auth_summary_enc) || null, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing, experience,
     // Today where they live, for the form's own date and a start date (by the calendar, in every AI mode).
     today: localDay(await tz(c)),
   };
@@ -204,6 +204,30 @@ export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId
         WHERE k.application_id = $1 AND f.source = 'applicant_typed' AND f.answer_value_enc IS NOT NULL ORDER BY k.version`, [app.id])).rows;
     for (const f of prev) typed.set(`${f.field_key}|${f.question_as_shown}`, decryptField(dk, "packet_field.answer_value", f.answer_value_enc));
   }
+  // The send path reuses the approved packet, always (Yong, 2026-11-22, Bristol Myers Squibb): a question answered in a
+  // packet the applicant approved for this application keeps that answer when the form is read again (page by page,
+  // after a pause). It is never worked out again or asked again; where today's saved answers would differ, the
+  // approved packet wins for this application and the difference is only logged.
+  const approved = new Map<string, Kept>();
+  const approvedByQuestion = new Map<string, Kept | null>();
+  if (opts.keepTyped) {
+    const prev = (await c.query(
+      `SELECT f.field_key, f.question_as_shown, f.answer_value_enc, f.source, f.source_ref_id, f.confidence, f.standing_kind
+         FROM packet_field f JOIN application_packet k ON k.id = f.packet_id
+        WHERE k.application_id = $1 AND k.approved_hash IS NOT NULL AND f.answer_value_enc IS NOT NULL AND NOT f.requires_applicant_step
+        ORDER BY k.version, f.ordinal`, [app.id])).rows;
+    for (const f of prev) {
+      const kept: Kept = { value: decryptField(dk, "packet_field.answer_value", f.answer_value_enc), source: f.source, sourceRefId: f.source_ref_id ?? null,
+        confidence: Number(f.confidence ?? 0), standingKind: f.standing_kind ?? null };
+      if (!willFill({ step: null, answer: kept.value, confidence: kept.confidence, source: kept.source as never })) continue;
+      approved.set(`${f.field_key}|${f.question_as_shown}`, kept);
+      // By the question alone too (a page's key prefix changes between reads); a question asked twice with different answers isn't used this way.
+      const q = keptQuestionKey(String(f.question_as_shown));
+      const had = approvedByQuestion.get(q);
+      approvedByQuestion.set(q, had === undefined || (had && had.value === kept.value) ? kept : null);
+    }
+  }
+  let keptFromApproved = 0, differed = 0;
   await c.query("UPDATE application_packet SET state = 'abandoned' WHERE application_id = $1 AND state NOT IN ('submitted','abandoned','failed')", [app.id]);
   const version = (await c.query("SELECT coalesce(max(version), 0) + 1 AS v FROM application_packet WHERE application_id = $1", [app.id])).rows[0].v as number;
   const k = (await c.query(
@@ -216,6 +240,13 @@ export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId
     const t = typed.get(`${f.key}|${f.label}`);
     if (t !== undefined && !p.step && !willFill(p) && (!f.options?.length || f.options.includes(t))) {
       return { ...p, answer: t, source: "applicant_typed" as const, sourceRefId: null, confidence: 1, note: null };
+    }
+    const was = approved.get(`${f.key}|${f.label}`) ?? approvedByQuestion.get(keptQuestionKey(f.label)) ?? null;
+    if (was && (!f.options?.length || f.options.includes(was.value))) {
+      keptFromApproved++;
+      if (p.answer !== null && !p.step && p.answer !== was.value) differed++;
+      return { ...p, step: null, answer: was.value, source: was.source as never, sourceRefId: was.sourceRefId, confidence: was.confidence,
+        standingKind: was.standingKind as never, note: p.note && p.source === was.source ? p.note : APPROVED_NOTE };
     }
     // Worked out from the applicant's own goals, history and saved answers (Yong, 2026-11-17). Never a
     // statement, consent, signature or diversity question; work authorisation only from their saved answers.
@@ -242,9 +273,14 @@ export async function createPacket(c: pg.PoolClient, cfg: AppConfig, applicantId
   await c.query("UPDATE application_packet SET packet_hash = $2, state = 'packet_ready_for_review' WHERE id = $1", [k.id, hash]);
   const left = proposed.filter((f) => !willFill(f)).length;
   await recordAudit(c, "packet.built", { objectType: "application_packet", objectId: k.id,
-    payload: { application_ref: app.public_ref, packet_version: version, fields: proposed.length, left_for_applicant: left } });
+    payload: { application_ref: app.public_ref, packet_version: version, fields: proposed.length, left_for_applicant: left, kept_from_approved: keptFromApproved, differed_from_saved: differed } });
   return { packetId: k.id as string, appRef: app.public_ref as string, fields: proposed.length, leftForApplicant: left, proposed, hash };
 }
+
+type Kept = { value: string; source: string; sourceRefId: string | null; confidence: number; standingKind: string | null };
+/** A question compared by its words only: case, punctuation and spacing aside. */
+const keptQuestionKey = (q: string) => q.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+export const APPROVED_NOTE = "From the answers you approved for this application.";
 
 async function insertField(c: pg.PoolClient, dk: Buffer, packetId: string, i: number, f: ProposedField) {
   const answer = f.step ? null : f.answer;

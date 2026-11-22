@@ -95,6 +95,157 @@
     {"name": "Basic Qualifications standing rule: a must-have is missing, so it is asked", "employer": "Capital One", "standing": [{"kind": "basic_qualifications", "text": "Yes"}], "qualifications": {"met": false, "why": "not matched in your profile: Kubernetes"}, "fields": [
         {"key": "c9", "label": "Do you meet the Basic Qualifications for this role as specified in the job description?*", "type": "select", "options": ["Select One", "Yes", "No"], "required": true, "expect": {"answer": null, "step": "attestation", "note": "Your standing rule for this question didn't apply: not matched in your profile: Kubernetes So this one is yours."}}
       ]
+    },
+    {
+      "name": "Send path, A-000017 (Bristol Myers Squibb): a sponsorship question with examples in it is the saved sponsorship answer, asked of nobody",
+      "employer": "Bristol Myers Squibb",
+      "fields": [
+        {
+          "key": "b1",
+          "label": "In the future will you request or require BMS sponsorship for employment-based immigration support? (For example but not limited to: H-1B, STEM OPT, EAD, TN Visa for Canada, Mexico, or any country outside the US)*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Yes",
+            "No"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "No",
+            "source": "answer_bank",
+            "ref": "a-spon"
+          }
+        },
+        {
+          "key": "b2",
+          "label": "Are you legally authorized to work in the United States (including, but not limited to, as a permanent resident)?*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Yes",
+            "No"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "Yes",
+            "source": "answer_bank",
+            "ref": "a-auth"
+          }
+        },
+        {
+          "key": "b3",
+          "label": "Are you authorized to work in the US without sponsorship?*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Yes",
+            "No"
+          ],
+          "required": true,
+          "expect": {
+            "answer": null,
+            "step": "work_auth"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sponsorship follows authorisation: authorised for any US employer, no sponsorship answer anywhere → derived No",
+      "employer": "Bristol Myers Squibb",
+      "drop": [
+        "a-spon"
+      ],
+      "patch": {
+        "a-auth": {
+          "text": "Yes, I am a US citizen"
+        }
+      },
+      "fields": [
+        {
+          "key": "d1",
+          "label": "In the future will you request or require BMS sponsorship for employment-based immigration support? (For example but not limited to: H-1B, STEM OPT, EAD, TN Visa for Canada, Mexico, or any country outside the US)*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Yes",
+            "No"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "No",
+            "source": "derived",
+            "ref": "a-auth",
+            "note": "No — from your right-to-work answers: authorised to work for any US employer, no sponsorship needed."
+          }
+        },
+        {
+          "key": "d2",
+          "label": "Will you now or in the future require sponsorship for employment visa status?*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Yes",
+            "No"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "No",
+            "source": "derived",
+            "ref": "a-auth",
+            "note": "No — from your right-to-work answers: authorised to work for any US employer, no sponsorship needed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sponsorship follows authorisation: from the profile's right-to-work summary",
+      "employer": "Capital One",
+      "drop": [
+        "a-spon"
+      ],
+      "workAuthSummary": "Permanent resident (green card holder); authorised to work for any US employer",
+      "fields": [
+        {
+          "key": "d3",
+          "label": "Will you now or in the future require sponsorship for employment visa status?*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Yes",
+            "No"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "No",
+            "source": "derived",
+            "note": "No — from your right-to-work answers: authorised to work for any US employer, no sponsorship needed."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Sponsorship isn't derived from a bare Yes: a visa holder is authorised too, so it is asked",
+      "employer": "Capital One",
+      "drop": [
+        "a-spon"
+      ],
+      "fields": [
+        {
+          "key": "d4",
+          "label": "Will you now or in the future require sponsorship for employment visa status?*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Yes",
+            "No"
+          ],
+          "required": true,
+          "expect": {
+            "answer": null,
+            "step": "work_auth"
+          }
+        }
+      ]
     }
   ]
 }

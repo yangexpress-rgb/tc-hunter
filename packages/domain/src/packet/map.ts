@@ -2,7 +2,7 @@ import { FORM_DATE, START_QUESTION, startDateFrom, startDatePart } from "./dates
 import { countryForRegion, matchChoice } from "./equivalents";
 import {
   CURRENT_EMPLOYER, CURRENT_TITLE, NEVER_DERIVED, answerEmployerKey, bankMatch, claimPolarity, currentRole, deriveFact, embeddedFact, isDerived, isFollowUp, isYesNo,
-  questionCategory, saysNo, saysYes, type BankAnswer, type QualificationsCheck, type QuestionCategory,
+  isNegated, questionCategory, saysNo, saysYes, withoutExamples, type BankAnswer, type QualificationsCheck, type QuestionCategory,
 } from "./ladder";
 import { createHmac } from "node:crypto";
 import { canonicalJson } from "../fingerprint";
@@ -53,6 +53,8 @@ export interface PacketProfile {
   today?: string;
   /** Whether every must-have this job's requirements name is matched in their profile (checkQualifications), for the Basic Qualifications standing rule. */
   qualifications?: QualificationsCheck | null;
+  /** Their right-to-work summary from the profile ("US citizen"), for working out a sponsorship answer. */
+  workAuthSummary?: string | null;
 }
 
 export interface ProposedField {
@@ -138,8 +140,8 @@ export function profileFieldFor(label: string): ProfileField | null {
  * "No" is never turned upside down.
  */
 export function workAuthKind(label: string): "work_auth" | "sponsorship" | null {
-  const l = norm(label);
-  if (/\b(not|without|unable|cannot|can't)\b/.test(l)) return null;
+  if (isNegated(label)) return null;
+  const l = norm(withoutExamples(label));
   if (/\b(sponsor\w*|visa)\b/.test(l)) return /\b(require|need)\w*\b/.test(l) ? "sponsorship" : null;
   if (/\b(authori[sz]ed|eligible|legally (able|entitled|permitted)|right) to work\b/.test(l)) return "work_auth";
   return null;
@@ -155,14 +157,22 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     // By its wording first; else by what it asks, so "Are you eligible to work in the country…" (Capital One,
     // 2026-11-21) takes the saved "authorised to work" answer, and any "require sponsorship" the saved sponsorship one.
     // Worded the other way round ("…without sponsorship", "not authorised"): a saved Yes/No is never turned upside down.
-    const saved = /\b(not|without|unable|cannot|can't|never)\b/i.test(f.label) ? undefined : bankMatch(f.label, p.answers, p.employer)?.answer;
+    const negated = isNegated(f.label);
+    const saved = negated ? undefined : bankMatch(f.label, p.answers, p.employer)?.answer;
     // Answer-First (Yong, 2026-11-22): a saved answer is the applicant's answer however old it is; its age is said, never a reason to ask.
+    // Sponsorship follows authorisation (§C step 5, Yong 2026-11-22): authorised to work for any employer
+    // (a citizen, a permanent resident) means no sponsorship, now or later. Worked out, asked of nobody.
+    if (!saved?.approved && !negated && workAuthKind(f.label) === "sponsorship") {
+      const basis = anyEmployerBasis(p);
+      const no = basis ? yesNoChoice(f.options, false) : null;
+      if (no) return { ...base, answer: no, source: "derived", sourceRefId: basis!.ref, confidence: 0.9, note: SPONSORSHIP_DERIVED_NOTE };
+    }
     if (saved?.approved) {
       const chosen = pick(f.options, saved.text);
       if (chosen) return { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9, note: `From your saved right-to-work answer.${saved.stale ? OLD_NOTE : ""}` };
       return { ...base, step, note: "Your saved right-to-work answer isn't one of the choices, so you answer this one." };
     }
-    if (!saved && /\b(not|without|unable|cannot|can't|never)\b/i.test(f.label)) return { ...base, step, note: "It's worded the other way round from your saved right-to-work answers, so you answer this one: a saved Yes or No is never turned upside down." };
+    if (!saved && negated) return { ...base, step, note: "It's worded the other way round from your saved right-to-work answers, so you answer this one: a saved Yes or No is never turned upside down." };
     return { ...base, step, note: !saved ? "Add your right-to-work answer under Saved answers and TC Hunter will fill it next time."
       : "Your saved right-to-work answer is still a draft, so you answer this one." };
   }
@@ -269,6 +279,25 @@ export const NEW_QUESTION = "New question: nothing in your profile, resume, save
 /** Said beside a saved answer kept over 90 days ago: used all the same (Answer-First, Yong 2026-11-22). */
 const OLD_NOTE = " You saved it over 90 days ago; change it under Saved answers if it has changed.";
 /** Where the Basic Qualifications answer came from, in plain words (Yong, 2026-11-22). */
+export const SPONSORSHIP_DERIVED_NOTE = "No — from your right-to-work answers: authorised to work for any US employer, no sponsorship needed.";
+
+/**
+ * Authorised to work for any employer, from the applicant's own words: their approved right-to-work answer or
+ * their profile's right-to-work summary says citizen, permanent resident (green card), any employer, or no
+ * sponsorship needed. A bare "Yes, I'm authorised" is not enough: a visa holder is authorised too.
+ */
+const ANY_EMPLOYER = /\b(citizen(ship)?|permanent resident|green card|lawful permanent|any (u\.?s\.? |us )?employer|no sponsorship|(do not|don['’]?t|never|will not|won['’]?t) (need|needed|require|required)( any)?( visa)? sponsorship|without (any )?(visa )?sponsorship)\b/i;
+export function anyEmployerBasis(p: Pick<PacketProfile, "answers" | "workAuthSummary">): { ref: string | null } | null {
+  const said = p.answers.find((a) => a.approved && a.key === "work_auth" && ANY_EMPLOYER.test(a.text));
+  if (said) return { ref: said.id };
+  if (p.workAuthSummary && ANY_EMPLOYER.test(p.workAuthSummary)) return { ref: null };
+  return null;
+}
+const yesNoChoice = (options: string[] | undefined, yes: boolean): string | null => {
+  if (!options?.length) return yes ? "Yes" : "No";
+  return options.find((o) => (yes ? /^(yes|y|true)\b/i : /^(no|n|false)\b/i).test(o.trim())) ?? null;
+};
+
 export const BASIC_QUALIFICATIONS_NOTE = "Your standing rule — all of this job's must-haves match your profile.";
 
 /** A degree question by its label (the same rule the AI path used, PR #70). */
