@@ -246,6 +246,116 @@
           }
         }
       ]
+    },
+    {
+      "name": "Personal answers: gender answered once is reused in any wording, before a standing 'rather not say' (Yong, 2026-11-22)",
+      "employer": "Bristol Myers Squibb",
+      "add": [
+        {
+          "id": "a-gender",
+          "key": "personal:gender",
+          "patterns": [
+            "^Please select your gender"
+          ],
+          "text": "Male",
+          "approved": true,
+          "stale": false,
+          "isApplicantStep": true
+        }
+      ],
+      "standing": [
+        {
+          "kind": "eeo",
+          "text": "I don't wish to answer"
+        }
+      ],
+      "fields": [
+        {
+          "key": "g1",
+          "label": "Please select your gender.*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Male",
+            "Female",
+            "I do not wish to answer"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "Male",
+            "source": "answer_bank",
+            "ref": "a-gender",
+            "note": "Your own answer to this personal question, kept from an earlier form."
+          }
+        },
+        {
+          "key": "g2",
+          "label": "Gender",
+          "type": "select",
+          "options": [
+            "Man",
+            "Woman",
+            "Decline to self-identify"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "Man",
+            "source": "answer_bank",
+            "ref": "a-gender"
+          }
+        },
+        {
+          "key": "g3",
+          "label": "Please select your race/ethnicity.*",
+          "type": "select",
+          "options": [
+            "Asian",
+            "White",
+            "I do not wish to answer"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "I do not wish to answer",
+            "source": "standing_answer"
+          }
+        },
+        {
+          "key": "g4",
+          "label": "Are you a protected veteran?*",
+          "type": "select",
+          "options": [
+            "Yes",
+            "No",
+            "I do not wish to answer"
+          ],
+          "required": true,
+          "expect": {
+            "answer": "I do not wish to answer",
+            "source": "standing_answer"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Personal answers: never answered and no standing answer, so it is the applicant's",
+      "employer": "Bristol Myers Squibb",
+      "fields": [
+        {
+          "key": "g5",
+          "label": "Please select your gender.*",
+          "type": "select",
+          "options": [
+            "Select One",
+            "Male",
+            "Female"
+          ],
+          "required": true,
+          "expect": {
+            "answer": null,
+            "step": "eeo"
+          }
+        }
+      ]
     }
   ]
 }

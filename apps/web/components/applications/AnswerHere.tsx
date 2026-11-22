@@ -1,7 +1,7 @@
 import type { getPacket } from "@tc-hunter/db";
 import { answerHereAction } from "@/app/applications/actions";
 import { StandingAsk } from "@/components/applications/Packet";
-import { datePartOf, FORM_DATE, standingKindFor, type StepKind } from "@tc-hunter/domain";
+import { datePartOf, FORM_DATE, personalKind, standingKindFor, type StepKind } from "@tc-hunter/domain";
 
 type Packet = NonNullable<Awaited<ReturnType<typeof getPacket>>>;
 type Field = Packet["fields"][number];
@@ -47,8 +47,11 @@ export function answerHereFields(p: Packet | null, stuckKeys: string[], waitingF
 
 export function AnswerHere({ p, fields, back, fresh, mfa, today }: { p: Packet; fields: Field[]; back: string; fresh: boolean; mfa: boolean; today: string }) {
   const approved = p.state !== "packet_draft" && p.state !== "packet_ready_for_review";
-  const theirs = fields.filter((f) => f.step && f.step !== "work_auth");
-  const ask = fields.filter((f) => !f.step || f.step === "work_auth");
+  // A personal question with the form's own choices (gender, race, veteran status…) is answered right here, once:
+  // kept as theirs and used on every form from now on (Yong, 2026-11-22: "same thing for gender").
+  const personal = (f: Field) => f.step === "eeo" && !!f.options?.length && !!personalKind(f.label);
+  const theirs = fields.filter((f) => f.step && f.step !== "work_auth" && !personal(f));
+  const ask = fields.filter((f) => !f.step || f.step === "work_auth" || personal(f));
   // One standing answer covers every statement of its kind: ask once per kind (Accenture, 2026-11-19).
   const kinds = new Map<string, Field>();
   for (const f of theirs) { const k = standingKindFor(f.step as StepKind, f.label) ?? `own:${f.id}`; if (!kinds.has(k)) kinds.set(k, f); }
@@ -83,6 +86,7 @@ export function AnswerHere({ p, fields, back, fresh, mfa, today }: { p: Packet; 
                 <input type="hidden" name="field" value={f.id} />
                 <label htmlFor={`answer_${f.id}`} className="packet-q">{f.label.replace(/\s*\*\s*$/, "")}{f.required ? <span className="error"> (required)</span> : null}</label>
                 {f.step === "work_auth" ? <><input type="hidden" name={`wa_${f.id}`} value="1" /><input type="hidden" name={`q_${f.id}`} value={f.label} /></> : null}
+                {personal(f) ? <><input type="hidden" name={`pa_${f.id}`} value="1" /><input type="hidden" name={`q_${f.id}`} value={f.label} /></> : null}
                 {f.options?.length || f.type === "checkbox" ? (
                   <select id={`answer_${f.id}`} name={`answer_${f.id}`} required defaultValue={f.answer && (f.options ?? ["Yes", "No"]).includes(f.answer) ? f.answer : ""}>
                     <option value="" disabled>Choose</option>
@@ -104,6 +108,7 @@ export function AnswerHere({ p, fields, back, fresh, mfa, today }: { p: Packet; 
                 {f.answer ? <span className="small muted">TC Hunter tried: {f.answer}. Keep it or change it.</span> : null}
                 {f.step === "work_auth"
                   ? <span className="small muted">Saved as your right-to-work answer and used on every form from now on.</span>
+                  : personal(f) ? <span className="small muted">Kept as your own answer to this personal question and used on every form from now on.</span>
                   : <label className="check small"><input type="checkbox" name={`keep_${f.id}`} value="1" defaultChecked /> Use this answer on future applications too</label>}
               </li>
             ))(it))}

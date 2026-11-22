@@ -13,7 +13,7 @@ type Case = FormField & { expect: Expect };
 const G = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "fixtures", "questions-golden", "cases.json"), "utf8")) as {
   profile: PacketProfile; sets: Array<{ name: string; employer: string; standing?: PacketProfile["standing"]; qualifications?: PacketProfile["qualifications"];
     /** Saved answers left out of this set's profile, by id; others changed (text, approved). */
-    drop?: string[]; patch?: Record<string, Partial<PacketProfile["answers"][number]>>; workAuthSummary?: string | null; fields: Case[] }>;
+    drop?: string[]; add?: PacketProfile["answers"]; patch?: Record<string, Partial<PacketProfile["answers"][number]>>; workAuthSummary?: string | null; fields: Case[] }>;
 };
 
 describe("question golden set (No AI)", () => {
@@ -23,7 +23,7 @@ describe("question golden set (No AI)", () => {
       setAiClientsForTest({ claude: new Proxy({}, { get: () => { calls++; throw new Error("AI called"); } }) as never, openai: new Proxy({}, { get: () => { calls++; throw new Error("AI called"); } }) as never });
       try {
         await withAiProvider("none", async () => {
-          const answers = G.profile.answers.filter((x) => !(set.drop ?? []).includes(x.id)).map((x) => ({ ...x, ...(set.patch?.[x.id] ?? {}) }));
+          const answers = [...G.profile.answers.filter((x) => !(set.drop ?? []).includes(x.id)).map((x) => ({ ...x, ...(set.patch?.[x.id] ?? {}) })), ...(set.add ?? [])];
           const profile: PacketProfile = { ...G.profile, answers, employer: set.employer, standing: set.standing ?? [], qualifications: set.qualifications ?? null, workAuthSummary: set.workAuthSummary ?? null };
           const fields = set.fields.map(({ expect: _e, ...f }) => f as FormField);
           const got = proposeFields(fields, profile);

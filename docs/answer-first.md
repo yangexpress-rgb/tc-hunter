@@ -81,6 +81,23 @@ permanent resident or green card, any employer, or no sponsorship needed. The pa
 your right-to-work answers: authorised to work for any US employer, no sponsorship needed." A bare
 "Yes, I'm authorised" is not enough, because a visa holder is authorised too.
 
+## Personal questions are asked once (Yong, 2026-11-22: "same thing for gender")
+
+Bristol Myers Squibb's "Please select your gender." was handed to Yong on their page every time. An
+answer chosen on the employer's page can't be kept, because only the applicant approves a saved
+answer, so nothing remembered it.
+
+- A personal question with the form's own choices (gender, transgender, sexual orientation,
+  Hispanic/Latino, race, veteran status, disability; `personalKind`) that was never answered is now
+  asked once in TC Hunter, on the application page, instead of being handed over. The answer is kept
+  as `personal:<kind>` (`savePersonalAnswer`).
+- On every later form, the kept answer is used for that kind of question in any wording ("Gender" with
+  Man/Woman takes a kept "Male"). It comes before a standing "I'd rather not say", which only covers
+  questions never answered.
+- The run's coverage says why it was asked: "A personal question you haven't answered before. Answer
+  it once here; TC Hunter keeps your answer and uses it on every form from now on."
+- Statements, consents and signatures are unchanged and still happen on their page.
+
 ## Tests
 
 - `fixtures/questions-golden/cases.json` covers three cases: a question asked again in other words
@@ -99,3 +116,4 @@ your right-to-work answers: authorised to work for any US employer, no sponsorsh
   - a typed right-to-work answer is kept and found on the next employer's form.
 - Golden set: the BMS wording, the derived No (from an answer and from the profile summary), and a
   bare Yes that still asks.
+- Personal answers: the golden set covers gender reused in other wordings ahead of a standing answer, and never answered; `send-reuses-packet.test.ts` covers asked once, kept, and answered on the next employer's form.

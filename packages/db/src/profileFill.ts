@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  aboutFromResume, aboutIsInResume, contactBlockEnd, stripContactDetails, type AboutFinder, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor, questionCategory, EMPLOYER_CATEGORIES, namesEmployer, answerEmployerKey, normalQuestion, workAuthKind,
+  aboutFromResume, aboutIsInResume, contactBlockEnd, stripContactDetails, type AboutFinder, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor, questionCategory, EMPLOYER_CATEGORIES, namesEmployer, answerEmployerKey, normalQuestion, workAuthKind, personalKind,
   type ProfileField, type ResumeFileKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -196,6 +196,37 @@ export async function saveWorkAuthAnswer(pool: pg.Pool, cfg: AppConfig, session:
     }
     await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: session.applicantId, payload: { field: preset.key, where: "saved_answers" } });
   });
+}
+
+/**
+ * The applicant's own answer to a personal question (gender, race, veteran status, disability…), kept the moment
+ * it is given so no form asks it again (Yong, 2026-11-22). Kept by what it asks (personalKind); a question whose
+ * kind can't be told isn't kept. True when kept.
+ */
+export async function savePersonalAnswer(pool: pg.Pool, cfg: AppConfig, session: Session, label: string, answer: string): Promise<boolean> {
+  const text = answer.trim().slice(0, 200);
+  const kind = personalKind(label);
+  if (!text || !kind || /^(select|choose|please select)\b/i.test(text)) return false;
+  await withApplicant(pool, asApplicant(session), async (c) => keepPersonalAnswer(c, cfg, session.applicantId, kind, label, text));
+  return true;
+}
+
+/** Inside a transaction already open as the applicant (the run reading back what they chose on the site). */
+export async function keepPersonalAnswer(c: pg.PoolClient, cfg: AppConfig, applicantId: string, kind: string, label: string, text: string): Promise<void> {
+  const dk = await dataKeyFor(c, cfg, applicantId);
+  const encText = encryptField(dk, "answer_bank_item.answer_text", text);
+  const q = label.replace(/\s+/g, " ").replace(/[\s*:?.]+$/, "").trim().slice(0, 200);
+  const key = `personal:${kind}`;
+  const r = await c.query(
+    `UPDATE answer_bank_item SET answer_text_enc = $2, status = 'approved', last_reviewed_at = now(),
+       question_patterns = CASE WHEN $3 = ANY(question_patterns) THEN question_patterns ELSE question_patterns || $3 END
+      WHERE question_key = $1 RETURNING id`, [key, encText, `^${escapeRe(q)}`]);
+  if (!r.rowCount) {
+    await c.query(
+      `INSERT INTO answer_bank_item (applicant_id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step)
+       VALUES (app_applicant_id(), $1, $2, $3, 'approved', now(), true)`, [key, [`^${escapeRe(q)}`], encText]);
+  }
+  await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: applicantId, payload: { field: key, where: "saved_answers" } });
 }
 
 /**

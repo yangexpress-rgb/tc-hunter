@@ -190,6 +190,13 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
       ? `Your standing rule for this question didn't apply: ${q?.why ?? "this job's must-haves weren't read."} So this one is yours.`
       : "Whether you meet the qualifications is your own judgment, so this one is yours. You can let TC Hunter answer Yes when every must-have matches your profile, under Settings, Applying." };
   }
+  // A personal question (gender, race, veteran status, disability…) the applicant answered on an earlier form:
+  // their own answer, kept the moment they gave it, is used again (Answer-First, Yong 2026-11-22: "same thing
+  // for gender"). It comes before a standing "rather not say", which is only for questions never answered.
+  if (step === "eeo") {
+    const own = ownPersonalAnswer(f, p);
+    if (own) return { ...base, ...own };
+  }
   if (step) {
     // The standing-answer fence (§C2, Wiley 2026-11-21): a block that also asks a fact about the applicant
     // takes a standing answer only once that fact is settled from their own information.
@@ -297,6 +304,33 @@ const yesNoChoice = (options: string[] | undefined, yes: boolean): string | null
   if (!options?.length) return yes ? "Yes" : "No";
   return options.find((o) => (yes ? /^(yes|y|true)\b/i : /^(no|n|false)\b/i).test(o.trim())) ?? null;
 };
+
+/**
+ * What a personal (EEO) question asks: one of a fixed set of kinds, so "Please select your gender." and
+ * "Gender" are the same question. Null when it can't be told (then nothing saved is reused).
+ */
+export type PersonalKind = "gender" | "transgender" | "sexual_orientation" | "hispanic_latino" | "race" | "veteran" | "disability";
+export function personalKind(label: string): PersonalKind | null {
+  const l = norm(withoutExamples(label));
+  if (/\btransgender\b/.test(l)) return "transgender";
+  if (/sexual orientation/.test(l)) return "sexual_orientation";
+  if (/\b(hispanic|latin[oax])\b/.test(l)) return "hispanic_latino";
+  if (/\b(gender|sex)\b/.test(l)) return "gender";
+  if (/\b(race|racial|ethnicity|ethnic)\b/.test(l)) return "race";
+  if (/\bveteran\b/.test(l)) return "veteran";
+  if (/\bdisabilit/.test(l)) return "disability";
+  return null;
+}
+export const PERSONAL_ANSWER_NOTE = "Your own answer to this personal question, kept from an earlier form.";
+/** The applicant's own kept answer to a personal question of this kind, as one of the form's choices. */
+function ownPersonalAnswer(f: FormField, p: PacketProfile): Partial<ProposedField> | null {
+  const kind = personalKind(f.label);
+  if (!kind) return null;
+  const saved = p.answers.find((a) => a.approved && a.key === `personal:${kind}` && a.text.trim());
+  if (!saved) return null;
+  const chosen = f.type === "checkbox" ? null : pick(f.options, saved.text);
+  return chosen ? { answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.9, step: null, note: PERSONAL_ANSWER_NOTE } : null;
+}
 
 export const BASIC_QUALIFICATIONS_NOTE = "Your standing rule — all of this job's must-haves match your profile.";
 
