@@ -189,17 +189,12 @@ export function primaryGoalIndex(fits: GoalFit[], ruledOut: boolean[] = []): num
   return best;
 }
 
-/** "Fits your goal "Goal-A" best." on the primary goal's first part, when there's more than one goal. */
-export function markPrimaryFit(best: GoalFit, goals: number): GoalFit {
-  return goals > 1 && best.goalName ? { ...best, parts: best.parts.map((p, i) => i === 0 ? { ...p, detail: [`Fits your goal "${best.goalName}" best.`, ...p.detail] } : p) } : best;
-}
-
 /** G-score across goals: the primary goal's (see primaryGoalIndex). `ruledOut` is each goal's ruled-out verdict, when known. */
 export function bestGoalFit(prefs: MatchPrefs[], posting: MatchPosting, ruledOut: boolean[] = []): GoalFit {
   const verdict = domainOf({ title: posting.title, descriptionText: posting.descriptionText, employerIndustry: posting.employerIndustry ?? null });
   const fits = prefs.map((p) => goalFit(p, posting, verdict));
   if (!fits.length) return { score: 0, parts: [], summary: "No goal set yet.", goalId: null, goalName: null, tier: 1, tierMisses: 0, tierReason: null, tierLines: [], domain: verdict.domain, domainLine: verdict.line, domainRelation: null };
-  return markPrimaryFit(fits[primaryGoalIndex(fits, ruledOut)]!, prefs.length);
+  return fits[primaryGoalIndex(fits, ruledOut)]!;
 }
 
 /** C-score: the applicant's checked record against what the posting asks for. */

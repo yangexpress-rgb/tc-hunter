@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FIT_VERSION } from "@tc-hunter/domain";
-import { listGoals, listMatches, matchApplicant, saveGoal, withApplicant, type GoalInput, type Session } from "../src";
+import { listGoals, listMatches, matchApplicant, matchGoals, saveGoal, withApplicant, type GoalInput, type Session } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
 /**
@@ -84,8 +84,8 @@ describe("every goal's verdict on a job is kept (stage 2)", () => {
     for (const k of ["J1", "J2", "J3"]) {
       const m = await matchOf(k);
       const p = (await goalRows(k)).get(m.goal_id)!;
-      expect([m.g_score, m.tier, m.tier_misses, m.tier_reason, m.score, m.filtered, m.filter_reasons, m.g_summary])
-        .toEqual([p.g_score, p.tier, p.tier_misses, p.tier_reason, p.score, p.filtered, p.filter_reasons, p.g_summary]);
+      expect([m.g_score, m.tier, m.tier_misses, m.tier_reason, m.score, m.filtered, m.filter_reasons, m.g_summary, m.g_parts, m.tier_lines])
+        .toEqual([p.g_score, p.tier, p.tier_misses, p.tier_reason, p.score, p.filtered, p.filter_reasons, p.g_summary, p.g_parts, p.tier_lines]);
     }
   });
 
@@ -134,5 +134,66 @@ describe("every goal's verdict on a job is kept (stage 2)", () => {
     const rows = (await listMatches(pool, yong, { sort: "g", showFiltered: true })).rows;
     const j3 = rows.find((r) => r.title === fx.jobs[2].title)!;
     expect([j3.goal_id, j3.filtered]).toEqual([B, false]);
+  });
+});
+
+describe("the Jobs list in a goal context (stage 3)", () => {
+  const list = (goal?: string, showFiltered = false) => listMatches(pool, yong, { sort: "g", showFiltered, goal });
+  const find = (rows: Array<Record<string, any>>, key: string) => rows.find((r) => r.title === fx.jobs.find((j: { key: string }) => j.key === key).title);
+
+  it("Any goal: each job shows its primary goal's numbers", async () => {
+    const { rows } = await list();
+    const j1 = find(rows, "J1")!, a = (await goalRows("J1")).get(A)!;
+    expect([j1.goal_id, j1.g_score, j1.tier]).toEqual([A, a.g_score, a.tier]);
+  });
+
+  it("Goal-B context: J1 shows with Goal-B's G, tier and reason, not hidden and not Goal-A's", async () => {
+    const { rows } = await list(B);
+    const j1 = find(rows, "J1")!, b = (await goalRows("J1")).get(B)!;
+    expect([j1.goal_id, j1.g_score, j1.tier, j1.tier_reason]).toEqual([B, b.g_score, b.tier, b.tier_reason]);
+    expect(j1.primary_goal_id).toBe(A);
+  });
+
+  it("each context shows J2 with that goal's own G, and orders by that goal's numbers", async () => {
+    const rowsA = (await list(A, true)).rows, rowsB = (await list(B, true)).rows;
+    const g = await goalRows("J2");
+    expect(find(rowsA, "J2")!.g_score).toBe(g.get(A)!.g_score);
+    expect(find(rowsB, "J2")!.g_score).toBe(g.get(B)!.g_score);
+    for (const [rows, goal] of [[rowsA, A], [rowsB, B]] as const) {
+      const key = (r: Record<string, any>) => [r.filtered ? 1 : 0, r.tier ?? 1, r.tier_misses ?? 0, -(r.g_score ?? -1)];
+      const sorted = [...rows].sort((x, y) => { const a = key(x), b = key(y); for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! - b[i]!; return 0; });
+      expect(rows.map((r) => r.id)).toEqual(sorted.map((r) => r.id));
+      expect(rows.every((r) => r.goal_id === goal)).toBe(true);
+    }
+  });
+
+  it("Goal-A context: J3 is ruled out with Goal-A's reasons, shown only when ruled-out jobs are", async () => {
+    expect(find((await list(A)).rows, "J3")).toBeUndefined();
+    const j3 = find((await list(A, true)).rows, "J3")!;
+    expect([j3.filtered, j3.filter_reasons]).toEqual([true, ["Published pay is below your floor."]]);
+    expect((await list(A)).counts.filtered).toBe(1);
+    // Any goal: Goal-B takes it, so it isn't ruled out.
+    expect(find((await list()).rows, "J3")!.filtered).toBe(false);
+    expect((await list()).counts.filtered).toBe(0);
+  });
+
+  it("a job never scored against the chosen goal doesn't appear in its context", async () => {
+    const c = await saveGoal(pool, yong, goal({ roles: ["Chief Nursing Officer"], label: "Goal-C" }));
+    expect((await list(c, true)).rows).toEqual([]);
+    await ownerQuery("DELETE FROM hunt_goal WHERE id = $1", [c]);
+  });
+
+  it("the job page lists every goal's verdict, primary first", async () => {
+    const m = await matchOf("J2");
+    const blocks = await matchGoals(pool, yong, m.id);
+    expect(blocks.map((b) => b.goal_id)).toEqual([B, A]);
+    expect(blocks[0]!.is_primary).toBe(true);
+    expect(blocks.map((b) => b.g_score)).toEqual([(await goalRows("J2")).get(B)!.g_score, (await goalRows("J2")).get(A)!.g_score]);
+  });
+
+  it("the page no longer filters goals in memory (SQL does it)", () => {
+    const page = readFileSync(join(ROOT, "apps", "web", "app", "jobs", "page.tsx"), "utf8");
+    expect(page).not.toMatch(/r\.goal_id === goal/);
+    expect(page).toMatch(/showFiltered, goal \}/);
   });
 });
