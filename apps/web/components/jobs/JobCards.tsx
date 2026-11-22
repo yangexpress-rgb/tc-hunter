@@ -128,11 +128,11 @@ export function JobCard({ r, back }: { r: Row; back: string }) {
 }
 
 /** Job cards in one grid (Yong, 2026-11-18: no grouping by goal; pick a goal in the filters instead). */
-export function JobCards({ rows, back, done }: { rows: Row[]; back: string; done?: { id: string; why?: string; learned: Learned[] } }) {
+export function JobCards({ rows, back, done }: { rows: Row[]; back: string; done?: { id: string; why?: string; learned: Learned[]; nextId?: string } }) {
   return (
     <ul className="card-grid plain">
       {rows.map((r) => done && r.id === done.id
-        ? <li key={r.id} id={`job-${r.id}`} className="job-card done-card"><DoneNotice r={r} back={back} why={done.why} learned={done.learned} /></li>
+        ? <li key={r.id} id={`job-${r.id}`} className="job-card done-card"><DoneNotice r={r} back={back} why={done.why} learned={done.learned} nextId={done.nextId} /></li>
         : <JobCard key={r.id} r={r} back={back} />)}
     </ul>
   );

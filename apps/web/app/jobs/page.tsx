@@ -79,6 +79,8 @@ export default async function JobsPage(props: PageProps) {
     ? (await listMatches(pool, session, { ids: [done], status: "all", showFiltered: true })).rows.find((r) => r.status !== "new")
     : undefined;
   const rows = sortRows(doneRow ? [...filtered, doneRow] : filtered, ...SORT_KEY[sort]);
+  const at = doneRow ? rows.findIndex((r) => r.id === doneRow.id) : -1;
+  const nextId: string | undefined = at >= 0 ? (rows[at + 1] ?? rows[at - 1])?.id : undefined;
   const narrowed = filtered.length !== matched.rows.length;
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
@@ -162,13 +164,13 @@ export default async function JobsPage(props: PageProps) {
         <p className="muted empty">{narrowed ? <>No jobs fit these filters. <a href={q({ q: undefined, goal: undefined, level: undefined, work: undefined, ladder: undefined, source: undefined, company: undefined })}>Clear them</a></>
           : status === "new" ? (sources.length || goals.some((g) => g.active) ? t("jobs.empty") : t("jobs.no_sources")) : status === "saved" ? "You haven't saved any jobs yet." : "You haven't passed on any jobs."}</p>
       ) : view === "jobs" ? (
-        <JobCards rows={rows} back={here} done={doneRow ? { id: doneRow.id, why, learned } : undefined} />
+        <JobCards rows={rows} back={here} done={doneRow ? { id: doneRow.id, why, learned, nextId } : undefined} />
       ) : view === "companies" ? (
         <CompanyCards rows={rows} sort={csort} tab={status} rolesHref={(c) => q({ company: c, view: "jobs" })} />
       ) : (
         <ul className="job-list plain">
           {rows.map((r) => r.id === doneRow?.id ? (
-            <li key={r.id} id={`job-${r.id}`} className="job-row done-row"><DoneNotice r={r} back={here} why={why} learned={learned} /></li>
+            <li key={r.id} id={`job-${r.id}`} className="job-row done-row"><DoneNotice r={r} back={here} why={why} learned={learned} nextId={nextId} /></li>
           ) : (
             <li key={r.id} id={`job-${r.id}`} className={`job-row${r.filtered ? " is-filtered" : ""}${r.seen_at ? "" : " is-unseen"}`}>
               <FitScores r={r} />
