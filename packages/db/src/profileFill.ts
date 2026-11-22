@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  aboutFromResume, aboutIsInResume, contactBlockEnd, stripContactDetails, type AboutFinder, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor,
+  aboutFromResume, aboutIsInResume, contactBlockEnd, stripContactDetails, type AboutFinder, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor, questionCategory, EMPLOYER_CATEGORIES, namesEmployer, answerEmployerKey, normalQuestion,
   type ProfileField, type ResumeFileKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -93,26 +93,52 @@ export async function fillProfileFromResume(c: pg.PoolClient, cfg: AppConfig, ap
  * question doesn't ask again: a profile detail (name, email, phone, links, city, country)
  * goes into the profile; anything else becomes an approved saved answer for that question.
  */
-export async function keepAnswer(c: pg.PoolClient, dk: Buffer, applicantId: string, label: string, type: string, answer: string): Promise<void> {
+export async function keepAnswer(c: pg.PoolClient, dk: Buffer, applicantId: string, label: string, type: string, answer: string, opts: { employer?: string | null } = {}): Promise<string | null> {
   const text = answer.trim();
   const question = label.replace(/\s+/g, " ").replace(/[\s*:?]+$/, "").trim().slice(0, 200);
-  if (!text || type === "file" || question.length < 2) return;
+  if (!text || type === "file" || question.length < 2) return null;
   const field = profileFieldFor(label);
-  if (field) { await keepProfileDetail(c, dk, applicantId, field, text.slice(0, 300)); return; }
+  if (field) { await keepProfileDetail(c, dk, applicantId, field, text.slice(0, 300)); return null; }
   const encText = encryptField(dk, "answer_bank_item.answer_text", text);
-  const items = (await c.query("SELECT id, question_patterns FROM answer_bank_item WHERE NOT is_applicant_step")).rows;
+  // A question about this employer (previous employment, relatives, conflicts, or one naming it) is kept for this
+  // employer only, under its words with the employer's name masked, so a rewording by the same employer still finds it
+  // and no other employer's form ever gets it (Yong, 2026-11-21).
+  const cat = questionCategory(label, opts.employer);
+  const scoped = !!opts.employer && ((cat && EMPLOYER_CATEGORIES.has(cat)) || namesEmployer(label, opts.employer));
+  if (scoped) {
+    const ek = answerEmployerKey(opts.employer);
+    const masked = normalQuestion(question, opts.employer);
+    const mine = (await c.query("SELECT id, question_key, question_patterns FROM answer_bank_item WHERE employer_key = $1 ORDER BY id", [ek])).rows;
+    const same = mine.find((x) => (cat && x.question_key === `employer:${cat}`) || (x.question_patterns as string[]).some((re) => { try { return new RegExp(re, "i").test(masked); } catch { return false; } }));
+    let id: string;
+    if (same) {
+      await c.query("UPDATE answer_bank_item SET answer_text_enc = $2, status = 'approved', last_reviewed_at = now(), updated_at = now() WHERE id = $1", [same.id, encText]);
+      id = same.id;
+    } else {
+      id = (await c.query(
+        `INSERT INTO answer_bank_item (applicant_id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step, employer_key)
+         VALUES (app_applicant_id(), $1, $2, $3, 'approved', now(), false, $4) RETURNING id`,
+        [cat ? `employer:${cat}` : `employer:${masked.slice(0, 80)}`, [`^${escapeRe(masked)}$`], encText, ek])).rows[0].id;
+    }
+    await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: applicantId, payload: { field: "question", where: "saved_answers_employer" } });
+    return id;
+  }
+  const items = (await c.query("SELECT id, question_patterns FROM answer_bank_item WHERE NOT is_applicant_step AND employer_key IS NULL ORDER BY id")).rows;
   const same = items.find((x) => (x.question_patterns as string[]).some((re) => { try { return new RegExp(re, "i").test(label); } catch { return false; } }));
+  let id: string;
   if (same) {
     await c.query("UPDATE answer_bank_item SET answer_text_enc = $2, status = 'approved', last_reviewed_at = now() WHERE id = $1", [same.id, encText]);
+    id = same.id;
   } else {
     const preset = ANSWER_PRESETS.find((p) => !p.applicantStep && p.patterns.some((re) => new RegExp(re, "i").test(label)));
     const taken = preset ? (await c.query("SELECT 1 FROM answer_bank_item WHERE question_key = $1", [preset.key])).rowCount : 1;
     const [key, patterns] = preset && !taken ? [preset.key, [...preset.patterns]] : [`custom:${question.slice(0, 80)}`, [`^${escapeRe(question)}`]];
-    await c.query(
+    id = (await c.query(
       `INSERT INTO answer_bank_item (applicant_id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step)
-       VALUES (app_applicant_id(), $1, $2, $3, 'approved', now(), false)`, [key, patterns, encText]);
+       VALUES (app_applicant_id(), $1, $2, $3, 'approved', now(), false) RETURNING id`, [key, patterns, encText])).rows[0].id;
   }
   await recordAudit(c, "profile.answer_kept", { objectType: "applicant", objectId: applicantId, payload: { field: "question", where: "saved_answers" } });
+  return id;
 }
 
 async function keepProfileDetail(c: pg.PoolClient, dk: Buffer, applicantId: string, field: ProfileField, v: string) {

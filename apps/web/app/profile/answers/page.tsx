@@ -9,7 +9,15 @@ import { approveAnswerAction, deleteAnswerAction, saveAnswerAction } from "../ac
 
 export const dynamic = "force-dynamic";
 
-const questionOf = (key: string) => ANSWER_PRESETS.find((p) => p.key === key)?.label ?? key.replace(/^custom:/, "");
+/** Questions kept for one employer by meaning (2026-11-21), in words. */
+const EMPLOYER_QUESTION: Record<string, string> = {
+  prior_employment: "Have you worked here before?", current_employee: "Do you work here now?",
+  relatives_at_employer: "Do you have relatives who work here?", conflicts_at_employer: "Any conflict of interest here?",
+};
+const questionOf = (key: string) => ANSWER_PRESETS.find((p) => p.key === key)?.label
+  ?? (key.startsWith("employer:") ? EMPLOYER_QUESTION[key.slice(9)] ?? key.slice(9).replace(/<employer>/g, "this employer") : key.replace(/^custom:/, ""));
+/** An employer's saved key in words ("capital one" → "Capital One"). */
+const employerName = (k: string) => k.replace(/\b[a-z]/g, (c) => c.toUpperCase());
 
 /** Answer Bank (brief 5.1): approved answers can be reused word for word; drafts never are. */
 export default async function AnswersPage(props: PageProps) {
@@ -38,9 +46,11 @@ export default async function AnswersPage(props: PageProps) {
               {a.status === "approved" ? (a.stale ? "Needs a fresh look" : "Approved") : "Draft"}
             </span>
           </header>
+          {a.employerKey ? <p className="hint">Kept for {employerName(a.employerKey)} only: used on its applications, never on another employer&apos;s.</p> : null}
           {a.isApplicantStep ? <p className="hint">{t("profile.answers.your_step")}</p> : null}
           {a.stale ? <p className="hint">{t("profile.answers.stale")}</p> : null}
           <p className="answer">{a.answer}</p>
+          {a.detail ? <p className="muted">Detail for “please explain” boxes: {a.detail}</p> : null}
           <div className="row-actions">
             {a.status !== "approved" || a.stale ? (
               <form action={approveAnswerAction}><input type="hidden" name="back" value={back} /><input type="hidden" name="id" value={a.id} />
@@ -50,9 +60,10 @@ export default async function AnswersPage(props: PageProps) {
           <Details summary="Edit or remove">
             <form action={saveAnswerAction} className="stack">
               <input type="hidden" name="back" value={back} /><input type="hidden" name="id" value={a.id} />
-              <input type="hidden" name="question_key" value={a.questionKey.startsWith("custom:") ? "custom" : a.questionKey} />
+              <input type="hidden" name="question_key" value={a.employerKey ? "keep" : a.questionKey.startsWith("custom:") ? "custom" : a.questionKey} />
               <input type="hidden" name="question" value={questionOf(a.questionKey)} />
               <label>Your answer<textarea name="answer" defaultValue={a.answer} rows={3} required /></label>
+              <label>Detail, for a follow-up box like “If yes, please explain” (optional)<textarea name="detail" defaultValue={a.detail ?? ""} rows={2} maxLength={2000} /></label>
               <div className="row-actions">
                 <button className="small" name="approve" value="1">Save and approve</button>
                 <button className="small secondary">Save as draft</button>

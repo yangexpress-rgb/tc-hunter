@@ -121,9 +121,11 @@ export async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantI
   const parts = String(full).trim().split(/\s+/);
   const links = (a.links ?? {}) as Record<string, string>;
   const linkOf = (re: RegExp) => Object.entries(links).find(([k, v]) => re.test(k) || re.test(String(v)))?.[1];
-  const answers = (await c.query("SELECT id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step FROM answer_bank_item")).rows
+  // Every saved answer, in id order (the ladder then orders them by scope and specificity, the same way every time).
+  const answers = (await c.query("SELECT id, question_key, question_patterns, answer_text_enc, status, last_reviewed_at, is_applicant_step, employer_key, detail_enc FROM answer_bank_item ORDER BY id")).rows
     .map((x) => ({
       id: x.id, key: x.question_key, patterns: x.question_patterns as string[], isApplicantStep: x.is_applicant_step,
+      employerKey: (x.employer_key as string | null) ?? null, detail: x.detail_enc ? decryptField(dk, "answer_bank_item.detail", x.detail_enc) : null,
       text: x.answer_text_enc ? decryptField(dk, "answer_bank_item.answer_text", x.answer_text_enc) : "",
       approved: x.status === "approved", stale: !x.last_reviewed_at || Date.now() - new Date(x.last_reviewed_at).getTime() > 90 * 86_400_000,
     }));
@@ -139,11 +141,14 @@ export async function packetProfile(c: pg.PoolClient, cfg: AppConfig, applicantI
     `SELECT id, title, employer_name, location, start_date, end_date, description FROM experience_item
       WHERE employment_type NOT IN ('project','coursework') ORDER BY end_date DESC NULLS FIRST, start_date DESC, sort_order`)).rows
     .map((x) => ({ id: String(x.id), title: String(x.title), employer: x.employer_name ?? null, location: x.location ?? null, start: ymd(x.start_date), end: ymd(x.end_date), description: x.description ?? null }));
+  // The employer being applied to, their degrees, and whether their work history is marked complete (the answer ladder's facts).
+  const employer = ((await c.query("SELECT p.employer_canonical FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE m.id = $1", [matchId])).rows[0]?.employer_canonical as string | undefined) ?? null;
+  const education = (await c.query("SELECT degree FROM education_item ORDER BY end_date DESC NULLS FIRST, id")).rows.map((x) => ({ degree: (x.degree as string | null) ?? null }));
   const profile: PacketProfile = {
     firstName: parts[0] ?? "", lastName: parts.length > 1 ? parts[parts.length - 1]! : "", fullName: full, preferredName: a.preferred_name,
     email: dec("applicant.email", a.email_enc), phone: dec("applicant.phone", a.phone_enc), city: a.city, region: a.region, country: a.country,
     links: { linkedin: linkOf(/linkedin/i), github: linkOf(/github/i), website: linkOf(/^(website|portfolio|site|web)$/i) },
-    answers, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing, experience,
+    answers, employer, education, workHistoryComplete: !!a.work_history_complete, resume: resume ? { id: resume.id } : null, letter: letter ? { id: letter.id, text: documentText(letter.source_json) } : null, standing, experience,
     // Today where they live, for the form's own date and a start date (by the calendar, in every AI mode).
     today: localDay(await tz(c)),
   };
@@ -234,11 +239,11 @@ async function insertField(c: pg.PoolClient, dk: Buffer, packetId: string, i: nu
   const answer = f.step ? null : f.answer;
   await c.query(
     `INSERT INTO packet_field (applicant_id, packet_id, ordinal, question_as_shown, answer_value_enc, source, source_ref_id, confidence,
-       requires_applicant_step, step_kind, fill_status, field_key, field_type, options, note, required, standing_kind)
-     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+       requires_applicant_step, step_kind, fill_status, field_key, field_type, options, note, required, standing_kind, parent_key)
+     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [packetId, i, f.label, answer === null ? null : encryptField(dk, "packet_field.answer_value", answer), f.step ? null : f.source, f.step ? null : f.sourceRefId,
       f.confidence, !!f.step, f.step, f.step ? "left_for_applicant" : "pending", f.key, f.type, f.options ? JSON.stringify(f.options) : null, f.note,
-      !!f.required, f.step ? null : f.standingKind ?? null]);
+      !!f.required, f.step ? null : f.standingKind ?? null, f.parentKey ?? null]);
 }
 
 export async function rehash(c: pg.PoolClient, dk: Buffer, packetId: string): Promise<string> {
@@ -321,7 +326,10 @@ export async function answerPacketField(pool: pg.Pool, cfg: AppConfig, session: 
 }
 
 async function setFieldAnswer(c: pg.PoolClient, cfg: AppConfig, session: Session, fieldId: string, text: string, keep: boolean): Promise<string> {
-  const f = (await c.query("SELECT packet_id, requires_applicant_step, options, question_as_shown, field_type FROM packet_field WHERE id = $1", [fieldId])).rows[0];
+  const f = (await c.query(
+    `SELECT f.packet_id, f.requires_applicant_step, f.options, f.question_as_shown, f.field_type, f.parent_key, p.employer_canonical
+       FROM packet_field f JOIN application_packet k ON k.id = f.packet_id JOIN application a ON a.id = k.application_id JOIN job_posting p ON p.id = a.job_posting_id
+      WHERE f.id = $1`, [fieldId])).rows[0];
   if (!f) throw new DomainError("TC_NOT_FOUND");
   if (f.requires_applicant_step) throw new DomainError("TC_APPLICANT_STEP");
   const t = text.trim().slice(0, 10000);
@@ -332,8 +340,23 @@ async function setFieldAnswer(c: pg.PoolClient, cfg: AppConfig, session: Session
     [fieldId, t ? encryptField(dk, "packet_field.answer_value", t) : null, t ? "applicant_typed" : null, t ? 1 : 0]);
   await rehash(c, dk, f.packet_id);
   // Kept in the profile (or as a saved answer) so the next form doesn't ask again (Yong, 2026-11-15).
-  if (t && keep) await keepAnswer(c, dk, session.applicantId, f.question_as_shown, f.field_type ?? "text", t);
+  // Questions about this employer are kept for this employer only (§C, 2026-11-21). A follow-up box's words
+  // are kept as the detail of the question before it, not as an answer of their own.
+  const employer = (f.employer_canonical as string | null) ?? null;
+  if (t && keep && f.parent_key) await keepDetail(c, dk, session.applicantId, f.packet_id, f.parent_key, t, employer);
+  else if (t && keep) await keepAnswer(c, dk, session.applicantId, f.question_as_shown, f.field_type ?? "text", t, { employer });
   return f.packet_id as string;
+}
+
+/** A follow-up box's answer, kept with the parent question's saved answer (saved first, from the parent's answer, if it isn't yet). */
+async function keepDetail(c: pg.PoolClient, dk: Buffer, applicantId: string, packetId: string, parentKey: string, text: string, employer: string | null) {
+  const parent = (await c.query("SELECT question_as_shown, field_type, source, source_ref_id, answer_value_enc FROM packet_field WHERE packet_id = $1 AND field_key = $2 ORDER BY ordinal LIMIT 1", [packetId, parentKey])).rows[0];
+  if (!parent) return;
+  let id: string | null = parent.source === "answer_bank" ? parent.source_ref_id : null;
+  if (!id && parent.answer_value_enc) {
+    id = await keepAnswer(c, dk, applicantId, parent.question_as_shown, parent.field_type ?? "text", decryptField(dk, "packet_field.answer_value", parent.answer_value_enc), { employer });
+  }
+  if (id) await c.query("UPDATE answer_bank_item SET detail_enc = $2, updated_at = now() WHERE id = $1", [id, encryptField(dk, "answer_bank_item.detail", text.slice(0, 2000))]);
 }
 
 /**

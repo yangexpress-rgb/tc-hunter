@@ -1,0 +1,83 @@
+{
+  "about": "The question golden set (Yong, 2026-11-21, No AI redesign §C). Each question's expected resolution in No AI mode, from the applicant's own information only. A change that alters a resolution must alter this file deliberately. Capital One and Wiley wordings are reconstructed from the live runs of 2026-11-21 (Capital One wd12 Sr Director PM; Wiley R2601352); replace a label with the employer's exact words when it is captured again.",
+  "profile": {
+    "firstName": "Yong", "lastName": "Example", "fullName": "Yong Example", "preferredName": "Yong",
+    "email": "yong@example.test", "phone": "+1 555 0100", "city": "Toronto", "region": "ON", "country": "Canada",
+    "links": {}, "resume": { "id": "r1" }, "letter": null, "today": "2026-11-21",
+    "workHistoryComplete": true,
+    "experience": [
+      { "id": "e1", "title": "Co-founder", "employer": "SyntriForce LLC", "location": null, "start": "2024-03-01", "end": null, "description": null },
+      { "id": "e2", "title": "Vice President, Technology", "employer": "Northwind Traders", "location": null, "start": "2015-01-01", "end": "2024-02-29", "description": null },
+      { "id": "e3", "title": "IT Manager", "employer": "Contoso", "location": null, "start": "2008-06-01", "end": "2014-12-31", "description": null }
+    ],
+    "education": [{ "degree": "MBA" }, { "degree": "BS Computer Science" }],
+    "standing": [],
+    "answers": [
+      { "id": "a-auth", "key": "work_auth", "patterns": ["authori[sz]ed to work", "legally (able|eligible) to work"], "text": "Yes", "approved": true, "stale": false, "isApplicantStep": true },
+      { "id": "a-spon", "key": "sponsorship", "patterns": ["sponsorship", "visa"], "text": "No", "approved": true, "stale": false, "isApplicantStep": true },
+      { "id": "a-age", "key": "age_18", "patterns": ["\\b(18|eighteen) (years )?(of age |years old )?or (over|older)", "at least (18|eighteen)( years)?( of age| years old)?\\b", "over the age of (18|eighteen)"], "text": "Yes", "approved": true, "stale": false, "isApplicantStep": false },
+      { "id": "a-ess", "key": "essential_functions", "patterns": ["essential (functions|duties) of the (job|position|role)"], "text": "Yes", "approved": true, "stale": false, "isApplicantStep": false },
+      { "id": "a-nc", "key": "restrictive_agreement", "patterns": ["non-?compete", "non-?solicit", "(prohibit|restrict)\\w* you from (recruiting|hiring|soliciting|competing)"], "text": "No", "approved": true, "stale": false, "isApplicantStep": false },
+      { "id": "a-2nd", "key": "custom:Do you currently have a second job or other outside employment", "patterns": ["^Do you currently have a second job or other outside employment"], "text": "Yes", "detail": "Co-founder of SyntriForce LLC, an early-stage software company", "approved": true, "stale": false, "isApplicantStep": false },
+      { "id": "a-acme", "key": "employer:prior_employment", "patterns": ["^have you ever worked for <employer>$"], "text": "Yes", "employerKey": "acme", "approved": true, "stale": false, "isApplicantStep": false }
+    ]
+  },
+  "sets": [
+    {
+      "name": "Capital One (Sr Director PM, wd12)",
+      "employer": "Capital One",
+      "fields": [
+        { "key": "c1", "label": "Are you eligible to work in the country in which this position is located?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-auth" } },
+        { "key": "c2", "label": "Will you now or in the future require sponsorship for employment visa status?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "No", "source": "answer_bank", "ref": "a-spon" } },
+        { "key": "c3", "label": "Are you at least 18 years of age?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-age" } },
+        { "key": "c4", "label": "Are you able to perform the essential functions of the job, with or without reasonable accommodations?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-ess" } },
+        { "key": "c5", "label": "Are you currently under any form of agreement or policy, with your current or previous employer(s), which would prohibit or restrict you from recruiting or hiring former colleagues or soliciting/doing business with customers?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "No", "source": "answer_bank", "ref": "a-nc" } },
+        { "key": "c6", "label": "Have you ever been employed by Capital One or any of its subsidiaries?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "No", "source": "derived" } },
+        { "key": "c7", "label": "Do you currently have a second job or other outside employment?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-2nd" } },
+        { "key": "c8", "label": "If yes, please describe the nature of your second job and the hours you spend on it.*", "type": "textarea", "required": true, "expect": { "answer": "Co-founder of SyntriForce LLC, an early-stage software company", "source": "answer_bank", "ref": "a-2nd", "parent": "c7" } },
+        { "key": "c9", "label": "Do you meet the Basic Qualifications for this role as specified in the job description?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": null, "step": "attestation" } },
+        { "key": "c10", "label": "I acknowledge that I have read and agree to abide by the Capital One Code of Conduct.*", "type": "checkbox", "required": true, "expect": { "answer": null, "step": "attestation" } }
+      ]
+    },
+    {
+      "name": "Wiley (R2601352), standing attestation set",
+      "employer": "Wiley",
+      "standing": [{ "kind": "attestation", "text": "Yes" }],
+      "fields": [
+        { "key": "w1", "label": "Previous Employment: Have you previously been employed by John Wiley & Sons, Inc. or any of its subsidiaries? By answering, I confirm that the information I provide is true and complete.*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": "No", "source": "derived", "note": "Previous employment at Wiley: No, from your work history. Confirmation: your standing answer in Settings." } },
+        { "key": "w2", "label": "I certify that I have never been employed by Wiley or any of its subsidiaries.", "type": "checkbox", "expect": { "answer": "Yes", "source": "standing_answer" } },
+        { "key": "w3", "label": "I certify that I have previously been employed by Wiley.", "type": "checkbox", "expect": { "answer": null, "step": "attestation" } },
+        { "key": "w4", "label": "Are you currently or have you ever been a contractor or consultant for Wiley?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": null } },
+        { "key": "w5", "label": "Have you been employed by PricewaterhouseCoopers (PwC) in the last two years?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": null } },
+        { "key": "w6", "label": "Did you use artificial intelligence (AI) tools to create or edit the materials you submitted to Wiley?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": null } },
+        { "key": "w7", "label": "Highest level of education*", "type": "select", "options": ["High School", "Bachelor's Degree", "Master's Degree", "Doctorate"], "expect": { "answer": "Master's Degree", "source": "derived" } },
+        { "key": "w8", "label": "How many years of professional experience do you have?", "type": "select", "options": ["0-5 years", "6-10 years", "11-15 years", "16+ years"], "expect": { "answer": "16+ years", "source": "derived" } },
+        { "key": "w9", "label": "Current employer", "type": "text", "expect": { "answer": "SyntriForce LLC", "source": "derived" } }
+      ]
+    },
+    {
+      "name": "Fence negatives and things that must never be answered",
+      "employer": "Wiley",
+      "standing": [{ "kind": "attestation", "text": "Yes" }, { "kind": "consent", "text": "I agree" }],
+      "fields": [
+        { "key": "n1", "label": "I confirm that none of my relatives or family members work for Wiley.", "type": "checkbox", "expect": { "answer": null, "step": "attestation" } },
+        { "key": "n2", "label": "I certify that I have never worked for Acme Corp.", "type": "checkbox", "expect": { "answer": null, "step": "attestation" } },
+        { "key": "n3", "label": "Have you ever worked for Acme?", "type": "select", "options": ["Yes", "No"], "expect": { "answer": null } },
+        { "key": "n4", "label": "How many years have you worked with Kubernetes?*", "type": "text", "required": true, "expect": { "answer": null } },
+        { "key": "n5", "label": "Do you have any relatives currently employed by Wiley?*", "type": "select", "options": ["Yes", "No"], "required": true, "expect": { "answer": null } },
+        { "key": "n6", "label": "Can you work in the US without sponsorship?", "type": "select", "options": ["Yes", "No"], "expect": { "answer": null, "step": "work_auth" } },
+        { "key": "n7", "label": "Have you never worked for Wiley?", "type": "select", "options": ["Yes", "No"], "expect": { "answer": null } },
+        { "key": "n8", "label": "I acknowledge that I have read Wiley's privacy notice.", "type": "checkbox", "expect": { "answer": "Yes", "source": "standing_answer" } },
+        { "key": "n9", "label": "Do you have a potential conflict of interest with Wiley?", "type": "select", "options": ["Yes", "No"], "expect": { "answer": null } }
+      ]
+    },
+    {
+      "name": "Employer-scoped memory: Acme's answer only on Acme's form",
+      "employer": "Acme Inc.",
+      "fields": [
+        { "key": "m1", "label": "Have you ever worked for Acme?*", "type": "select", "options": ["Yes", "No"], "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-acme" } },
+        { "key": "m2", "label": "Have you ever worked for ACME Inc?", "type": "select", "options": ["Yes", "No"], "expect": { "answer": "Yes", "source": "answer_bank", "ref": "a-acme" } }
+      ]
+    }
+  ]
+}
