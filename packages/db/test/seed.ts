@@ -127,6 +127,7 @@ export async function seedEverything(
     await one("apply_run", "INSERT INTO apply_run (applicant_id, application_id, status, step) VALUES ($1, $2, 'failed', 'Seed') RETURNING id", [me, ids.application]);
     await one("apply_shot", "INSERT INTO apply_shot (applicant_id, run_id, kind, caption, image_enc) VALUES ($1, $2, 'stopped', 'Seed', '\\x00'::bytea) RETURNING id", [me, ids.apply_run]);
     await one("apply_handover", "INSERT INTO apply_handover (applicant_id, run_id, application_id, step, phase, what, expires_at, state, outcome) VALUES ($1, $2, $3, 'person_check', 'before_submit', 'Seed', now(), 'closed', 'expired') RETURNING id", [me, ids.apply_run, ids.application]);
+    await one("match_goal", "INSERT INTO match_goal (applicant_id, match_id, goal_id, g_score) VALUES ($1, $2, $3, 50) RETURNING id", [me, ids.match, ids.hunt_goal]);
     return ids;
   });
 }
