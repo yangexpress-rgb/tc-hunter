@@ -3,6 +3,8 @@ import { containsPhrase } from "../jobs/text";
 import { countryFit } from "../jobs/country";
 import { functionWords, levelOf } from "../jobs/normalize";
 import type { SalaryPeriod } from "../jobs/types";
+import { domainLabel, domainOf, domainRelation, type DomainKey, type DomainVerdict } from "../jobs/domain";
+import { DOMAIN_ROLE_FACTOR, tierFor, type Tier } from "./rank";
 import { applicantLevel, effectiveYears, employmentKind, languageMentioned, levelFit, sameEmployer, seniorityFit, type MatchPosting, type MatchPrefs, type MatchProfile } from "./score";
 
 /**
@@ -19,11 +21,16 @@ import { applicantLevel, effectiveYears, employmentKind, languageMentioned, leve
  * The older overall match score (score.ts) is unchanged and still drives "Best match",
  * the ruled-out filters, calibration and the resume threshold.
  */
-export const FIT_VERSION = "fit-2";  // fit-2: the goal's countries count in Place
+// fit-2: the goal's countries count in Place. fit-3: tiers by level, track and domain order the list (Yong, 2026-11-22).
+export const FIT_VERSION = "fit-3";
 
 export interface FitPart { key: string; label: string; weight: number; raw: number; points: number; detail: string[] }
 export interface Fit { score: number; parts: FitPart[]; summary: string }
-export interface GoalFit extends Fit { goalId: string | null; goalName: string | null }
+export interface GoalFit extends Fit {
+  goalId: string | null; goalName: string | null;
+  /** Level and domain tier against this goal (1 first), the main reason it isn't Tier 1, and the job's domain. */
+  tier: 1 | 2 | 3; tierMisses: number; tierReason: Tier["reason"]; tierLines: string[]; domain: DomainKey; domainLine: string;
+}
 
 const PER_YEAR: Record<SalaryPeriod, number> = { year: 1, month: 12, hour: 2080 };
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -54,9 +61,12 @@ export function roleFit(postingTitle: string, roles: string[]): { raw: number; b
 }
 
 /** G-score for one goal. */
-export function goalFit(prefs: MatchPrefs, posting: MatchPosting): GoalFit {
+export function goalFit(prefs: MatchPrefs, posting: MatchPosting, verdict?: DomainVerdict): GoalFit {
   const text = `${posting.title}\n${posting.descriptionText}`;
   const parts: Array<Omit<FitPart, "points">> = [];
+  const dom = verdict ?? domainOf({ title: posting.title, descriptionText: posting.descriptionText, employerIndustry: posting.employerIndustry ?? null });
+  const goalDomains = prefs.domains ?? [];
+  const rel = goalDomains.length ? domainRelation(dom.domain, goalDomains) : null;
 
   // Role (35): always counts. A goal with no role or occupation can't say.
   const roles = [...prefs.targetTitles, ...(prefs.occupation ? [prefs.occupation] : [])].filter((r) => r.trim());
@@ -65,7 +75,12 @@ export function goalFit(prefs: MatchPrefs, posting: MatchPosting): GoalFit {
     const line = r.raw >= 0.99 ? `The title is the role you want: "${r.best}".`
       : r.best ? `The title shares ${r.words.map((w) => `"${w}"`).join(", ")} with "${r.best}".`
       : `The title isn't close to a role you want (${roles.slice(0, 3).join(", ")}${roles.length > 3 ? "…" : ""}).`;
-    parts.push({ key: "role", label: "Role", weight: 35, raw: r.raw, detail: [line] });
+    // With domains set, the same title words count less in a near or different domain (Yong: medical PM is not IT PM).
+    const factor = rel ? DOMAIN_ROLE_FACTOR[rel] : 1;
+    const domLine = rel === "match" ? `In your domain (${domainLabel(dom.domain)}).`
+      : rel === "near" ? `Near your domain (${domainLabel(dom.domain)}), so the title counts for less.`
+      : rel === "different" ? `In a different domain (${domainLabel(dom.domain)}), so the title counts for much less.` : null;
+    parts.push({ key: "role", label: "Role", weight: 35, raw: r.raw * factor, detail: domLine ? [line, domLine] : [line] });
   } else parts.push({ key: "role", label: "Role", weight: 35, raw: 0.5, detail: ["This goal doesn't name a role, so this counts as half."] });
 
   // Level (15), when the goal picks levels.
@@ -146,14 +161,19 @@ export function goalFit(prefs: MatchPrefs, posting: MatchPosting): GoalFit {
   const { score, parts: done } = finish(parts);
   const weak = done.filter((p) => p.raw < 0.5).map((p) => p.label.toLowerCase());
   const summary = `${band(score)} for ${prefs.goalName ?? "your goal"}${weak.length ? `; off on ${weak.join(", ")}` : ""}.`;
-  return { score, parts: done, summary, goalId: prefs.goalId ?? null, goalName: prefs.goalName ?? null };
+  const tier = tierFor({ levels: prefs.levels, roles: prefs.targetTitles, occupation: prefs.occupation, domains: goalDomains },
+    { title: posting.title, years: posting.requirements?.years ?? null }, dom.domain);
+  return { score, parts: done, summary, goalId: prefs.goalId ?? null, goalName: prefs.goalName ?? null,
+    tier: tier.tier, tierMisses: tier.misses, tierReason: tier.reason, tierLines: tier.lines, domain: dom.domain, domainLine: dom.line };
 }
 
 /** G-score across goals: the goal the job fits best. */
 export function bestGoalFit(prefs: MatchPrefs[], posting: MatchPosting): GoalFit {
   let best: GoalFit | null = null;
-  for (const p of prefs) { const g = goalFit(p, posting); if (!best || g.score > best.score) best = g; }
-  if (!best) return { score: 0, parts: [], summary: "No goal set yet.", goalId: null, goalName: null };
+  const verdict = domainOf({ title: posting.title, descriptionText: posting.descriptionText, employerIndustry: posting.employerIndustry ?? null });
+  // The goal it's closest to: the best tier first, then the best G-score (2026-11-22).
+  for (const p of prefs) { const g = goalFit(p, posting, verdict); if (!best || g.tier < best.tier || (g.tier === best.tier && (g.tierMisses < best.tierMisses || (g.tierMisses === best.tierMisses && g.score > best.score)))) best = g; }
+  if (!best) return { score: 0, parts: [], summary: "No goal set yet.", goalId: null, goalName: null, tier: 1, tierMisses: 0, tierReason: null, tierLines: [], domain: verdict.domain, domainLine: verdict.line };
   return prefs.length > 1 && best.goalName ? { ...best, parts: best.parts.map((p, i) => i === 0 ? { ...p, detail: [`Fits your goal "${best!.goalName}" best.`, ...p.detail] } : p) } : best;
 }
 

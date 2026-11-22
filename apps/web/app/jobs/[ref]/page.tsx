@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listApplications, listDocuments, listEmailSignals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
-import { READ_WITHOUT_AI, aiIsOff, readWithoutAi, t } from "@tc-hunter/domain";
+import { READ_WITHOUT_AI, aiIsOff, domainLabel, readWithoutAi, t, tierReasonText } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -89,6 +89,10 @@ export default async function JobPage(props: Props) {
           {m.c_summary ? <div><strong>C</strong> {m.c_summary}</div> : null}
         </div>
       ) : <p className="reason big">{m.reason_line}</p>}
+      {/* Where it ranks, and why (2026-11-22): level, kind of role and domain against the goal. */}
+      {m.tier && m.tier > 1 ? <p className={`tier-reason tier-${m.tier}`}>{tierReasonText(m.tier_reason, m.domain)}</p> : null}
+      {m.domain ? <p className="muted">Domain: {domainLabel(m.domain)}{m.domain_line ? <span className="small"> · {m.domain_line}</span> : null}</p> : null}
+      {Array.isArray(m.tier_lines) && m.tier_lines.length ? <p className="muted small">{(m.tier_lines as string[]).join(" ")}</p> : null}
       {m.filtered ? <p className="error">Your preferences rule this one out: {(m.filter_reasons as string[]).join("; ")}.</p> : null}
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
       <FeedbackButtons matchId={m.id} status={status} back={back} />

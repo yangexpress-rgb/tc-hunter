@@ -1,0 +1,22 @@
+{
+  "about": "Domain classifier fixtures (2026-11-22). Each case: a title, an optional description and employer industry, and the domain expected. Rules only, so No AI and AI modes agree.",
+  "cases": [
+    { "title": "Senior Director, Product Management - Enterprise Systems", "expect": "enterprise_it" },
+    { "title": "Senior Director, Product Management - Medical Devices", "expect": "healthcare_medical" },
+    { "title": "Senior Software Engineer, Platform", "expect": "enterprise_it" },
+    { "title": "VP, Digital Transformation", "employerIndustry": "healthcare_medical", "expect": "enterprise_it" },
+    { "title": "Director, Patient Access", "employerIndustry": "healthcare_medical", "expect": "healthcare_medical" },
+    { "title": "Director, Supply Chain Operations", "expect": "business_operations" },
+    { "title": "Director, Product Management - Life Sciences Platform", "expect": "life_sciences" },
+    { "title": "Director of IT, Clinical Applications", "expect": "enterprise_it" },
+    { "title": "VP, Commercial Banking Technology Strategy", "expect": "financial_services" },
+    { "title": "Head of Merchandising, E-commerce", "expect": "consumer_retail" },
+    { "title": "Plant Manager, Automotive Components", "expect": "industrial" },
+    { "title": "Director of Strategic Initiatives", "description": "Lead cross-functional initiatives for the university and partner with academic departments, the higher education leadership team and state government offices.", "expect": "public_sector" },
+    { "title": "Director, Salesforce CRM Platform", "employerIndustry": "financial_services", "expect": "enterprise_it" },
+    { "title": "Program Director", "description": "Lead programs across the organization. Work with partners and stakeholders to deliver results on time and on budget.", "expect": "unclear" },
+    { "title": "Director of Strategy", "description": "Shape strategy with the executive team. Our customers include banks, hospitals and retailers, and we build software for each of them.", "expect": "unclear" },
+    { "title": "Operations Analyst", "description": "Support our operations team with weekly reporting and process improvement.", "expect": "unclear" },
+    { "title": "Senior Manager, Clinical Trial Operations", "expect": "life_sciences" }
+  ]
+}

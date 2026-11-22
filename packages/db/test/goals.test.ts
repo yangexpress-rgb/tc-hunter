@@ -54,9 +54,9 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     const goals = await listGoals(pool, yong);
     expect(goals.map((g) => ({ ...g, id: undefined }))).toEqual([
       { id: undefined, active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: ["Operations Analyst"], occupation: "Operations", industries: ["Logistics"],
-        companies: [], comp: { amount: 70000, currency: "USD", period: "year" }, locations: ["Raleigh"], workplaceTypes: ["onsite"] },
+        companies: [], comp: { amount: 70000, currency: "USD", period: "year" }, locations: ["Raleigh"], workplaceTypes: ["onsite"], domains: null },
       { id: undefined, active: false, timeFrame: "long", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: ["COO"], occupation: "Operations", industries: [],
-        companies: [], comp: null, locations: [], workplaceTypes: [] },
+        companies: [], comp: null, locations: [], workplaceTypes: [], domains: null },
     ]);
     const p = (await getPreferences(pool, yong))!;
     expect(p.target_titles).toEqual([]);
@@ -100,7 +100,7 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     expect(pref.detail[0]).toBe("Closest to your goal: Operations Analyst.");
     expect(d!.ladder_tag).not.toBeNull();  // from the someday goal (COO), though it isn't used to find jobs
     // G-score against the goal it fits, C-score against the applicant's record (Yong, 2026-11-18).
-    expect(ops.fit_version).toBe("fit-2");
+    expect(ops.fit_version).toBe("fit-3");
     expect(ops.g_score).toBeGreaterThanOrEqual(60);
     expect(ops.g_summary).toMatch(/for Operations Analyst/);
     expect(typeof ops.c_score).toBe("number");

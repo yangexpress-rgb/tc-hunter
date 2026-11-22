@@ -1,4 +1,4 @@
-import { employmentKind, goalLevelIndex, goalTypeLabel, jobLevelKey, jobLevelLabel, t } from "@tc-hunter/domain";
+import { employmentKind, goalLevelIndex, goalTypeLabel, jobLevelKey, jobLevelLabel, t, tierReasonText } from "@tc-hunter/domain";
 import { feedbackAction } from "@/app/jobs/actions";
 import { FitScores, pay, place, posted } from "@/components/jobs/JobBits";
 import { companyDomain, groupByCompany, payShort } from "@/lib/jobsView";
@@ -24,12 +24,17 @@ export function sortRows(rows: Array<Record<string, any>>, by: GoalSort, dir: "a
     location: place(r).toLowerCase(), type: kindOf(r), pay: yearlyPay(r), posted: r.posted_at ? new Date(r.posted_at).getTime() : null, status: statusOf(r),
   })[by];
   const sign = dir === "asc" ? 1 : -1;
+  // G-score order is tier first (level, kind of role, domain), fewer misses next, then G, C and Best match (2026-11-22).
+  const tierOrder = (a: Record<string, any>, b: Record<string, any>) =>
+    by !== "g" ? 0 : -sign * (((a.tier ?? 1) - (b.tier ?? 1)) || ((a.tier_misses ?? 0) - (b.tier_misses ?? 0)));
   return [...rows].sort((a, b) => {
+    const t0 = tierOrder(a, b);
+    if (t0) return t0;
     const x = key(a), y = key(b);
     if (x === null && y === null) return b.score - a.score;
     if (x === null) return 1;   // blanks always last
     if (y === null) return -1;
-    return (x < y ? -1 : x > y ? 1 : 0) * sign || b.score - a.score;
+    return (x < y ? -1 : x > y ? 1 : 0) * sign || (by === "g" ? (b.c_score ?? -1) - (a.c_score ?? -1) : 0) || b.score - a.score;
   });
 }
 
@@ -55,10 +60,17 @@ export function Initials({ name, size }: { name: string; size?: "big" }) {
 export const FitChip = ({ r }: { r: Row }) => <FitScores r={r} compact />;
 
 /** The goal and candidate lines under a job: what each score says, in a few words. */
+/** Why a job isn't at the top: below or above the target level, another kind of role or another domain (2026-11-22). */
+export function TierReason({ r }: { r: Row }) {
+  const text = r.tier && r.tier > 1 ? tierReasonText(r.tier_reason, r.domain) : null;
+  return text ? <div className={`tier-reason tier-${r.tier}`}>{text}</div> : null;
+}
+
 export function FitLines({ r }: { r: Row }) {
   if (!r.g_summary && !r.c_summary) return r.reason_line ? <p className="job-card-reason">{r.reason_line}</p> : null;
   return (
     <div className="fit-lines">
+      <TierReason r={r} />
       {r.g_summary ? <div><strong>G</strong> {r.g_summary}</div> : null}
       {r.c_summary ? <div><strong>C</strong> {r.c_summary}</div> : null}
     </div>
@@ -129,13 +141,13 @@ const WORKPLACE: Record<string, string> = { remote: "Remote", hybrid: "Hybrid", 
 
 export function companiesOf(rows: Row[]) {
   return groupByCompany(rows).map(({ name, rows: list }) => {
-    const sorted = [...list].sort((a, b) => (b.g_score ?? -1) - (a.g_score ?? -1) || b.score - a.score);
+    const sorted = [...list].sort((a, b) => (a.tier ?? 1) - (b.tier ?? 1) || (a.tier_misses ?? 0) - (b.tier_misses ?? 0) || (b.g_score ?? -1) - (a.g_score ?? -1) || b.score - a.score);
     const count = (vals: string[]) => [...vals.reduce((m, v) => m.set(v, (m.get(v) ?? 0) + 1), new Map<string, number>()).entries()].sort((a, b) => b[1] - a[1]).map(([v]) => v);
     const levels = count(list.map((r) => jobLevelKey(r.title ?? "")).filter((k) => k !== "none")).map((k) => jobLevelLabel(k));
     const work = count(list.map((r) => (r.workplace_type ? WORKPLACE[r.workplace_type as string] : /remote/i.test(r.location_raw ?? "") ? "Remote" : null)).filter(Boolean) as string[]);
     const places = count(list.map((r) => String(r.location_raw ?? "").split(/\s*[;|·]\s*/)[0]!.trim()).filter((p) => p && !/^remote$/i.test(p)));
     return {
-      name, rows: sorted, best: sorted[0]!.score,
+      name, rows: sorted, best: sorted[0]!.score, bestTier: sorted[0]!.tier ?? 1, bestMisses: sorted[0]!.tier_misses ?? 0,
       bestG: Math.max(-1, ...list.map((r) => r.g_score ?? -1)), bestC: Math.max(-1, ...list.map((r) => r.c_score ?? -1)), unseen: list.filter((r) => !r.seen_at).length,
       domain: companyDomain(name, list.map((r) => r.apply_url)),
       tags: [...work.slice(0, 2), ...places.slice(0, 2), ...levels.slice(0, 2)],
@@ -148,7 +160,7 @@ export function CompanyCards({ rows, sort, rolesHref, tab }: {
 }) {
   const list = companiesOf(rows).sort((a, b) =>
     sort === "roles" ? b.rows.length - a.rows.length || b.best - a.best
-      : sort === "g" ? b.bestG - a.bestG || b.bestC - a.bestC
+      : sort === "g" ? a.bestTier - b.bestTier || a.bestMisses - b.bestMisses || b.bestG - a.bestG || b.bestC - a.bestC
       : sort === "c" ? b.bestC - a.bestC || b.bestG - a.bestG
       : sort === "name" ? a.name.localeCompare(b.name)
       : b.best - a.best || b.rows.length - a.rows.length);

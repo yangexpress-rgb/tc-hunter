@@ -3,6 +3,7 @@ import { containsPhrase } from "../jobs/text";
 import { countryFit } from "../jobs/country";
 import { functionWords, goalLevelIndex, goalLevelLabel, goalLevelOf, LEVEL_LABEL, levelIndex, levelOf, normalizeTitle, type GoalLevel, type Level } from "../jobs/normalize";
 import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
+import type { DomainKey } from "../jobs/domain";
 
 /**
  * Match score (design 5.3): deterministic, 0-100, five weighted components, every
@@ -50,6 +51,8 @@ export interface MatchPrefs {
   languages?: string[];
   /** From a goal (match-4): countries the job must be in, as ISO codes. Empty or missing means any. */
   countries?: string[];
+  /** From a goal (fit-3): the domains wanted (taxonomy keys). Empty or missing means any domain. */
+  domains?: DomainKey[];
   /** The goal's short name, for the reasons, and its id, so a match can say which goal it fits best. */
   goalName?: string;
   goalId?: string;
@@ -64,6 +67,8 @@ export interface MatchPosting {
   salary: { min: number | null; max: number | null; currency: string | null; period: SalaryPeriod | null } | null;
   postedAt: string | Date | null;
   status: "active" | "expired" | "removed";
+  /** The employer's recorded industry (a followed company's, set by the applicant or seeded from its name). */
+  employerIndustry?: DomainKey | null;
 }
 export interface Adjustment { id: string; kind: "title_variant" | "employer" | "industry" | "location" | "keyword"; target: string; delta: number; label: string }
 

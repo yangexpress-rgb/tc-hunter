@@ -1,10 +1,18 @@
 import { getPreferences, jobsSummary, rescoreMatches, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
-import { FIT_VERSION, JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, normalizeEmployer, t } from "@tc-hunter/domain";
+import { bandLabel, domainLabel, effectiveDomains, FIT_VERSION, goalBand, JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, normalizeEmployer, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
 import { FeedbackButtons, FitScores, ago, pay, place, posted } from "@/components/jobs/JobBits";
 import { CompanyCards, COMPANY_SORTS, FitLines, JobCards, sortRows, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
+
+/** "Senior director to VP · Enterprise IT & platforms" for one goal, or null when it sets neither (2026-11-22). */
+function goalTargetsLine(g: Goal): string | null {
+  const b = goalBand(g.levels, g.roles, g.occupation);
+  const d = effectiveDomains(g).domains;
+  const parts = [b.levels.length ? `${bandLabel(b.levels)}${b.from === "roles" ? " (from your roles)" : ""}` : null, d.length ? d.map(domainLabel).join(", ") : null].filter(Boolean);
+  return parts.length ? parts.join(" · ") : null;
+}
 import { FilterBar } from "@/components/jobs/FilterBar";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
@@ -119,6 +127,18 @@ export default async function JobsPage(props: PageProps) {
             : SORTS.map(([k, l]) => <a key={k} href={q({ sort: k })} aria-current={sort === k ? "page" : undefined}>{l}</a>)}
         </nav>
       </div>
+      {(() => {
+        // The targets the order follows, stated once (Yong, 2026-11-22).
+        const shown = goals.filter((g) => (goal ? g.id === goal : g.active)).map((g) => [g, goalTargetsLine(g)] as const).filter(([, l]) => l);
+        if (!shown.length || view === "companies" && csort !== "g") return null;
+        const first = sort === "g" ? "Jobs at your level and in your domain come first." : "Sort by G-score to put jobs at your level and in your domain first.";
+        return (
+          <p className="goal-targets">
+            {shown.length === 1 ? <>Your goal: {shown[0]![1]}. </> : <>Your goals: {shown.map(([g, l]) => `${goalName(g)}: ${l}`).join("; ")}. </>}
+            {first}
+          </p>
+        );
+      })()}
       <p className="muted small fit-legend"><strong>G</strong> how well a job matches your goals (role, level, type, place, pay). <strong>C</strong> how well your own experience and skills cover what the job asks for. Best match weighs both.</p>
       <p className="muted small view-default">
         {narrowed ? <>Showing {rows.length} of {matched.rows.length}{company ? <> at {company} (<a href={q({ company: undefined })}>every company</a>)</> : null}. </> : null}
