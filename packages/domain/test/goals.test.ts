@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { employmentKind, goalLabel, goalLevelOf, goalName, languageMentioned, levelFit, searchQueries, goalTargets, ladderGoal, prefsForGoal, scoreBestGoal, scoreMatch, type Goal, type MatchPosting } from "../src";
+import { employmentKind, goalLabel, goalLevelOf, goalName, languageMentioned, levelFit, searchQueries, goalTargets, ladderGoal, prefsForGoal, scoreGoals, scoreMatch, type Goal, type MatchPosting } from "../src";
 
 const FIX = join(__dirname, "..", "..", "..", "fixtures");
 const read = (p: string) => readFileSync(join(FIX, p), "utf8");
@@ -108,11 +108,14 @@ describe("goals", () => {
   it("keeps the goal a job fits best, and says which", () => {
     const pay = prefsForGoal(goal({ roles: ["Analyst"], comp: { amount: 900000, currency: "USD", period: "year" } }), settings, null);
     const fits = prefsForGoal(goal({ id: "fits", roles: ["Data analyst"] }), settings, null);
-    const r = scoreBestGoal(fx.profile, [pay, fits], base, { now });
+    const both = scoreGoals(fx.profile, [pay, fits], base, { now });
+    const r = both.primary.result;
     expect(r.filtered).toBe(false);
     expect(r.components.find((c) => c.key === "preferences")!.detail[0]).toBe("Closest to your goal: Data analyst.");
     expect(r.goalId).toBe("fits");
-    const one = scoreBestGoal(fx.profile, [fits], base, { now });
+    // Every goal's verdict is kept: the pay goal rules the job out, with its own reasons.
+    expect(both.each.map((e) => [e.goalId, e.result.filtered])).toEqual([["g", true], ["fits", false]]);
+    const one = scoreGoals(fx.profile, [fits], base, { now }).primary.result;
     expect(one).toEqual({ ...scoreMatch(fx.profile, fits, base, { now }), goalId: "fits" });
   });
 });

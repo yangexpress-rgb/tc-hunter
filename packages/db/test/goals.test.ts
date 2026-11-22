@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { RulesRequirementsReader, SourceRefusedError, type Fetcher, type FetchResult } from "@tc-hunter/domain";
+import { FIT_VERSION, RulesRequirementsReader, SourceRefusedError, type Fetcher, type FetchResult } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, coachCounts, deleteGoal, followSource, getMatchByRef, getPreferences, listGoals, listMatches, requestScan, rescoreMatches, runNextWork,
   saveGoal, type AppConfig, type GoalInput, type Session, type WorkDeps,
@@ -100,7 +100,7 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     expect(pref.detail[0]).toBe("Closest to your goal: Operations Analyst.");
     expect(d!.ladder_tag).not.toBeNull();  // from the someday goal (COO), though it isn't used to find jobs
     // G-score against the goal it fits, C-score against the applicant's record (Yong, 2026-11-18).
-    expect(ops.fit_version).toBe("fit-4");
+    expect(ops.fit_version).toBe(FIT_VERSION);
     expect(ops.g_score).toBeGreaterThanOrEqual(60);
     expect(ops.g_summary).toMatch(/for Operations Analyst/);
     expect(typeof ops.c_score).toBe("number");

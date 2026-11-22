@@ -2,6 +2,8 @@ import type { GoalLevel } from "../jobs/normalize";
 import { domainsFromIndustries, type DomainKey } from "../jobs/domain";
 import type { SalaryPeriod, Workplace } from "../jobs/types";
 import { scoreMatch, type MatchPosting, type MatchPrefs, type MatchProfile, type MatchResult } from "./score";
+import { goalFit, markPrimaryFit, primaryGoalIndex, type GoalFit } from "./fit";
+import { domainOf } from "../jobs/domain";
 
 /**
  * Goals (Yong, 2026-11-14): a person can want more than one thing, now and later.
@@ -125,22 +127,30 @@ export function goalTargets(prefs: MatchPrefs[]): string[] {
   return [...new Set(prefs.flatMap((p) => [...p.targetTitles, ...(p.occupation ? [p.occupation] : [])]))];
 }
 
+/** One goal's verdict on a job: its G-score and tier (goalFit) and its overall score and ruled-out verdict (scoreMatch). */
+export interface GoalScore { goalId: string | null; goalName: string | null; fit: GoalFit; result: MatchResult }
+
 /**
- * Scores a job against each goal and keeps the best: one the job isn't ruled out
- * for, highest score first. With more than one goal, the reasons say which.
+ * Scores a job against every goal and keeps every result (multi-goal brief §4, 2026-11-22).
+ *
+ * There used to be two contests here: bestGoalFit picked the G-score's goal (tier first) and
+ * scoreBestGoal picked the overall score's goal (not ruled out, then highest score), and the stored
+ * goal could come from either. That second contest is gone on purpose. Each goal's score and
+ * ruled-out verdict now belong to that goal (stored as its match_goal row), and the match-level
+ * numbers are the primary goal's, chosen by the one rule in primaryGoalIndex.
+ *
+ * `primary.fit` and `primary.result` carry the "best"/"closest" lines shown when there are several goals.
  */
-export function scoreBestGoal(profile: MatchProfile, prefs: MatchPrefs[], posting: MatchPosting, ctx: Parameters<typeof scoreMatch>[3]): MatchResult {
-  if (!prefs.length) throw new Error("scoreBestGoal needs at least one set of preferences");
-  let best: MatchResult | null = null;
-  let bestName: string | undefined;
-  let bestId: string | null = null;
-  for (const p of prefs) {
-    const r = scoreMatch(profile, p, posting, ctx);
-    if (!best || (best.filtered && !r.filtered) || (best.filtered === r.filtered && r.score > best.score)) { best = r; bestName = p.goalName; bestId = p.goalId ?? null; }
-  }
-  if (bestId) best = { ...best!, goalId: bestId };
-  if (prefs.length > 1 && bestName) {
-    best = { ...best!, components: best!.components.map((c) => c.key === "preferences" ? { ...c, detail: [`Closest to your goal: ${bestName}.`, ...c.detail] } : c) };
-  }
-  return best!;
+export function scoreGoals(profile: MatchProfile, prefs: MatchPrefs[], posting: MatchPosting, ctx: Parameters<typeof scoreMatch>[3]): { each: GoalScore[]; primary: GoalScore } {
+  if (!prefs.length) throw new Error("scoreGoals needs at least one set of preferences");
+  const verdict = domainOf({ title: posting.title, descriptionText: posting.descriptionText, employerIndustry: posting.employerIndustry ?? null });
+  const each: GoalScore[] = prefs.map((p) => {
+    const result = scoreMatch(profile, p, posting, ctx);
+    return { goalId: p.goalId ?? null, goalName: p.goalName ?? null, fit: goalFit(p, posting, verdict), result: p.goalId ? { ...result, goalId: p.goalId } : result };
+  });
+  const top = each[primaryGoalIndex(each.map((e) => e.fit), each.map((e) => e.result.filtered))]!;
+  const result = prefs.length > 1 && top.goalName
+    ? { ...top.result, components: top.result.components.map((c) => c.key === "preferences" ? { ...c, detail: [`Closest to your goal: ${top.goalName}.`, ...c.detail] } : c) }
+    : top.result;
+  return { each, primary: { ...top, fit: markPrimaryFit(top.fit, prefs.length), result } };
 }

@@ -1,0 +1,15 @@
+{
+  "_about": "Two-goal applicant for the multi-goal brief (Yong, 2026-11-22, §9). Rules only: the No AI behaviour too.",
+  "goalA": { "label": "Goal-A", "roles": ["Director of Digital Transformation", "VP of Digital Transformation"], "levels": ["director", "senior_director", "vp"],
+             "domains": ["enterprise_it", "agentic_transformation"], "comp": { "amount": 300000, "currency": "USD", "period": "year" } },
+  "goalB": { "roles": ["VP Product Management"], "levels": ["senior_director", "vp"], "domains": ["it_product"] },
+  "jobs": [
+    { "key": "J1", "title": "Sr Director, CRM Platform", "employer": "Graybar Distribution",
+      "description": "Lead the enterprise CRM platform and ERP integrations for our distribution business. Own enterprise applications, IT infrastructure and digital transformation of sales operations." },
+    { "key": "J2", "title": "VP, Product Management, SaaS Platform", "employer": "Cloudwise Software",
+      "description": "Lead product management for our SaaS platform: product roadmap, product strategy and the product managers who ship it to enterprise customers." },
+    { "key": "J3", "title": "VP, Digital Transformation", "employer": "Northbank Systems",
+      "description": "Lead digital transformation of enterprise IT: ERP, CRM and enterprise applications, IT infrastructure and the move to the cloud. Partner with product management on our SaaS platform roadmap.",
+      "salary": { "min": 180000, "max": 220000 } }
+  ]
+}
