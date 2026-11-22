@@ -70,7 +70,7 @@ export interface MatchPosting {
   /** The employer's recorded industry (a followed company's, set by the applicant or seeded from its name). */
   employerIndustry?: DomainKey | null;
 }
-export interface Adjustment { id: string; kind: "title_variant" | "employer" | "industry" | "location" | "keyword"; target: string; delta: number; label: string }
+export interface Adjustment { id: string; kind: "title_variant" | "employer" | "industry" | "location" | "keyword" | "level"; target: string; delta: number; label: string }
 
 export interface Component { key: keyof typeof WEIGHTS; label: string; weight: number; raw: number; points: number; detail: string[] }
 export type LadderTag = "step_toward" | "same_level" | "side_step";
@@ -302,14 +302,8 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
 
   // Visible preference adjustments from the applicant's own feedback (never hidden maths).
   const applied: MatchResult["adjustments"] = [];
-  const nt = normalizeTitle(posting.title);
   for (const a of ctx.adjustments ?? []) {
-    const t = a.target.toLowerCase();
-    const hit = a.kind === "title_variant" ? functionWords(a.target).every((w) => nt.split(" ").includes(w))
-      : a.kind === "employer" ? posting.employer.toLowerCase() === t
-      : a.kind === "location" ? loc.includes(t)
-      : containsPhrase(hay, a.target);
-    if (hit) applied.push({ id: a.id, label: a.label, delta: a.delta });
+    if (adjustmentHits(a, posting, hay)) applied.push({ id: a.id, label: a.label, delta: a.delta });
   }
   const base = components.reduce((s, c) => s + c.points, 0);
   const score = Math.max(0, Math.min(100, Math.round(base + applied.reduce((s, a) => s + a.delta, 0))));
@@ -324,6 +318,19 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
     score, components, matchedSkills: matched, gapSkills: gaps, filtered: filterReasons.length > 0, filterReasons, reasonLine,
     ladderTag: ladder?.tag ?? null, ladderLabel: ladder?.label ?? null, adjustments: applied, rulesVersion: ctx.rulesVersion ?? RULES_VERSION,
   };
+}
+
+/**
+ * Whether one of the applicant's visible adjustments applies to a job. Also used to find the
+ * jobs a new or removed adjustment touches, so only those are scored again (2026-11-22).
+ */
+export function adjustmentHits(a: Pick<Adjustment, "kind" | "target">, posting: Pick<MatchPosting, "title" | "employer" | "locationRaw">, hay?: string): boolean {
+  const t = a.target.toLowerCase();
+  return a.kind === "title_variant" ? ((nt) => functionWords(a.target).every((w) => nt.includes(w)))(normalizeTitle(posting.title).split(" "))
+    : a.kind === "employer" ? posting.employer.toLowerCase() === t
+    : a.kind === "location" ? (posting.locationRaw ?? "").toLowerCase().includes(t)
+    : a.kind === "level" ? goalLevelOf(posting.title) === a.target
+    : hay !== undefined && containsPhrase(hay, a.target);
 }
 
 const KIND_LABEL: Record<string, string> = { full_time: "full-time", part_time: "part-time", contract: "contract", internship: "internship", temporary: "temporary", volunteer: "volunteer" };

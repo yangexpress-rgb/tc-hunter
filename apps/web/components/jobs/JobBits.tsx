@@ -1,5 +1,5 @@
-import { FEEDBACK_REASONS } from "@tc-hunter/domain";
-import { feedbackAction } from "@/app/jobs/actions";
+import { PASS_REASONS } from "@tc-hunter/domain";
+import { adjustmentAction, feedbackAction } from "@/app/jobs/actions";
 
 export { pay } from "@/lib/jobsView";
 
@@ -39,26 +39,82 @@ export function FitScores({ r, compact }: { r: Record<string, any>; compact?: bo
   );
 }
 
-/** Save / Pass / Not a fit (with a reason) for one match. */
-export function FeedbackButtons({ matchId, status, back }: { matchId: string; status: string; back: string }) {
-  const hidden = (<><input type="hidden" name="match_id" value={matchId} /><input type="hidden" name="back" value={back} /></>);
+/** What the list learned from a choice, shown where the choice was made, each with Turn off. */
+export interface Learned { id: string; label: string; active: boolean }
+
+const Hidden = ({ matchId, back }: { matchId: string; back: string }) => (
+  <><input type="hidden" name="match_id" value={matchId} /><input type="hidden" name="back" value={back} /></>
+);
+
+/**
+ * The optional reasons after a Pass (Yong, 2026-11-22): one tap, or none. Each one is stored on the
+ * Pass; some also show similar jobs lower, and the line under them says so when that happens.
+ */
+export function PassReasons({ matchId, back, why }: { matchId: string; back: string; why?: string }) {
+  return (
+    <div className="pass-reasons">
+      <span className="muted small">{why ? "Thanks. Change the reason:" : "Why? (optional)"}</span>
+      {PASS_REASONS.map(([k, l]) => (
+        <form key={k} action={feedbackAction}><Hidden matchId={matchId} back={back} /><input type="hidden" name="action" value="reason" /><input type="hidden" name="reason" value={k} />
+          <button className={`reason-chip${why === k ? " is-on" : ""}`} aria-pressed={why === k}>{l}</button></form>
+      ))}
+    </div>
+  );
+}
+
+/** "From now on, Salesforce jobs show lower." with Turn off / Turn back on, right where it happened. */
+export function LearnedLines({ learned, back }: { learned: Learned[]; back: string }) {
+  if (!learned.length) return null;
+  return (
+    <ul className="plain learned">
+      {learned.map((a) => (
+        <li key={a.id} className="adjust-row">
+          <span className={a.active ? "" : "muted"}>{a.active ? a.label : `Turned off: ${a.label}`}</span>
+          <form action={adjustmentAction}><input type="hidden" name="id" value={a.id} /><input type="hidden" name="active" value={a.active ? "0" : "1"} /><input type="hidden" name="back" value={back} />
+            <button className="small secondary">{a.active ? "Turn off" : "Turn back on"}</button></form>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The job just saved or passed on, folded in its own place on the list (Yong, 2026-11-22): what
+ * happened, Undo, the optional reasons after a Pass, and what the list learned from it.
+ */
+export function DoneNotice({ r, back, why, learned }: { r: Record<string, any>; back: string; why?: string; learned: Learned[] }) {
+  const passed = r.status !== "saved";
+  const here = `${back}${back.includes("?") ? "&" : "?"}done=${r.id}${why ? `&why=${why}` : ""}${learned.length ? `&learned=${learned.map((a) => a.id).join(",")}` : ""}#job-${r.id}`;
+  return (
+    <div className="done-notice" role="status">
+      <p>
+        {passed ? "Passed on " : "Saved "}<a href={`/jobs/${r.public_ref}`}>{r.title}</a> at {r.employer_canonical}. <span className="muted">It&apos;s in {passed ? "Passed" : "Saved"}.</span>{" "}
+        <form action={feedbackAction} className="inline-form"><Hidden matchId={r.id} back={back} /><input type="hidden" name="action" value="undo" /><button className="link-button">Undo</button></form>
+      </p>
+      {passed ? <PassReasons matchId={r.id} back={back} why={why} /> : null}
+      <LearnedLines learned={learned} back={here} />
+    </div>
+  );
+}
+
+/** Save / Pass for one match. After a Pass, the optional reasons and what the list learned. */
+export function FeedbackButtons({ matchId, status, back, why, learned = [], justDone }: {
+  matchId: string; status: string; back: string; why?: string; learned?: Learned[]; justDone?: boolean;
+}) {
   if (status !== "new") {
     return (
-      <form action={feedbackAction} className="inline-actions">{hidden}<input type="hidden" name="action" value="undo" />
-        <span className="muted">{status === "saved" ? "Saved" : "You passed on this"}</span> <button className="small secondary">Put back</button></form>
+      <div className="stack-tight">
+        <form action={feedbackAction} className="inline-actions"><Hidden matchId={matchId} back={back} /><input type="hidden" name="action" value="undo" />
+          <span className="muted">{status === "saved" ? "Saved" : "You passed on this"}</span> <button className="small secondary">{justDone ? "Undo" : "Put back"}</button></form>
+        {status === "passed" && justDone ? <PassReasons matchId={matchId} back={back} why={why} /> : null}
+        <LearnedLines learned={learned} back={`${back}?done=${matchId}${why ? `&why=${why}` : ""}${learned.length ? `&learned=${learned.map((a) => a.id).join(",")}` : ""}`} />
+      </div>
     );
   }
   return (
     <div className="inline-actions">
-      <form action={feedbackAction}>{hidden}<input type="hidden" name="action" value="save" /><button className="small">Save</button></form>
-      <form action={feedbackAction}>{hidden}<input type="hidden" name="action" value="dismiss" /><button className="small secondary">Pass</button></form>
-      <details className="mini">
-        <summary>Not a fit…</summary>
-        <form action={feedbackAction} className="inline-form">{hidden}<input type="hidden" name="action" value="not_a_fit" />
-          <label>Why?<select name="reason" defaultValue="not_my_field">{FEEDBACK_REASONS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
-          <button className="small secondary">Not a fit</button>
-        </form>
-      </details>
+      <form action={feedbackAction}><Hidden matchId={matchId} back={back} /><input type="hidden" name="action" value="save" /><button className="small">Save</button></form>
+      <form action={feedbackAction}><Hidden matchId={matchId} back={back} /><input type="hidden" name="action" value="dismiss" /><button className="small secondary">Pass</button></form>
     </div>
   );
 }

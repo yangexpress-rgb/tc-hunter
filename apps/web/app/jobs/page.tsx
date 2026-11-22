@@ -1,9 +1,9 @@
 import { getPreferences, jobsSummary, rescoreMatches, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
-import { bandLabel, domainLabel, effectiveDomains, FIT_VERSION, goalBand, JOB_LEVEL_FILTERS, goalName, jobLevelKey, jobLevelLabel, normalizeEmployer, t, type Goal } from "@tc-hunter/domain";
+import { bandLabel, domainLabel, effectiveDomains, FIT_VERSION, goalBand, JOB_LEVEL_FILTERS, goalName, PASS_REASONS, jobLevelKey, jobLevelLabel, normalizeEmployer, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
-import { FeedbackButtons, FitScores, ago, pay, place, posted } from "@/components/jobs/JobBits";
+import { DoneNotice, FeedbackButtons, FitScores, ago, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
 import { CompanyCards, COMPANY_SORTS, FitLines, JobCards, sortRows, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
 
 /** "Senior director to VP · Enterprise IT & platforms" for one goal, or null when it sets neither (2026-11-22). */
@@ -70,8 +70,16 @@ export default async function JobsPage(props: PageProps) {
     && (!goal || r.goal_id === goal)
     && (!company || normalizeEmployer(String(r.employer_canonical ?? "")) === normalizeEmployer(company))
     && (!words.length || words.every((w) => `${r.title} ${r.employer_canonical} ${r.location_raw ?? ""}`.toLowerCase().includes(w))));
-  const rows = sortRows(filtered, ...SORT_KEY[sort]);
-  const narrowed = rows.length !== matched.rows.length;
+  // The job just saved or passed on stays in its place, folded, with Undo (Yong, 2026-11-22).
+  const done = /^[0-9a-f-]{36}$/.test(params.done ?? "") ? params.done : undefined;
+  const why = PASS_REASONS.some(([k]) => k === params.why) ? params.why : undefined;
+  const learnedIds = many("learned");
+  const learned: Learned[] = adjustments.filter((a) => learnedIds.includes(a.id)).map((a) => ({ id: a.id, label: a.label, active: a.active }));
+  const doneRow = done && status === "new" && !filtered.some((r) => r.id === done)
+    ? (await listMatches(pool, session, { ids: [done], status: "all", showFiltered: true })).rows.find((r) => r.status !== "new")
+    : undefined;
+  const rows = sortRows(doneRow ? [...filtered, doneRow] : filtered, ...SORT_KEY[sort]);
+  const narrowed = filtered.length !== matched.rows.length;
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
     const all = { tab: status, view, sort, csort: csort === "g" ? undefined : csort, q: search || undefined, goal, ladder, source,
@@ -141,7 +149,7 @@ export default async function JobsPage(props: PageProps) {
       })()}
       <p className="muted small fit-legend"><strong>G</strong> how well a job matches your goals (role, level, type, place, pay). <strong>C</strong> how well your own experience and skills cover what the job asks for. Best match weighs both.</p>
       <p className="muted small view-default">
-        {narrowed ? <>Showing {rows.length} of {matched.rows.length}{company ? <> at {company} (<a href={q({ company: undefined })}>every company</a>)</> : null}. </> : null}
+        {narrowed ? <>Showing {filtered.length} of {matched.rows.length}{company ? <> at {company} (<a href={q({ company: undefined })}>every company</a>)</> : null}. </> : null}
         {view === defaultView ? (params.view_saved ? "Saved. Jobs opens this way from now on." : null) : (
           <form action={jobsViewAction} className="inline-form">
             <input type="hidden" name="jobs_view" value={view} /><input type="hidden" name="back" value={q({ view: undefined })} />
@@ -154,13 +162,15 @@ export default async function JobsPage(props: PageProps) {
         <p className="muted empty">{narrowed ? <>No jobs fit these filters. <a href={q({ q: undefined, goal: undefined, level: undefined, work: undefined, ladder: undefined, source: undefined, company: undefined })}>Clear them</a></>
           : status === "new" ? (sources.length || goals.some((g) => g.active) ? t("jobs.empty") : t("jobs.no_sources")) : status === "saved" ? "You haven't saved any jobs yet." : "You haven't passed on any jobs."}</p>
       ) : view === "jobs" ? (
-        <JobCards rows={rows} back={here} />
+        <JobCards rows={rows} back={here} done={doneRow ? { id: doneRow.id, why, learned } : undefined} />
       ) : view === "companies" ? (
         <CompanyCards rows={rows} sort={csort} tab={status} rolesHref={(c) => q({ company: c, view: "jobs" })} />
       ) : (
         <ul className="job-list plain">
-          {rows.map((r) => (
-            <li key={r.id} className={`job-row${r.filtered ? " is-filtered" : ""}${r.seen_at ? "" : " is-unseen"}`}>
+          {rows.map((r) => r.id === doneRow?.id ? (
+            <li key={r.id} id={`job-${r.id}`} className="job-row done-row"><DoneNotice r={r} back={here} why={why} learned={learned} /></li>
+          ) : (
+            <li key={r.id} id={`job-${r.id}`} className={`job-row${r.filtered ? " is-filtered" : ""}${r.seen_at ? "" : " is-unseen"}`}>
               <FitScores r={r} />
               <div className="job-main">
                 <a className="job-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>

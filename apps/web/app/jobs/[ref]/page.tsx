@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listApplications, listDocuments, listEmailSignals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
-import { READ_WITHOUT_AI, aiIsOff, domainLabel, readWithoutAi, t, tierReasonText } from "@tc-hunter/domain";
+import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listAdjustments, listApplications, listDocuments, listEmailSignals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
+import { PASS_REASONS, READ_WITHOUT_AI, aiIsOff, domainLabel, readWithoutAi, t, tierReasonText } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -32,7 +32,7 @@ export default async function JobPage(props: Props) {
   const { ref } = await props.params;
   if (!/^[A-Za-z0-9-]{1,40}$/.test(ref)) notFound();
   const { pool, cfg } = app();
-  const [{ saved, error }, m] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref)]);
+  const [{ saved, error, params }, m, learnedAdj] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref), listAdjustments(pool, session)]);
   if (!m) notFound();
   const [docs, work, prefs, apps, ready, noAi] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session), aiIsOff()]);
   const lastResult = (work?.status === "done" ? work.result ?? {} : {}) as { empty?: boolean };
@@ -95,7 +95,9 @@ export default async function JobPage(props: Props) {
       {Array.isArray(m.tier_lines) && m.tier_lines.length ? <p className="muted small">{(m.tier_lines as string[]).join(" ")}</p> : null}
       {m.filtered ? <p className="error">Your preferences rule this one out: {(m.filter_reasons as string[]).join("; ")}.</p> : null}
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
-      <FeedbackButtons matchId={m.id} status={status} back={back} />
+      <FeedbackButtons matchId={m.id} status={status} back={back} justDone={params.done === m.id}
+        why={PASS_REASONS.some(([k]) => k === params.why) ? params.why : undefined}
+        learned={learnedAdj.filter((a) => (params.learned ?? "").split(",").includes(a.id)).map((a) => ({ id: a.id, label: a.label, active: a.active }))} />
       {preparing ? <meta httpEquiv="refresh" content="4" /> : null}
       {/* Problems first, in red. */}
       {ready.roles === 0 && !preparing ? (
