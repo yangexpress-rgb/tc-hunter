@@ -1,19 +1,13 @@
 import { getPreferences, jobsSummary, rescoreMatches, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
-import { bandLabel, domainLabel, effectiveDomains, FIT_VERSION, goalBand, JOB_LEVEL_FILTERS, goalName, PASS_REASONS, jobLevelKey, jobLevelLabel, normalizeEmployer, t, type Goal } from "@tc-hunter/domain";
+import { FIT_VERSION, JOB_LEVEL_FILTERS, goalLabel, PASS_REASONS, jobLevelKey, jobLevelLabel, normalizeEmployer, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
 import { DoneNotice, FeedbackButtons, FitScores, ago, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
 import { CompanyCards, COMPANY_SORTS, FitLines, JobCards, sortRows, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
 
-/** "Senior director to VP · Enterprise IT & platforms" for one goal, or null when it sets neither (2026-11-22). */
-function goalTargetsLine(g: Goal): string | null {
-  const b = goalBand(g.levels, g.roles, g.occupation);
-  const d = effectiveDomains(g).domains;
-  const parts = [b.levels.length ? `${bandLabel(b.levels)}${b.from === "roles" ? " (from your roles)" : ""}` : null, d.length ? d.map(domainLabel).join(", ") : null].filter(Boolean);
-  return parts.length ? parts.join(" · ") : null;
-}
 import { FilterBar } from "@/components/jobs/FilterBar";
+import { goalOptions, goalTargetsLine } from "@/lib/goals";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { JOBS_VIEWS, JOBS_VIEW_LABEL, asJobsView } from "@/lib/jobsView";
@@ -119,7 +113,7 @@ export default async function JobsPage(props: PageProps) {
       {/* Searching and Refresh live on Where we look (Yong, 2026-11-18); Matches is only the jobs. */}
       <FilterBar
         hidden={{ tab: status === "new" ? undefined : status, view: view === defaultView ? undefined : view, sort: sort === "g" ? undefined : sort, csort: csort === "g" ? undefined : csort, company }}
-        search={search} goals={goals.map((g) => [g.id, goalName(g)] as const)} goal={goal ?? ""}
+        search={search} goals={goalOptions(goals)} goal={goal ?? ""}
         levels={levels} levelOpts={JOB_LEVEL_FILTERS} work={works} workOpts={WORK}
         ladder={ladder ?? ""} ladderOpts={LADDER} sources={sources.map((s) => [s.id, s.name] as const)} source={source ?? ""}
         showFiltered={showFiltered} clearHref={q({ q: undefined, goal: undefined, level: undefined, work: undefined, ladder: undefined, source: undefined, filtered: undefined, company: undefined })} />
@@ -144,7 +138,7 @@ export default async function JobsPage(props: PageProps) {
         const first = sort === "g" ? "Jobs at your level and in your domain come first." : "Sort by G-score to put jobs at your level and in your domain first.";
         return (
           <p className="goal-targets">
-            {shown.length === 1 ? <>Your goal: {shown[0]![1]}. </> : <>Your goals: {shown.map(([g, l]) => `${goalName(g)}: ${l}`).join("; ")}. </>}
+            {shown.length === 1 ? <>Your goal: {shown[0]![1]}. </> : <>Your goals: {shown.map(([g, l]) => `${goalLabel(g)}: ${l}`).join("; ")}. </>}
             {first}
           </p>
         );

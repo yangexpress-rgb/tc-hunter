@@ -53,9 +53,9 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     await ownerQuery(sql.slice(sql.indexOf("-- Bring what people")));
     const goals = await listGoals(pool, yong);
     expect(goals.map((g) => ({ ...g, id: undefined }))).toEqual([
-      { id: undefined, active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: ["Operations Analyst"], occupation: "Operations", industries: ["Logistics"],
+      { id: undefined, label: null, active: true, timeFrame: "now", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: ["Operations Analyst"], occupation: "Operations", industries: ["Logistics"],
         companies: [], comp: { amount: 70000, currency: "USD", period: "year" }, locations: ["Raleigh"], workplaceTypes: ["onsite"], domains: null },
-      { id: undefined, active: false, timeFrame: "long", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: ["COO"], occupation: "Operations", industries: [],
+      { id: undefined, label: null, active: false, timeFrame: "long", employmentTypes: [], levels: [], specialties: [], languages: [], countries: [], roles: ["COO"], occupation: "Operations", industries: [],
         companies: [], comp: null, locations: [], workplaceTypes: [], domains: null },
     ]);
     const p = (await getPreferences(pool, yong))!;
@@ -121,6 +121,21 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     expect(ops.reason_line).toMatch(/Not in a place you chose/);
     await deleteGoal(pool, yong, first!.id);
     expect((await listGoals(pool, yong)).map((g) => g.roles[0])).toEqual(["Warehouse Associate", "COO"]);
+  });
+
+  it("names a goal: saved, kept when a save doesn't say, cleared when left blank (multi-goal §3)", async () => {
+    const [g] = await listGoals(pool, yong);
+    expect(g!.label).toBeNull();
+    await saveGoal(pool, yong, goal({ ...g, label: "  Goal-A  " }), g!.id);
+    expect((await listGoals(pool, yong))[0]!.label).toBe("Goal-A");
+    const { label: _drop, ...noLabel } = (await listGoals(pool, yong))[0]!;
+    await saveGoal(pool, yong, goal(noLabel), g!.id);
+    expect((await listGoals(pool, yong))[0]!.label).toBe("Goal-A");
+    await saveGoal(pool, yong, goal({ ...g, label: "" }), g!.id);
+    expect((await listGoals(pool, yong))[0]!.label).toBeNull();
+    const id = await saveGoal(pool, yong, goal({ roles: ["Named"], active: false, label: "Goal-B" }));
+    expect((await listGoals(pool, yong)).find((x) => x.id === id)!.label).toBe("Goal-B");
+    await deleteGoal(pool, yong, id);
   });
 
   it("keeps each person's goals to themselves", async () => {

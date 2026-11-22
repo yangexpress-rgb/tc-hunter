@@ -1,11 +1,12 @@
 import { describeSchedule } from "@/lib/schedule";
 import { emailStatus, getPreferences, listGoals } from "@tc-hunter/db";
-import { bandLabel, COUNTRIES, countryName, domainLabel, effectiveDomains, GOAL_DOMAINS, GOAL_LEVELS, GOAL_TYPES, goalBand, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
+import { bandLabel, COUNTRIES, countryName, domainLabel, effectiveDomains, GOAL_DOMAINS, GOAL_LEVELS, GOAL_TYPES, goalBand, goalLabel, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { EditDialog } from "@/components/profile/EditDialog";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
 import { ProfileSection } from "@/components/profile/Section";
 import { TopBar } from "@/components/TopBar";
+import { goalSummaryLine } from "@/lib/goals";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { deleteGoalAction, saveGoalAction, saveSearchSettingsAction } from "../actions";
@@ -47,6 +48,8 @@ function GoalForm({ g }: { g?: Goal }) {
       <form action={saveGoalAction} className="stack">
         <input type="hidden" name="back" value={BACK} />
         {g ? <input type="hidden" name="id" value={g.id} /> : null}
+        <label>Goal name<input name="label" defaultValue={g?.label ?? ""} maxLength={60} placeholder={g ? goalName(g) : "e.g. Goal-A"} />
+          <span className="hint">Shown on jobs and applications. Leave blank to use the one we make from your roles.</span></label>
         <div className="fields">
           <label>When you'd like to get there<select name="time_frame" defaultValue={g?.timeFrame ?? "now"}>
             {TIME_FRAMES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
@@ -123,7 +126,8 @@ function GoalItem({ g }: { g: Goal }) {
   return (
     <article className="profile-item">
       <div className="item-body">
-        <h3>{goalName(g)}{g.active ? null : <> <span className="chip draft">Not used to find jobs</span></>}</h3>
+        <h3>{goalLabel(g)}{g.active ? null : <> <span className="chip draft">Not used to find jobs</span></>}</h3>
+        {goalSummaryLine(g) ? <p className="muted goal-summary">{goalSummaryLine(g)}</p> : null}
         <p className="item-sub">{when}</p>
         {field ? <p className="muted">{field}</p> : null}
         {targetLevelsLine(g) ? <p className="muted">{targetLevelsLine(g)}</p> : null}
@@ -181,7 +185,7 @@ export default async function GoalsPage(props: PageProps) {
           </ol>
           <ul className="plain">
             {goals.filter((g) => g.active && (g.roles.length || g.occupation)).map((g) => (
-              <li key={g.id}><a href={linkedin(g)} target="_blank" rel="noreferrer">{goalName(g)} on LinkedIn</a></li>
+              <li key={g.id}><a href={linkedin(g)} target="_blank" rel="noreferrer">{goalLabel(g)} on LinkedIn</a></li>
             ))}
           </ul>
           <p className="muted small">From each alert we keep only the job's title, company, place and link, never the rest of the email.</p>

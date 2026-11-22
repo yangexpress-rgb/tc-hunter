@@ -326,6 +326,7 @@ export async function saveGoalAction(form: FormData) {
   const amount = num(form.get("comp_amount"));
   // A changed goal means new employers to find: the next scan looks for them first.
   await act(form, async () => { await saveGoal(app().pool, s, {
+    label: String(form.get("label") ?? "").trim() || null,
     active: form.get("active") === "on",
     timeFrame: String(form.get("time_frame") ?? "now") as never,
     employmentTypes: form.getAll("employment_types").map(String) as never,

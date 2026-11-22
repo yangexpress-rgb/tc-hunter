@@ -1,6 +1,6 @@
 import { latestDiscovery, listAppSettings, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
 import { LookAgainButton, ScanStatusBox, SearchAgainButton } from "@/components/jobs/ScanStatus";
-import { companyKey, GOAL_DOMAINS, goalName, noBoardSentence, portalFor, searchSites, t } from "@tc-hunter/domain";
+import { companyKey, GOAL_DOMAINS, goalLabel, noBoardSentence, portalFor, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -76,7 +76,7 @@ export default async function SourcesPage(props: PageProps) {
   const namedKeys = new Set(named.map((n) => n.key));
   const isNamed = (s: (typeof sources)[number]) => namedIds.has(s.id) || (s.kind !== "pasted_link" && s.kind !== "job_search" && namedKeys.has(companyKey(s.name)));
   const namedWithSource = new Set(named.filter((n) => n.sourceId || sources.some((s) => isNamed(s) && companyKey(s.name) === n.key)).map((n) => n.key));
-  const names = new Map(goals.map((g) => [g.id, goalName(g)]));
+  const names = new Map(goals.map((g) => [g.id, goalLabel(g)]));
   const searchRows = new Map(sources.filter((s) => s.origin === "search").map((s) => [s.url, s]));
   // Which sites are on: keys saved in Settings, or Railway variables (only whether each is set; no values read here).
   const keyState = await listAppSettings(pool);
