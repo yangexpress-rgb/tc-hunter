@@ -2,7 +2,7 @@ import type { GoalLevel } from "../jobs/normalize";
 import { domainsFromIndustries, type DomainKey } from "../jobs/domain";
 import type { SalaryPeriod, Workplace } from "../jobs/types";
 import { scoreMatch, type MatchPosting, type MatchPrefs, type MatchProfile, type MatchResult } from "./score";
-import { goalFit, markPrimaryFit, primaryGoalIndex, type GoalFit } from "./fit";
+import { goalFit, primaryGoalIndex, type GoalFit } from "./fit";
 import { domainOf } from "../jobs/domain";
 
 /**
@@ -139,7 +139,8 @@ export interface GoalScore { goalId: string | null; goalName: string | null; fit
  * ruled-out verdict now belong to that goal (stored as its match_goal row), and the match-level
  * numbers are the primary goal's, chosen by the one rule in primaryGoalIndex.
  *
- * `primary.fit` and `primary.result` carry the "best"/"closest" lines shown when there are several goals.
+ * `primary.result` carries the "Closest to your goal" line in Best match's working-out when there are several goals.
+ * (The G-score's "Fits your goal … best" line is gone: the job page shows every goal's G instead, §5.2.)
  */
 export function scoreGoals(profile: MatchProfile, prefs: MatchPrefs[], posting: MatchPosting, ctx: Parameters<typeof scoreMatch>[3]): { each: GoalScore[]; primary: GoalScore } {
   if (!prefs.length) throw new Error("scoreGoals needs at least one set of preferences");
@@ -152,5 +153,5 @@ export function scoreGoals(profile: MatchProfile, prefs: MatchPrefs[], posting: 
   const result = prefs.length > 1 && top.goalName
     ? { ...top.result, components: top.result.components.map((c) => c.key === "preferences" ? { ...c, detail: [`Closest to your goal: ${top.goalName}.`, ...c.detail] } : c) }
     : top.result;
-  return { each, primary: { ...top, fit: markPrimaryFit(top.fit, prefs.length), result } };
+  return { each, primary: { ...top, result } };
 }

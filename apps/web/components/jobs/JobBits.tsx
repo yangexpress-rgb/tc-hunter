@@ -39,6 +39,14 @@ export function FitScores({ r, compact }: { r: Record<string, any>; compact?: bo
   );
 }
 
+/**
+ * Which goal a job or application is shown against (multi-goal brief §5.2): "Goal: Goal-A". Only for
+ * applicants with more than one goal; the caller sets `goal_label` on the row only then.
+ */
+export function GoalChip({ label }: { label?: string | null }) {
+  return label ? <span className="chip goal-chip">Goal: {label}</span> : null;
+}
+
 /** What the list learned from a choice, shown where the choice was made, each with Turn off. */
 export interface Learned { id: string; label: string; active: boolean }
 

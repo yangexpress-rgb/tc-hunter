@@ -3,7 +3,7 @@ import { FIT_VERSION, JOB_LEVEL_FILTERS, goalLabel, PASS_REASONS, jobLevelKey, j
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
-import { DoneNotice, FeedbackButtons, FitScores, ago, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
+import { DoneNotice, FeedbackButtons, FitScores, GoalChip, ago, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
 import { CompanyCards, COMPANY_SORTS, FitLines, JobCards, sortRows, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
 
 import { FilterBar } from "@/components/jobs/FilterBar";
@@ -47,11 +47,16 @@ export default async function JobsPage(props: PageProps) {
   const csort: CompanySort = COMPANY_SORTS.some(([k]) => k === params.csort) ? params.csort as CompanySort : "g";
   const company = params.company?.trim() || undefined;
   const search = (params.q ?? "").trim().slice(0, 100);
-  const goal = goals.some((g) => g.id === params.goal) ? params.goal : undefined;
+  // The goal context (multi-goal brief §5.1): only goals in use are offered; the chip and the Goal
+  // filter appear only with more than one, so a one-goal applicant sees the page as before.
+  const activeGoals = goals.filter((g) => g.active);
+  const manyGoals = activeGoals.length > 1;
+  const goal = manyGoals && activeGoals.some((g) => g.id === params.goal) ? params.goal : undefined;
+  const labelOf = new Map(goals.map((g) => [g.id, goalLabel(g)]));
   const source = sources.some((s) => s.id === params.source) ? params.source : undefined;
   const levels = [...new Set(many("level").filter((l) => JOB_LEVEL_FILTERS.some(([k]) => k === l)))];
   const works = [...new Set(many("work").filter((w) => WORK.some(([k]) => k === w)))];
-  const listArgs = { status, sort: sort === "company" ? "score" as const : sort, ladder, source, showFiltered };
+  const listArgs = { status, sort: sort === "company" ? "score" as const : sort, ladder, source, showFiltered, goal };
   let matched = await listMatches(pool, session, listArgs);
   // Jobs scored before G and C existed get both the first time Jobs opens (no fetching, rules only).
   if (matched.rows.some((r) => r.fit_version !== FIT_VERSION)) { await rescoreMatches(pool, session); matched = await listMatches(pool, session, listArgs); }
@@ -61,7 +66,6 @@ export default async function JobsPage(props: PageProps) {
   const filtered = matched.rows.filter((r) =>
     (!levels.length || levels.includes(jobLevelKey(r.title ?? "")))
     && (!works.length || works.includes(workOf(r)))
-    && (!goal || r.goal_id === goal)
     && (!company || normalizeEmployer(String(r.employer_canonical ?? "")) === normalizeEmployer(company))
     && (!words.length || words.every((w) => `${r.title} ${r.employer_canonical} ${r.location_raw ?? ""}`.toLowerCase().includes(w))));
   // The job just saved or passed on stays in its place, folded, with Undo (Yong, 2026-11-22).
@@ -70,9 +74,11 @@ export default async function JobsPage(props: PageProps) {
   const learnedIds = many("learned");
   const learned: Learned[] = adjustments.filter((a) => learnedIds.includes(a.id)).map((a) => ({ id: a.id, label: a.label, active: a.active }));
   const doneRow = done && status === "new" && !filtered.some((r) => r.id === done)
-    ? (await listMatches(pool, session, { ids: [done], status: "all", showFiltered: true })).rows.find((r) => r.status !== "new")
+    ? (await listMatches(pool, session, { ids: [done], status: "all", showFiltered: true, goal })).rows.find((r) => r.status !== "new")
     : undefined;
-  const rows = sortRows(doneRow ? [...filtered, doneRow] : filtered, ...SORT_KEY[sort]);
+  // The rows are already in the goal context's order and numbers (SQL); the chip names that goal, or the primary one.
+  const rows = sortRows(doneRow ? [...filtered, doneRow] : filtered, ...SORT_KEY[sort])
+    .map((r) => manyGoals && r.goal_id && labelOf.has(r.goal_id) ? { ...r, goal_label: labelOf.get(r.goal_id) } : r);
   const at = doneRow ? rows.findIndex((r) => r.id === doneRow.id) : -1;
   const nextId: string | undefined = at >= 0 ? (rows[at + 1] ?? rows[at - 1])?.id : undefined;
   const narrowed = filtered.length !== matched.rows.length;
@@ -113,7 +119,7 @@ export default async function JobsPage(props: PageProps) {
       {/* Searching and Refresh live on Where we look (Yong, 2026-11-18); Matches is only the jobs. */}
       <FilterBar
         hidden={{ tab: status === "new" ? undefined : status, view: view === defaultView ? undefined : view, sort: sort === "g" ? undefined : sort, csort: csort === "g" ? undefined : csort, company }}
-        search={search} goals={goalOptions(goals)} goal={goal ?? ""}
+        search={search} goals={manyGoals ? goalOptions(activeGoals) : []} goal={goal ?? ""}
         levels={levels} levelOpts={JOB_LEVEL_FILTERS} work={works} workOpts={WORK}
         ladder={ladder ?? ""} ladderOpts={LADDER} sources={sources.map((s) => [s.id, s.name] as const)} source={source ?? ""}
         showFiltered={showFiltered} clearHref={q({ q: undefined, goal: undefined, level: undefined, work: undefined, ladder: undefined, source: undefined, filtered: undefined, company: undefined })} />
@@ -171,6 +177,7 @@ export default async function JobsPage(props: PageProps) {
               <div className="job-main">
                 <a className="job-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>
                 <div className="job-meta">{jobLevelKey(r.title ?? "") !== "none" ? `${jobLevelLabel(jobLevelKey(r.title ?? ""))} · ` : ""}{r.employer_canonical} · {place(r)}{pay(r) ? ` · ${pay(r)}` : ""} · {posted(r.posted_at)}</div>
+                {r.goal_label ? <div className="job-tags"><GoalChip label={r.goal_label} /></div> : null}
                 <FitLines r={r} />
                 {r.filtered ? <div className="error">Ruled out: {(r.filter_reasons as string[]).join("; ")}</div> : null}
                 {r.ladder_label ? <span className={`chip ladder-${r.ladder_tag}`}>{r.ladder_label}</span> : null}

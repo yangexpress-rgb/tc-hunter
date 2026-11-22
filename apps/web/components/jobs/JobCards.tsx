@@ -1,6 +1,6 @@
 import { employmentKind, goalLevelIndex, goalTypeLabel, jobLevelKey, jobLevelLabel, t, tierReasonText } from "@tc-hunter/domain";
 import { feedbackAction } from "@/app/jobs/actions";
-import { DoneNotice, FitScores, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
+import { DoneNotice, FitScores, GoalChip, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
 import { companyDomain, groupByCompany, payShort } from "@/lib/jobsView";
 
 // Sorting shared by every layout.
@@ -114,6 +114,7 @@ export function JobCard({ r, back }: { r: Row; back: string }) {
       </div>
       <a className="job-card-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>
       <div className="job-card-tags">
+        <GoalChip label={r.goal_label} />
         {level !== "none" ? <span className="chip">{jobLevelLabel(level)}</span> : null}
         {r.ladder_label ? <span className={`chip ladder-${r.ladder_tag}`}>{r.ladder_label}</span> : null}
         {r.posting_status !== "active" ? <span className="chip closed">{t("jobs.closed")}</span> : null}

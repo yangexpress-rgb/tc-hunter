@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listAdjustments, listApplications, listDocuments, listEmailSignals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
-import { PASS_REASONS, READ_WITHOUT_AI, aiIsOff, domainLabel, readWithoutAi, t, tierReasonText } from "@tc-hunter/domain";
+import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listAdjustments, listApplications, listDocuments, listEmailSignals, listGoals, matchGoals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
+import { PASS_REASONS, READ_WITHOUT_AI, aiIsOff, domainLabel, goalLabel, readWithoutAi, t, tierReasonText } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -34,7 +34,11 @@ export default async function JobPage(props: Props) {
   const { pool, cfg } = app();
   const [{ saved, error, params }, m, learnedAdj] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref), listAdjustments(pool, session)]);
   if (!m) notFound();
-  const [docs, work, prefs, apps, ready, noAi] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session), aiIsOff()]);
+  const [docs, work, prefs, apps, ready, noAi, goals, perGoal] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session), aiIsOff(),
+    listGoals(pool, session), matchGoals(pool, session, m.id)]);
+  // With more than one goal in use, the G-score is shown goal by goal, primary first (multi-goal brief §5.2).
+  const manyGoals = goals.filter((g) => g.active).length > 1 && perGoal.length > 0;
+  const labelOf = new Map(goals.map((g) => [g.id, goalLabel(g)]));
   const lastResult = (work?.status === "done" ? work.result ?? {} : {}) as { empty?: boolean };
   const tracked = apps.find((a) => a.job_ref === m.public_ref);
   // A tracked job shows the application's own status card, stepper and "Your documents", worked out exactly as the
@@ -86,17 +90,47 @@ export default async function JobPage(props: Props) {
         </div>
       </div>
       {m.posting_status !== "active" ? <p className="error" role="status">{t("jobs.closed")}</p> : null}
-      {m.g_summary || m.c_summary ? (
-        <div className="fit-lines big">
-          {m.g_summary ? <div><strong>G</strong> {m.g_summary}</div> : null}
-          {m.c_summary ? <div><strong>C</strong> {m.c_summary}</div> : null}
-        </div>
-      ) : <p className="reason big">{m.reason_line}</p>}
-      {/* Where it ranks, and why (2026-11-22): level, kind of role and domain against the goal. */}
-      {m.tier && m.tier > 1 ? <p className={`tier-reason tier-${m.tier}`}>{tierReasonText(m.tier_reason, m.domain)}</p> : null}
-      {m.domain ? <p className="muted">Domain: {domainLabel(m.domain)}{m.domain_line ? <span className="small"> · {m.domain_line}</span> : null}</p> : null}
-      {Array.isArray(m.tier_lines) && m.tier_lines.length ? <p className="muted small">{(m.tier_lines as string[]).join(" ")}</p> : null}
-      {m.filtered ? <p className="error">Your preferences rule this one out: {(m.filter_reasons as string[]).join("; ")}.</p> : null}
+      {manyGoals ? (
+        <>
+          {m.c_summary ? <div className="fit-lines big"><div><strong>C</strong> {m.c_summary}</div></div> : null}
+          {m.domain ? <p className="muted">Domain: {domainLabel(m.domain)}{m.domain_line ? <span className="small"> · {m.domain_line}</span> : null}</p> : null}
+          {/* One block per goal: this is where a job is compared across goals. */}
+          <section className="card goal-blocks" aria-label="Against each of your goals">
+            {perGoal.map((x) => (
+              <div key={x.goal_id} className="goal-block">
+                <h3>{labelOf.get(x.goal_id) ?? "A goal"}{x.is_primary ? <span className="muted small"> · fits best</span> : null}</h3>
+                <div className="fit-lines">
+                  {x.tier && x.tier > 1 ? <div className={`tier-reason tier-${x.tier}`}>{tierReasonText(x.tier_reason, m.domain)}</div> : null}
+                  <div><strong>G {x.g_score ?? "–"}</strong> {x.g_summary}</div>
+                </div>
+                {Array.isArray(x.tier_lines) && x.tier_lines.length ? <p className="muted small">{(x.tier_lines as string[]).join(" ")}</p> : null}
+                {x.filtered ? <p className="error">This goal&apos;s preferences rule it out: {(x.filter_reasons as string[]).join("; ")}.</p> : null}
+                {(x.g_parts as FitPart[] | null)?.length ? (
+                  <Details summary={`How we worked out the G-score for this goal (${x.g_score})`}>
+                    <table className="breakdown"><tbody>
+                      {(x.g_parts as FitPart[]).map((c) => <tr key={c.key}><th scope="row">{c.label}</th><td className="num">{c.points} of {c.weight}</td><td>{c.detail.join(" ")}</td></tr>)}
+                    </tbody></table>
+                  </Details>
+                ) : null}
+              </div>
+            ))}
+          </section>
+        </>
+      ) : (
+        <>
+          {m.g_summary || m.c_summary ? (
+            <div className="fit-lines big">
+              {m.g_summary ? <div><strong>G</strong> {m.g_summary}</div> : null}
+              {m.c_summary ? <div><strong>C</strong> {m.c_summary}</div> : null}
+            </div>
+          ) : <p className="reason big">{m.reason_line}</p>}
+          {/* Where it ranks, and why (2026-11-22): level, kind of role and domain against the goal. */}
+          {m.tier && m.tier > 1 ? <p className={`tier-reason tier-${m.tier}`}>{tierReasonText(m.tier_reason, m.domain)}</p> : null}
+          {m.domain ? <p className="muted">Domain: {domainLabel(m.domain)}{m.domain_line ? <span className="small"> · {m.domain_line}</span> : null}</p> : null}
+          {Array.isArray(m.tier_lines) && m.tier_lines.length ? <p className="muted small">{(m.tier_lines as string[]).join(" ")}</p> : null}
+          {m.filtered ? <p className="error">Your preferences rule this one out: {(m.filter_reasons as string[]).join("; ")}.</p> : null}
+        </>
+      )}
       {m.ladder_label ? <p><span className={`chip ladder-${m.ladder_tag}`}>{m.ladder_label}</span></p> : null}
       <FeedbackButtons matchId={m.id} status={status} back={back} justDone={params.done === m.id}
         why={PASS_REASONS.some(([k]) => k === params.why) ? params.why : undefined}
@@ -146,7 +180,7 @@ export default async function JobPage(props: Props) {
         </section>
       ) : null}
 
-      {([["G-score: against your goals", m.g_parts, m.g_score], ["C-score: against your experience and skills", m.c_parts, m.c_score]] as const).map(([title, parts, n]) =>
+      {([["G-score: against your goals", manyGoals ? [] : m.g_parts, m.g_score], ["C-score: against your experience and skills", m.c_parts, m.c_score]] as const).map(([title, parts, n]) =>
         (parts as FitPart[] | null)?.length ? (
           <Details key={title} summary={`How we worked out the ${title.split(":")[0]} (${n})`}>
             <p className="muted">{title}. Only what applies counts: a part the {title.startsWith("G") ? "goal leaves blank" : "posting doesn't ask for"} is left out, not marked down.</p>

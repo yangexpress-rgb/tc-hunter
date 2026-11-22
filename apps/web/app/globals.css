@@ -124,6 +124,9 @@ ul.plain.job-list, ul.plain.source-list, .alerts ul.plain { list-style: none; pa
 .reason.big { font-size: 18px; font-weight: 600; }
 .chip { display: inline-block; font-size: 13px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--border); margin: 6px 6px 0 0; color: var(--muted); }
 .chip.ladder-step_toward { border-color: var(--accent); color: var(--accent); }
+.chip.goal-chip { border-color: var(--accent); color: var(--text, inherit); font-weight: 600; }
+.goal-block { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; }
+.goal-block h3 { margin: 0 0 4px; font-size: 15px; }
 .chip.closed { border-color: var(--error); color: var(--error); }
 .inline-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .inline-actions form { margin: 0; }

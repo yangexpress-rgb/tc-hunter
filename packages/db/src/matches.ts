@@ -10,46 +10,73 @@ import { DomainError } from "./packets";
 const asApplicant = (s: Session): RequestContext => ({ userAccountId: s.userAccountId, applicantId: s.applicantId, actor: "applicant" });
 
 export type MatchSort = "score" | "g" | "c" | "date" | "salary";
-export interface MatchFilter { ids?: string[]; status?: "new" | "saved" | "passed" | "all"; sort?: MatchSort; ladder?: string; source?: string; showFiltered?: boolean }
+export interface MatchFilter {
+  ids?: string[]; status?: "new" | "saved" | "passed" | "all"; sort?: MatchSort; ladder?: string; source?: string; showFiltered?: boolean;
+  /**
+   * The goal context (multi-goal brief §5.1): with a goal, every job's G-score, tier, overall score and
+   * ruled-out verdict are that goal's (its match_goal row), and so is the order. Jobs never scored
+   * against it don't appear. Without one, each job shows its primary goal's numbers (the match's copy).
+   */
+  goal?: string;
+}
 
+/** Goal-dependent columns are read from `s`: the context goal's match_goal row, or the match itself. C-score is always the match's. */
 const SORT: Record<MatchSort, string> = {
-  score: "m.filtered, m.score DESC, p.posted_at DESC NULLS LAST",
+  score: "s.filtered, s.score DESC, p.posted_at DESC NULLS LAST",
   // Tier first (level, kind of role, domain), fewer misses first within it, then G, C and Best match (2026-11-22).
-  g: "m.filtered, coalesce(m.tier, 1), coalesce(m.tier_misses, 0), m.g_score DESC NULLS LAST, m.c_score DESC NULLS LAST, m.score DESC",
-  c: "m.filtered, m.c_score DESC NULLS LAST, m.g_score DESC NULLS LAST, m.score DESC",
-  date: "p.posted_at DESC NULLS LAST, m.score DESC",
-  salary: "coalesce(p.salary_max, p.salary_min) DESC NULLS LAST, m.score DESC",
+  g: "s.filtered, coalesce(s.tier, 1), coalesce(s.tier_misses, 0), s.g_score DESC NULLS LAST, m.c_score DESC NULLS LAST, s.score DESC",
+  c: "s.filtered, m.c_score DESC NULLS LAST, s.g_score DESC NULLS LAST, s.score DESC",
+  date: "p.posted_at DESC NULLS LAST, s.score DESC",
+  salary: "coalesce(p.salary_max, p.salary_min) DESC NULLS LAST, s.score DESC",
 };
 
 export async function listMatches(pool: pg.Pool, session: Session, f: MatchFilter = {}) {
   return withApplicant(pool, asApplicant(session), async (c) => {
     const where: string[] = ["p.status = 'active' OR m.status = 'saved'", "p.merged_into IS NULL"];
     const args: unknown[] = [];
+    // The goal context: that goal's rows (an inner join, so only jobs scored against it), read as `s`.
+    // Without a goal, `s` is the match itself.
+    const base = "match m JOIN job_posting p ON p.id = m.job_posting_id";
+    let from = `${base} CROSS JOIN LATERAL (SELECT m.*) s`;
+    if (f.goal) { args.push(f.goal); from = `${base} JOIN match_goal s ON s.match_id = m.id AND s.goal_id = $1::uuid`; }
     const st = f.status ?? "new";
     if (st === "new") where.push("m.status = 'new'");
     else if (st === "saved") where.push("m.status = 'saved'");
     else if (st === "passed") where.push("m.status IN ('dismissed','not_a_fit')");
-    if (!f.showFiltered && st !== "passed") where.push("NOT m.filtered");
+    if (!f.showFiltered && st !== "passed") where.push("NOT s.filtered");
     if (f.ids) { args.push(f.ids); where.push(`m.id = ANY($${args.length}::uuid[])`); }
     if (f.ladder) { args.push(f.ladder); where.push(`m.ladder_tag = $${args.length}`); }
     if (f.source) { args.push(f.source); where.push(`EXISTS (SELECT 1 FROM job_posting_source ps WHERE ps.job_posting_id = p.id AND ps.job_source_id = $${args.length})`); }
     const r = await c.query(
-      `SELECT m.id, m.score, m.g_score, m.g_summary, m.c_score, m.c_summary, m.fit_version, m.reason_line, m.status, m.filtered, m.filter_reasons, m.ladder_tag, m.ladder_label, m.adjustments, m.gap_skills, m.seen_at, m.found_by, m.goal_id,
-              m.tier, m.tier_misses, m.tier_reason, m.domain,
+      `SELECT m.id, s.score, s.g_score, s.g_summary, m.c_score, m.c_summary, m.fit_version, s.reason_line, m.status, s.filtered, s.filter_reasons, m.ladder_tag, m.ladder_label, m.adjustments, m.gap_skills, m.seen_at, m.found_by,
+              s.goal_id, m.goal_id AS primary_goal_id, s.tier, s.tier_misses, s.tier_reason, m.domain,
               p.public_ref, p.title, p.employer_canonical, p.location_raw, p.workplace_type, p.salary_min, p.salary_max, p.salary_currency, p.salary_period,
               p.posted_at, p.status AS posting_status, p.apply_url
-         FROM match m JOIN job_posting p ON p.id = m.job_posting_id
+         FROM ${from}
         WHERE (${where[0]}) ${where.slice(1).map((w) => `AND ${w}`).join(" ")}
         ORDER BY ${SORT[f.sort ?? "score"]} LIMIT 200`, args);
     const counts = (await c.query(
-      `SELECT count(*) FILTER (WHERE m.status = 'new' AND NOT m.filtered AND p.status = 'active')::int AS new,
-              count(*) FILTER (WHERE m.status = 'new' AND NOT m.filtered AND p.status = 'active' AND m.seen_at IS NULL)::int AS unseen,
+      `SELECT count(*) FILTER (WHERE m.status = 'new' AND NOT s.filtered AND p.status = 'active')::int AS new,
+              count(*) FILTER (WHERE m.status = 'new' AND NOT s.filtered AND p.status = 'active' AND m.seen_at IS NULL)::int AS unseen,
               count(*) FILTER (WHERE m.status = 'saved')::int AS saved,
               count(*) FILTER (WHERE m.status IN ('dismissed','not_a_fit'))::int AS passed,
-              count(*) FILTER (WHERE m.filtered AND m.status = 'new' AND p.status = 'active')::int AS filtered
-         FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.merged_into IS NULL`)).rows[0];
+              count(*) FILTER (WHERE s.filtered AND m.status = 'new' AND p.status = 'active')::int AS filtered
+         FROM ${from} WHERE p.merged_into IS NULL`, f.goal ? [f.goal] : [])).rows[0];
     return { rows: r.rows, counts };
   });
+}
+
+/**
+ * Every goal's verdict on one job (multi-goal brief §5.2), for the job page: the goals in use (and the
+ * primary goal even if since switched off), primary first, then by tier and G-score.
+ */
+export async function matchGoals(pool: pg.Pool, session: Session, matchId: string) {
+  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    `SELECT s.goal_id, s.g_score, s.g_parts, s.g_summary, s.tier, s.tier_misses, s.tier_reason, s.tier_lines, s.domain_relation, s.score, s.filtered, s.filter_reasons,
+            (s.goal_id = m.goal_id) AS is_primary
+       FROM match_goal s JOIN match m ON m.id = s.match_id JOIN hunt_goal g ON g.id = s.goal_id
+      WHERE s.match_id = $1 AND (g.active OR s.goal_id = m.goal_id)
+      ORDER BY (s.goal_id IS NOT DISTINCT FROM m.goal_id) DESC, s.filtered, coalesce(s.tier, 1), coalesce(s.tier_misses, 0), s.g_score DESC NULLS LAST, g.created_at`, [matchId])).rows);
 }
 
 export async function getMatchByRef(pool: pg.Pool, session: Session, publicRef: string) {
