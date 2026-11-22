@@ -1,6 +1,6 @@
 import type pg from "pg";
 import {
-  aboutFromResume, aboutIsInResume, contactBlockEnd, stripContactDetails, type AboutFinder, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor, questionCategory, EMPLOYER_CATEGORIES, namesEmployer, answerEmployerKey, normalQuestion,
+  aboutFromResume, aboutIsInResume, contactBlockEnd, stripContactDetails, type AboutFinder, ANSWER_PRESETS, contactFromResume, normaliseAbout, decryptField, encryptField, extractText, open, parseLinkedInExport, profileFieldFor, questionCategory, EMPLOYER_CATEGORIES, namesEmployer, answerEmployerKey, normalQuestion, workAuthKind,
   type ProfileField, type ResumeFileKind,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -175,7 +175,11 @@ async function keepProfileDetail(c: pg.PoolClient, dk: Buffer, applicantId: stri
 export async function saveWorkAuthAnswer(pool: pg.Pool, cfg: AppConfig, session: Session, label: string, answer: string): Promise<void> {
   const text = answer.trim().slice(0, 500);
   if (!text) throw new DomainError("TC_BAD_INPUT");
-  const preset = ANSWER_PRESETS.filter((p) => p.applicantStep).find((p) => p.patterns.some((re) => new RegExp(re, "i").test(label)))
+  // Kept under what the question asks ("will you require sponsorship" is the sponsorship answer, whatever else it
+  // mentions), so the normal saved-answer lookup finds it on every later form (Yong, 2026-11-22).
+  const kind = workAuthKind(label);
+  const preset = (kind ? ANSWER_PRESETS.find((p) => p.key === kind) : undefined)
+    ?? ANSWER_PRESETS.filter((p) => p.applicantStep).find((p) => p.patterns.some((re) => new RegExp(re, "i").test(label)))
     ?? ANSWER_PRESETS.find((p) => p.key === "work_auth")!;
   await withApplicant(pool, asApplicant(session), async (c) => {
     const dk = await dataKeyFor(c, cfg, session.applicantId);

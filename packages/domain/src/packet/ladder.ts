@@ -35,9 +35,23 @@ export function isSameEmployer(a: string | null | undefined, b: string | null | 
 /** The employer key saved answers are kept under (one per employer, whatever variant of its name was used). */
 export const answerEmployerKey = (name: string | null | undefined): string => normalEmployer(name);
 
+/**
+ * A question without its examples (Bristol Myers Squibb, 2026-11-22): "(For example but not limited to: H-1B,
+ * STEM OPT …)" and "including but not limited to" never change what is asked, and their "not" is not a negation.
+ */
+export function withoutExamples(label: string): string {
+  return label
+    .replace(/\(\s*(for example|for instance|e\.?\s?g\.?|i\.?\s?e\.?|such as|including|examples?( include)?)\b[^)]*\)?/gi, " ")
+    .replace(/,?\s*(including|for example)?,?\s*(but\s+)?not\s+limited\s+to\b:?/gi, " ")
+    .replace(/\s+/g, " ").trim();
+}
+
+/** Worded the other way round ("…without sponsorship", "not authorised"): examples and "not limited to" aside. */
+export const isNegated = (label: string) => /\b(not|without|unable|cannot|can['’]?t|never)\b/i.test(withoutExamples(label));
+
 /** The question in the form we compare it in: lower case, no punctuation, the employer's name as "<employer>". */
 export function normalQuestion(label: string, employer?: string | null): string {
-  let s = ` ${label.toLowerCase().replace(/&/g, " and ").replace(/['’`]/g, "").replace(/[^a-z0-9<> ]+/g, " ").replace(/\s+/g, " ").trim()} `;
+  let s = ` ${withoutExamples(label).toLowerCase().replace(/&/g, " and ").replace(/['’`]/g, "").replace(/[^a-z0-9<> ]+/g, " ").replace(/\s+/g, " ").trim()} `;
   const e = normalEmployer(employer);
   if (e) {
     // The employer's name and its longer forms the form itself uses ("John Wiley and Sons Inc").

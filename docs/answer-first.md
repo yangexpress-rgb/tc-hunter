@@ -53,6 +53,34 @@ If anything is unmatched, unclear, or the requirements weren't read in full (low
 must-haves read), the question is asked, saying why. When it fires, the packet shows: "Your
 standing rule — all of this job's must-haves match your profile."
 
+## The send path never re-asks (Yong, 2026-11-22, A-000017)
+
+Bristol Myers Squibb's sponsorship question was answered No in the approved packet, then asked again
+at the send step. Two causes, both fixed:
+
+- **The approved packet is reused, always.** When the form is read again (page by page, after a
+  pause, or with one more question on it), `createPacket` keeps every answer from a packet the
+  applicant approved for this application, matched by the question (key and wording, or wording
+  alone). It is never worked out again or asked again. If today's saved answers would give something
+  else, the approved packet wins for this application; the difference is only counted in the
+  `packet.built` audit (`kept_from_approved`, `differed_from_saved`). The packet shows "From the
+  answers you approved for this application."
+- **Examples aren't negations.** "(For example but not limited to: H-1B, …)" and "including, but not
+  limited to" are dropped before a question is read (`withoutExamples`), so their "not" no longer
+  makes a sponsorship question look "worded the other way round". It now takes the saved
+  sponsorship answer like any other wording.
+
+Right-to-work answers typed on the application page are kept under what the question asks
+(`workAuthKind`: the sponsorship or the authorisation answer), so the normal saved-answer lookup finds
+them on every later form.
+
+**Sponsorship follows authorisation** (§C step 5). With no saved sponsorship answer, "will you
+require sponsorship" is worked out as No when the applicant's own words say they can work for any
+employer: their approved right-to-work answer or their profile's right-to-work summary says citizen,
+permanent resident or green card, any employer, or no sponsorship needed. The packet shows "No — from
+your right-to-work answers: authorised to work for any US employer, no sponsorship needed." A bare
+"Yes, I'm authorised" is not enough, because a visa holder is authorised too.
+
 ## Tests
 
 - `fixtures/questions-golden/cases.json` covers three cases: a question asked again in other words
@@ -64,3 +92,10 @@ standing rule — all of this job's must-haves match your profile."
   - the Basic Qualifications rule off, on, with a gap, and with a rough read;
   - coverage on each run;
   - zero AI calls.
+- Send path (`packages/db/test/send-reuses-packet.test.ts`, No AI):
+  - an approved packet with the sponsorship No, taken to the send step with the form read differently
+    and the saved answer gone, presents zero questions;
+  - the BMS wording takes the saved answer;
+  - a typed right-to-work answer is kept and found on the next employer's form.
+- Golden set: the BMS wording, the derived No (from an answer and from the profile summary), and a
+  bare Yes that still asks.
