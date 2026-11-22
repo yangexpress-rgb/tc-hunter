@@ -22,7 +22,7 @@ import { applicantLevel, effectiveYears, employmentKind, languageMentioned, leve
  * the ruled-out filters, calibration and the resume threshold.
  */
 // fit-2: the goal's countries count in Place. fit-3: tiers by level, track and domain order the list (Yong, 2026-11-22).
-export const FIT_VERSION = "fit-3";
+export const FIT_VERSION = "fit-4";  // fit-4: technology domains split out (domain-2)
 
 export interface FitPart { key: string; label: string; weight: number; raw: number; points: number; detail: string[] }
 export interface Fit { score: number; parts: FitPart[]; summary: string }

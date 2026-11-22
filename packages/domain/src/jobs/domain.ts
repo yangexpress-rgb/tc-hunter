@@ -10,10 +10,15 @@
  *  2. Phrases in the title.
  *  3. Phrase density in the description, only with a clear winner; otherwise "unclear".
  */
-export const DOMAIN_VERSION = "domain-1";
+// domain-2 (Yong, 2026-11-22): IT products, digital transformation, agentic transformation and technology services split out.
+export const DOMAIN_VERSION = "domain-2";
 
 export const DOMAINS = [
   ["enterprise_it", "Enterprise IT & platforms"],
+  ["it_product", "Information technology products"],
+  ["digital_transformation", "Digital transformation"],
+  ["agentic_transformation", "Agentic & AI transformation"],
+  ["tech_services", "Technology professional services"],
   ["business_operations", "Business operations"],
   ["healthcare_medical", "Healthcare & medical products"],
   ["life_sciences", "Life sciences & pharma"],
@@ -32,6 +37,10 @@ export const domainLabel = (k: string | null | undefined): string => DOMAINS.fin
 
 /** Domains that are near each other, not the same: a job in one is a near miss for a goal in the other. */
 export const ADJACENT_DOMAINS: ReadonlyArray<readonly [DomainKey, DomainKey]> = [
+  // The technology family: each of these is near the others.
+  ["enterprise_it", "it_product"], ["enterprise_it", "digital_transformation"], ["enterprise_it", "agentic_transformation"], ["enterprise_it", "tech_services"],
+  ["it_product", "digital_transformation"], ["it_product", "agentic_transformation"], ["it_product", "tech_services"],
+  ["digital_transformation", "agentic_transformation"], ["digital_transformation", "tech_services"], ["agentic_transformation", "tech_services"],
   ["healthcare_medical", "life_sciences"],
   ["business_operations", "industrial"],
 ];
@@ -54,10 +63,27 @@ export function domainRelation(job: DomainKey, goal: DomainKey[]): DomainRelatio
 export const DOMAIN_PHRASES: Record<Exclude<DomainKey, "other" | "unclear">, Array<[string, number]>> = {
   enterprise_it: [
     ["information technology", 3], ["enterprise systems", 3], ["enterprise system", 3], ["enterprise applications", 3], ["enterprise software", 3],
-    ["enterprise platform", 3], ["enterprise architecture", 3], ["enterprise solutions", 3], ["digital platform", 3], ["digital transformation", 3],
-    ["crm", 3], ["salesforce", 3], ["servicenow", 3], ["erp", 3], ["saas", 3], ["cybersecurity", 3], ["information security", 3],
-    ["it operations", 3], ["it infrastructure", 3], ["agentic", 3], ["artificial intelligence", 2], ["generative ai", 3], ["ai", 2], ["machine learning", 2],
+    ["enterprise platform", 3], ["enterprise architecture", 3], ["enterprise solutions", 3], ["digital platform", 3],
+    ["crm", 3], ["salesforce", 3], ["servicenow", 3], ["erp", 3], ["cybersecurity", 3], ["information security", 3],
+    ["it operations", 3], ["it infrastructure", 3], ["machine learning", 2],
     ["software", 2], ["cloud", 2], ["technology", 1], ["data platform", 2], ["devops", 2], ["infrastructure", 1], ["platform", 1], ["digital", 1], ["systems", 1], ["data", 1],
+  ],
+  it_product: [
+    ["saas", 3], ["software product", 3], ["technology product", 3], ["it product", 3], ["platform product", 3], ["product led", 2], ["developer platform", 3],
+    ["product roadmap", 2], ["software company", 3], ["subscription software", 3], ["product market fit", 2], ["enterprise software", 2],
+  ],
+  digital_transformation: [
+    ["digital transformation", 3], ["business transformation", 2], ["digital strategy", 3], ["modernization", 2], ["modernisation", 2], ["transformation office", 3],
+    ["digital innovation", 3], ["change management", 2], ["transformation", 1],
+  ],
+  agentic_transformation: [
+    ["agentic", 3], ["ai agent", 3], ["agentic ai", 3], ["ai transformation", 3], ["generative ai", 3], ["genai", 3], ["gen ai", 3], ["llm", 3],
+    ["large language model", 3], ["artificial intelligence", 2], ["ai", 2], ["intelligent automation", 3], ["automation", 1],
+  ],
+  tech_services: [
+    ["professional services", 3], ["technology consulting", 3], ["it consulting", 3], ["systems integrator", 3], ["system integrator", 3], ["consulting", 2],
+    ["implementation partner", 3], ["managed services", 3], ["client delivery", 3], ["delivery leader", 3], ["practice lead", 3], ["practice director", 3],
+    ["consultant", 2], ["advisory", 1], ["engagement manager", 3], ["client engagement", 2], ["implementation", 1],
   ],
   business_operations: [
     ["supply chain", 3], ["logistics", 3], ["procurement", 3], ["business operations", 3], ["fulfillment", 3], ["warehouse", 3], ["distribution center", 3],
@@ -93,10 +119,16 @@ export const DOMAIN_PHRASES: Record<Exclude<DomainKey, "other" | "unclear">, Arr
 
 /** Companies whose business is plainly enterprise software or IT services; seeds the employer industry when the source's name says nothing. */
 export const KNOWN_EMPLOYER_DOMAINS: Record<string, DomainKey> = {
-  salesforce: "enterprise_it", servicenow: "enterprise_it", oracle: "enterprise_it", sap: "enterprise_it", workday: "enterprise_it", microsoft: "enterprise_it",
-  ibm: "enterprise_it", cognizant: "enterprise_it", infor: "enterprise_it", pega: "enterprise_it", pegasystems: "enterprise_it", lenovo: "enterprise_it",
-  "coastal cloud": "enterprise_it", accenture: "enterprise_it", infosys: "enterprise_it", tcs: "enterprise_it", "tata consultancy services": "enterprise_it",
-  adobe: "enterprise_it", snowflake: "enterprise_it", databricks: "enterprise_it", veeva: "life_sciences", gitlab: "enterprise_it", atlassian: "enterprise_it",
+  // Software and platform product companies.
+  salesforce: "it_product", servicenow: "it_product", oracle: "it_product", sap: "it_product", workday: "it_product", microsoft: "it_product",
+  infor: "it_product", pega: "it_product", pegasystems: "it_product", adobe: "it_product", snowflake: "it_product", databricks: "it_product",
+  gitlab: "it_product", atlassian: "it_product", veeva: "life_sciences",
+  // Technology consulting, systems integrators and implementation partners.
+  cognizant: "tech_services", accenture: "tech_services", infosys: "tech_services", tcs: "tech_services", "tata consultancy services": "tech_services",
+  "coastal cloud": "tech_services", deloitte: "tech_services", "deloitte us": "tech_services", capgemini: "tech_services", wipro: "tech_services",
+  slalom: "tech_services", "huron consulting": "tech_services", "huron consulting group": "tech_services", kpmg: "tech_services", "ey": "tech_services",
+  // Broad IT.
+  ibm: "enterprise_it", lenovo: "enterprise_it",
 };
 
 const norm = (s: string) => ` ${s.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim()} `;
@@ -122,14 +154,20 @@ const upperIt = (text: string) => (text.match(/(^|[^A-Za-z])IT([^A-Za-z]|$)/g) ?
 function ranked(t: Tally): Array<[DomainKey, number, number]> {
   return [...t.entries()].map(([d, v]) => [d, v.points, v.hits] as [DomainKey, number, number]).sort((a, b) => b[1] - a[1]);
 }
+/** The top domain and its strongest rival that isn't a near neighbour (neighbours don't block a clear winner). */
+function leader(t: Tally): { top: [DomainKey, number, number] | undefined; rival: [DomainKey, number, number] | undefined } {
+  const r = ranked(t);
+  const top = r[0];
+  return { top, rival: top ? r.slice(1).find(([d]) => !domainsAdjacent(d, top[0])) : undefined };
+}
 
 /** The domain a title on its own says strongly (3+ points and well ahead of the next), or null. */
 export function titleDomain(title: string): DomainKey | null {
   const t = tally(title, "title");
   if (upperIt(title)) { const c = t.get("enterprise_it") ?? { points: 0, hits: 0 }; t.set("enterprise_it", { points: c.points + 3, hits: c.hits + 1 }); }
-  const [top, second] = ranked(t);
+  const { top, rival } = leader(t);
   if (!top || top[1] < 3) return null;
-  return !second || top[1] >= 1.5 * second[1] ? top[0] : null;
+  return !rival || top[1] >= 1.5 * rival[1] ? top[0] : null;
 }
 
 export interface DomainVerdict { domain: DomainKey; confidence: "high" | "medium" | "low"; source: "employer" | "title" | "description" | "none"; line: string }
@@ -139,7 +177,8 @@ export function domainOf(p: { title: string; descriptionText?: string | null; em
   const fromTitle = titleDomain(p.title);
   const emp = p.employerIndustry && p.employerIndustry !== "unclear" && p.employerIndustry !== "other" ? p.employerIndustry : null;
   if (emp) {
-    if (fromTitle && fromTitle !== emp) return { domain: fromTitle, confidence: "high", source: "title", line: `The title says ${domainLabel(fromTitle)}, so that counts over the employer's industry (${domainLabel(emp)}).` };
+    // The title overrides the employer only when it says a domain that isn't the employer's or a neighbour of it.
+    if (fromTitle && fromTitle !== emp && !domainsAdjacent(fromTitle, emp)) return { domain: fromTitle, confidence: "high", source: "title", line: `The title says ${domainLabel(fromTitle)}, so that counts over the employer's industry (${domainLabel(emp)}).` };
     return { domain: emp, confidence: "high", source: "employer", line: `The employer's industry is ${domainLabel(emp)}.` };
   }
   if (fromTitle) return { domain: fromTitle, confidence: "high", source: "title", line: `The title says ${domainLabel(fromTitle)}.` };
@@ -147,9 +186,9 @@ export function domainOf(p: { title: string; descriptionText?: string | null; em
   const t = tally(`${p.title}\n${p.descriptionText ?? ""}`, "description");
   const its = upperIt(`${p.title}\n${p.descriptionText ?? ""}`);
   if (its) { const c = t.get("enterprise_it") ?? { points: 0, hits: 0 }; t.set("enterprise_it", { points: c.points + 2 * Math.min(its, 5), hits: c.hits + Math.min(its, 5) }); }
-  const [top, second] = ranked(t);
-  if (top && top[1] >= 6 && top[2] >= 3 && (!second || top[1] >= 1.5 * second[1])) {
-    return { domain: top[0], confidence: second && top[1] < 2 * second[1] ? "low" : "medium", source: "description", line: `The description is mostly about ${domainLabel(top[0]).toLowerCase()}.` };
+  const { top, rival } = leader(t);
+  if (top && top[1] >= 6 && top[2] >= 3 && (!rival || top[1] >= 1.5 * rival[1])) {
+    return { domain: top[0], confidence: rival && top[1] < 2 * rival[1] ? "low" : "medium", source: "description", line: `The description is mostly about ${domainLabel(top[0]).toLowerCase()}.` };
   }
   return { domain: "unclear", confidence: "low", source: "none", line: "The posting doesn't make its domain clear." };
 }
@@ -164,7 +203,11 @@ export function employerIndustryFromName(name: string): DomainKey | null {
 
 /** A goal's free-text industries, read onto the taxonomy. Unknown words are left out. */
 const INDUSTRY_WORDS: Array<[RegExp, DomainKey]> = [
-  [/\b(information technology|it|tech|technology|software|saas|enterprise|crm|cloud|digital|platforms?|ai|data)\b/i, "enterprise_it"],
+  [/\b(it products?|information technology products?|software products?|technology products?|saas|software compan\w*)\b/i, "it_product"],
+  [/\b(digital transformation|business transformation|digital strategy)\b/i, "digital_transformation"],
+  [/\b(agentic|ai transformation|generative ai|gen ?ai|ai agents?)\b/i, "agentic_transformation"],
+  [/\b(professional services|consulting|systems? integrat\w*|managed services|technology services|it services)\b/i, "tech_services"],
+  [/\b(information technology|it|tech|technology|software|enterprise|crm|cloud|digital|platforms?|ai|data)\b/i, "enterprise_it"],
   [/\b(operations|supply chain|logistics|procurement|business operations)\b/i, "business_operations"],
   [/\b(health ?care|medical|hospitals?|health)\b/i, "healthcare_medical"],
   [/\b(pharma\w*|biotech\w*|life sciences?|drug)\b/i, "life_sciences"],
@@ -173,8 +216,14 @@ const INDUSTRY_WORDS: Array<[RegExp, DomainKey]> = [
   [/\b(manufactur\w*|industrial|automotive|aerospace|energy|utilities)\b/i, "industrial"],
   [/\b(government|public sector|education|universit\w*|non-?profit)\b/i, "public_sector"],
 ];
+const TECH_FAMILY: DomainKey[] = ["it_product", "digital_transformation", "agentic_transformation", "tech_services"];
 export function domainsFromIndustries(industries: string[]): DomainKey[] {
   const out: DomainKey[] = [];
-  for (const i of industries) for (const [re, d] of INDUSTRY_WORDS) if (re.test(i) && !out.includes(d)) out.push(d);
+  for (const i of industries) {
+    const hits = INDUSTRY_WORDS.filter(([re]) => re.test(i)).map(([, d]) => d);
+    // "Digital transformation" is that domain, not also broad IT.
+    const keep = hits.some((d) => TECH_FAMILY.includes(d)) ? hits.filter((d) => d !== "enterprise_it") : hits;
+    for (const d of keep) if (!out.includes(d)) out.push(d);
+  }
   return out;
 }

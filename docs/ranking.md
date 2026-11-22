@@ -40,6 +40,10 @@ A goal whose roles are on the engineering (or analyst) track opts back in to tho
 | Key | Name |
 | --- | --- |
 | enterprise_it | Enterprise IT & platforms |
+| it_product | Information technology products |
+| digital_transformation | Digital transformation |
+| agentic_transformation | Agentic & AI transformation |
+| tech_services | Technology professional services |
 | business_operations | Business operations |
 | healthcare_medical | Healthcare & medical products |
 | life_sciences | Life sciences & pharma |
@@ -49,7 +53,10 @@ A goal whose roles are on the engineering (or analyst) track opts back in to tho
 | public_sector | Public sector & education |
 | other / unclear | Other / Not clear |
 
-Near (not equal): healthcare_medical and life_sciences; business_operations and industrial.
+Near (not equal): the technology family (enterprise_it, it_product, digital_transformation,
+agentic_transformation, tech_services) are all near each other (added 2026-11-22, domain-2);
+healthcare_medical and life_sciences; business_operations and industrial.
+A title overrides the employer's industry only when it names a domain that isn't the employer's or a neighbour of it.
 Everything else is different (enterprise_it and business_operations included). A job whose domain is
 not clear is always near: never Tier 1 on domain, never Tier 3 for domain alone.
 

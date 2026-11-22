@@ -43,12 +43,16 @@ describe("domain classifier fixtures", () => {
     expect(domainsFromIndustries(["Healthcare"])).toEqual(["healthcare_medical"]);
     expect(domainsFromIndustries(["Pharma", "Banking"])).toEqual(["life_sciences", "financial_services"]);
     expect(domainsFromIndustries(["Something new"])).toEqual([]);
+    expect(domainsFromIndustries(["Digital transformation", "Agentic transformation", "IT products", "Technology professional services"]))
+      .toEqual(["digital_transformation", "agentic_transformation", "it_product", "tech_services"]);
   });
 
   it("seeds a followed company's industry from its name, or leaves it unset", () => {
     expect(employerIndustryFromName("Premier Healthcare Solutions, Inc.")).toBe("healthcare_medical");
-    expect(employerIndustryFromName("Salesforce")).toBe("enterprise_it");
-    expect(employerIndustryFromName("Huron Consulting Group")).toBeNull();
+    expect(employerIndustryFromName("Salesforce")).toBe("it_product");
+    expect(employerIndustryFromName("Cognizant")).toBe("tech_services");
+    expect(employerIndustryFromName("Huron Consulting Group")).toBe("tech_services");
+    expect(employerIndustryFromName("Contoso")).toBeNull();
   });
 
   it("adjacency: near, not equal; unclear is near; IT and business operations are different", () => {
@@ -57,6 +61,10 @@ describe("domain classifier fixtures", () => {
     expect(domainRelation("unclear", ["enterprise_it"])).toBe("near");
     expect(domainRelation("business_operations", ["enterprise_it"])).toBe("different");
     expect(domainRelation("enterprise_it", ["enterprise_it"])).toBe("match");
+    // The technology family is near each other, and different from everything else.
+    expect(domainRelation("agentic_transformation", ["digital_transformation"])).toBe("near");
+    expect(domainRelation("tech_services", ["it_product"])).toBe("near");
+    expect(domainRelation("healthcare_medical", ["agentic_transformation"])).toBe("different");
   });
 });
 
@@ -116,7 +124,7 @@ describe("ranking fixtures (No AI mode)", () => {
   });
 
   it("#5: the employer's industry doesn't drag an IT title down", () => {
-    expect(scored.find((x) => x.j.id === 5)!.g.domain).toBe("enterprise_it");
+    expect(scored.find((x) => x.j.id === 5)!.g.domain).toBe("digital_transformation");
   });
 
   it("#8 adjacent domain: a life-sciences platform PM for a healthcare goal is Tier 2", () => {
