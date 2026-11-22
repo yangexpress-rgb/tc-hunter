@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { employmentKind, goalLevelOf, goalName, languageMentioned, levelFit, searchQueries, goalTargets, ladderGoal, prefsForGoal, scoreBestGoal, scoreMatch, type Goal, type MatchPosting } from "../src";
+import { employmentKind, goalLabel, goalLevelOf, goalName, languageMentioned, levelFit, searchQueries, goalTargets, ladderGoal, prefsForGoal, scoreBestGoal, scoreMatch, type Goal, type MatchPosting } from "../src";
 
 const FIX = join(__dirname, "..", "..", "..", "fixtures");
 const read = (p: string) => readFileSync(join(FIX, p), "utf8");
@@ -20,6 +20,14 @@ describe("goals", () => {
     expect(goalName(goal({ roles: ["Data analyst", "BI analyst", "Ops analyst"] }))).toBe("Data analyst or BI analyst…");
     expect(goalName(goal({ occupation: "Operations" }))).toBe("Operations");
     expect(goalName(goal({ companies: ["Contoso"] }))).toBe("Work at Contoso");
+  });
+
+  it("calls a goal by its own name when it has one, else by the name made from its roles (multi-goal §3)", () => {
+    expect(goalLabel(goal({ label: "Goal-A", roles: ["Director of Digital Transformation"] }))).toBe("Goal-A");
+    expect(goalLabel(goal({ label: "  ", roles: ["VP Product Management"] }))).toBe("VP Product Management");
+    expect(goalLabel(goal({ label: null, roles: ["VP Product Management"] }))).toBe("VP Product Management");
+    // The score's own words name the goal the same way.
+    expect(prefsForGoal(goal({ label: "Goal-A", roles: ["VP"] }), settings, null).goalName).toBe("Goal-A");
   });
 
   it("points the step-toward tag at the furthest goal two or more years out, used for finding jobs or not", () => {

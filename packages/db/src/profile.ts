@@ -483,7 +483,7 @@ export async function savePreferences(pool: pg.Pool, session: Session, p: Prefer
 
 export function goalFromRow(r: Record<string, any>): Goal {
   return {
-    id: r.id, active: r.active, timeFrame: r.time_frame, employmentTypes: r.employment_types ?? [], levels: r.levels ?? [], specialties: r.specialties ?? [], languages: r.languages ?? [], countries: r.countries ?? [], roles: r.roles ?? [], occupation: r.occupation ?? null,
+    id: r.id, label: r.label ?? null, active: r.active, timeFrame: r.time_frame, employmentTypes: r.employment_types ?? [], levels: r.levels ?? [], specialties: r.specialties ?? [], languages: r.languages ?? [], countries: r.countries ?? [], roles: r.roles ?? [], occupation: r.occupation ?? null,
     industries: r.industries ?? [], companies: r.companies ?? [], locations: r.locations ?? [], workplaceTypes: r.workplace_types ?? [],
     domains: r.domains ?? null,
     comp: r.comp_amount === null || r.comp_amount === undefined ? null
@@ -516,7 +516,9 @@ function goalValues(g: GoalInput): unknown[] {
     comp?.amount ?? null, comp ? (comp.currency || "USD").toUpperCase().slice(0, 3) : null, comp ? (["year", "month", "hour"].includes(comp.period) ? comp.period : "year") : null,
     cleanList(g.locations), wt, levels, cleanList(g.specialties ?? []), cleanList(g.languages ?? []), countryCodes(g.countries ?? []),
     // Domains: left as they are when not given (null); an empty list means "any domain".
-    g.domains === undefined || g.domains === null ? null : [...new Set(g.domains.filter((d) => GOAL_DOMAINS.some(([k]) => k === d)))]];
+    g.domains === undefined || g.domains === null ? null : [...new Set(g.domains.filter((d) => GOAL_DOMAINS.some(([k]) => k === d)))],
+    // The goal's own name: one plain line, blank means "use the name made from the roles".
+    g.label?.replace(/\s+/g, " ").trim().slice(0, 60) || null];
 }
 
 /** The applicant's goals, soonest first. */
@@ -532,15 +534,15 @@ export async function saveGoal(pool: pg.Pool, session: Session, g: GoalInput, id
     if (id) {
       const r = await c.query(`UPDATE hunt_goal SET active = $2, time_frame = $3, employment_types = $4, roles = $5, occupation = $6, industries = $7,
         companies = $8, comp_amount = $9, comp_currency = $10, comp_period = $11, locations = $12, workplace_types = $13, levels = $14, specialties = $15, languages = $16, countries = $17,
-        domains = CASE WHEN $18::text[] IS NULL THEN domains ELSE $18::text[] END WHERE id = $1 RETURNING id`, [id, ...v]);
+        domains = CASE WHEN $18::text[] IS NULL THEN domains ELSE $18::text[] END, label = CASE WHEN $20 THEN $19 ELSE label END WHERE id = $1 RETURNING id`, [id, ...v, g.label !== undefined]);
       if (!r.rows[0]) throw new DomainError("TC_NOT_FOUND");
       return id;
     }
     const n = (await c.query("SELECT count(*)::int AS n FROM hunt_goal")).rows[0].n as number;
     if (n >= 20) throw new DomainError("TC_FIELD_NOT_EDITABLE");
     return (await c.query(`INSERT INTO hunt_goal (applicant_id, active, time_frame, employment_types, roles, occupation, industries, companies,
-      comp_amount, comp_currency, comp_period, locations, workplace_types, levels, specialties, languages, countries, domains)
-      VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::text[]) RETURNING id`, v)).rows[0].id;
+      comp_amount, comp_currency, comp_period, locations, workplace_types, levels, specialties, languages, countries, domains, label)
+      VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::text[], $18) RETURNING id`, v)).rows[0].id;
   });
 }
 

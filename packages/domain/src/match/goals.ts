@@ -23,6 +23,8 @@ export const goalTypeLabel = (k: string) => GOAL_TYPES.find(([v]) => v === k)?.[
 
 export interface Goal {
   id: string;
+  /** The applicant's own name for the goal, e.g. "Goal-A" (2026-11-22). Null: the name made from its roles is used. */
+  label?: string | null;
   active: boolean;
   timeFrame: TimeFrame;
   employmentTypes: GoalType[];
@@ -63,7 +65,16 @@ export interface SearchSettings {
 
 const RANK: Record<string, number> = { now: 0, "6m": 1, "1y": 2, "3y": 3, "5y": 4, long: 5 };
 
-/** A short name for a goal, for lists and for the score's reasons. */
+/**
+ * What a goal is called on every screen (multi-goal brief §3, 2026-11-22): the applicant's own name
+ * for it when set ("Goal-A"), else the one made from its roles (goalName). Every screen that names
+ * a goal goes through this, never goalName directly.
+ */
+export function goalLabel(g: Pick<Goal, "label" | "roles" | "occupation" | "companies">): string {
+  return g.label?.trim() || goalName(g);
+}
+
+/** A short name made from a goal's roles: the derived name, shown under a goal's own name and as the field's placeholder. */
 export function goalName(g: Pick<Goal, "roles" | "occupation" | "companies">): string {
   if (g.roles.length) return g.roles.slice(0, 2).join(" or ") + (g.roles.length > 2 ? "…" : "");
   if (g.occupation) return g.occupation;
@@ -104,7 +115,7 @@ export function prefsForGoal(goal: Goal, settings: SearchSettings, ladder: Goal 
     languages: goal.languages,
     countries: goal.countries,
     domains: effectiveDomains(goal).domains,
-    goalName: goalName(goal),
+    goalName: goalLabel(goal),
     goalId: goal.id,
   };
 }
