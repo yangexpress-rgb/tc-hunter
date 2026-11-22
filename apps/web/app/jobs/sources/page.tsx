@@ -1,6 +1,6 @@
 import { latestDiscovery, listAppSettings, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
 import { LookAgainButton, ScanStatusBox, SearchAgainButton } from "@/components/jobs/ScanStatus";
-import { companyKey, goalName, noBoardSentence, portalFor, searchSites, t } from "@tc-hunter/domain";
+import { companyKey, GOAL_DOMAINS, goalName, noBoardSentence, portalFor, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
@@ -8,7 +8,7 @@ import { ago } from "@/components/jobs/JobBits";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { followManySourcesAction, followSourceAction, refreshAction, saveScheduleAction, searchSourceAction, unfollowSourceAction } from "../actions";
+import { followManySourcesAction, followSourceAction, refreshAction, saveScheduleAction, searchSourceAction, sourceIndustryAction, unfollowSourceAction } from "../actions";
 import { ScheduleForm } from "@/components/jobs/ScheduleForm";
 import { DesktopReader } from "@/components/jobs/DesktopReader";
 
@@ -151,7 +151,9 @@ export default async function SourcesPage(props: PageProps) {
         link: advice?.link ?? (failed && s.kind !== "job_search" && /^(refused|robots)/.test(String(s.health_reason ?? "")) ? { href: "#add", label: "Add its jobs page" } : undefined),
         // LinkedIn's alerts come in with the email check, not a search.
         again: s.url === "https://www.linkedin.com/jobs/" || unreadable ? undefined : s.id,
-        action: { id: s.id, label: s.origin === "you" ? "Stop following" : "Don't use" } };
+        action: { id: s.id, label: s.origin === "you" ? "Stop following" : "Don't use" },
+        // A company's industry (2026-11-22), for ranking its jobs by domain; not for job search sites.
+        industry: s.kind !== "job_search" && s.kind !== "pasted_link" && s.origin !== "search" ? { id: s.id, value: (s.industry as string | null) ?? "", seeded: s.industry_source === "seeded" } : undefined };
     }),
     ...named.filter((n) => !namedWithSource.has(n.key)).map((n) => ({ key: `named-${n.key}`, name: n.name, kind: "Company you named",
       status: n.checkedAt ? "Can't read" : "Not searched yet", last: n.checkedAt, jobs: 0,
@@ -168,8 +170,9 @@ export default async function SourcesPage(props: PageProps) {
   const fQ = (params.q ?? "").slice(0, 60);
   // Order (Yong, 2026-11-17): name, then how it went and Search again on the left; the rest after.
   const COLS = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"]] as const;
-  const HEAD: [string, string][] = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["again", "Search again"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"], ["remove", "Don't use"]];
+  const HEAD: [string, string][] = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["again", "Search again"], ["detail", "Description"], ["kind", "Kind"], ["industry", "Industry"], ["reason", "Reason"], ["remove", "Don't use"]];
   const BACK = "/jobs/sources#status";
+  const industryOf = (r: object) => (r as { industry?: { id: string; value: string; seeded: boolean } }).industry;
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "name") as (typeof COLS)[number][0];
   const dir = params.dir === "desc" ? "desc" : params.dir === "asc" ? "asc" : sortBy === "jobs" || sortBy === "listed" || sortBy === "last" ? "desc" : "asc";
   const RANK: Record<string, number> = { Failed: 0, "Needs a correct address": 0.1, "Check the address": 0.2, "Too large to read": 0.25, "Waiting to try again": 2.5, "Blocked by a security check": 0.4, "No jobs found": 0.3, "Can't be read directly": 3.8, "Can't read": 0.5, Off: 1, "None fit yet": 3.5, "Not set up": 2, "Not searched yet": 3, Succeeded: 4 };  // problems first
@@ -248,6 +251,17 @@ export default async function SourcesPage(props: PageProps) {
                   {/* One line to save space; press it to read the rest (Yong, 2026-11-17). */}
                   <td className="muted small">{r.detail ? <details className="more one-line"><summary title="Show all">{r.detail}</summary></details> : null}</td>
                   <td>{r.kind}</td>
+                  {/* The company's industry decides its jobs' domain (2026-11-22). Seeded from its name; change it here. */}
+                  <td>{industryOf(r) ? (
+                    <form action={sourceIndustryAction} className="inline-form" title={industryOf(r)!.seeded ? "Filled in from the company's name. Change it if it's wrong." : undefined}>
+                      <input type="hidden" name="id" value={industryOf(r)!.id} /><input type="hidden" name="back" value={BACK} />
+                      <select name="industry" defaultValue={industryOf(r)!.value} aria-label={`Industry of ${r.name}`}>
+                        <option value="">Not set</option>
+                        {GOAL_DOMAINS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                        <option value="other">Other</option>
+                      </select>
+                      <button className="small secondary">Save</button>
+                    </form>) : null}</td>
                   <td className={bad(r.status) ? "error small" : "muted small"}>{r.reason ? <details className="more one-line"><summary title="Show all">{r.reason}</summary>
                     {r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</details>
                     : r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</td>
@@ -258,7 +272,7 @@ export default async function SourcesPage(props: PageProps) {
                     </form>) : null}</td>
                 </tr>
               ))}
-              {shown.length === 0 ? <tr><td colSpan={10} className="muted">No sources match these filters.</td></tr> : null}
+              {shown.length === 0 ? <tr><td colSpan={11} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>

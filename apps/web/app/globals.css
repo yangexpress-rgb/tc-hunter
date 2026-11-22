@@ -568,6 +568,11 @@ button.link-button { background: none; border: 0; padding: 0; color: var(--accen
 .fit-legend { margin: 4px 0 0; }
 .fit-lines.big { font-size: 16px; margin: 8px 0; }
 
+/* Ranking by level and domain (2026-11-22): the goal's targets once, and why a job sits lower. */
+.goal-targets { margin: 8px 0 0; font-weight: 600; }
+.tier-reason { font-size: 13px; color: var(--muted); font-weight: 600; }
+.tier-reason.tier-3 { color: var(--error); }
+
 /* Questions TC Hunter stopped on, answered on the application page (2026-11-19). */
 .answer-here { margin-top: 12px; border-color: var(--error); }
 .answer-here-list { margin: 0; padding-left: 20px; display: grid; gap: 14px; }

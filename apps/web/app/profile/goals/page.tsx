@@ -1,6 +1,6 @@
 import { describeSchedule } from "@/lib/schedule";
 import { emailStatus, getPreferences, listGoals } from "@tc-hunter/db";
-import { COUNTRIES, countryName, GOAL_LEVELS, GOAL_TYPES, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
+import { bandLabel, COUNTRIES, countryName, domainLabel, effectiveDomains, GOAL_DOMAINS, GOAL_LEVELS, GOAL_TYPES, goalBand, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { EditDialog } from "@/components/profile/EditDialog";
 import { Flash, ProfileNav } from "@/components/profile/Fact";
@@ -23,8 +23,25 @@ function pay(g: Goal): string | null {
   return `${g.comp.currency === "USD" ? "$" : `${g.comp.currency} `}${n} ${PER[g.comp.period] ?? ""}`.trim();
 }
 
+/** "Target levels: from your roles — Director, Senior director, VP (tick boxes to change)", or the ticked ones. */
+function targetLevelsLine(g: Goal): string | null {
+  const b = goalBand(g.levels, g.roles, g.occupation);
+  if (b.from === "ticked") return `Target levels: ${b.levels.map(goalLevelLabel).join(", ")}`;
+  if (b.from === "roles") return `Target levels: from your roles — ${b.levels.map(goalLevelLabel).join(", ")} (tick boxes to change)`;
+  return null;
+}
+
+function domainsLine(g: Goal): string | null {
+  const d = effectiveDomains(g);
+  if (!d.domains.length) return null;
+  const names = d.domains.map(domainLabel).join(", ");
+  return d.from === "industries" ? `Domains: from your industries — ${names} (edit the goal to change)` : `Domains: ${names}`;
+}
+
 /** The add and edit form for one goal. */
 function GoalForm({ g }: { g?: Goal }) {
+  const doms = g ? effectiveDomains(g).domains : [];
+  const implied = g && !g.levels.length ? goalBand([], g.roles, g.occupation) : null;
   return (
     <>
       <form action={saveGoalAction} className="stack">
@@ -59,7 +76,17 @@ function GoalForm({ g }: { g?: Goal }) {
           {GOAL_LEVELS.map(([k, l]) => (
             <label key={k} className="check"><input type="checkbox" name="levels" value={k} defaultChecked={g?.levels.includes(k) ?? false} /> {l}</label>
           ))}
-          <span className="hint">Pick any that fit. Jobs at these levels score higher for this goal; leave all unticked for any level.</span>
+          <span className="hint">{implied?.levels.length
+            ? <>None ticked, so your roles set them: {bandLabel(implied.levels)}. Tick boxes to change.</>
+            : <>Pick any that fit. Jobs at these levels come first for this goal. With none ticked, the levels your roles name are used (a role like &quot;Director&quot; means Director level).</>}</span>
+        </fieldset>
+        <fieldset>
+          <legend>Domains</legend>
+          <input type="hidden" name="domains_shown" value="1" />
+          {GOAL_DOMAINS.map(([k, l]) => (
+            <label key={k} className="check"><input type="checkbox" name="domains" value={k} defaultChecked={doms.includes(k)} /> {l}</label>
+          ))}
+          <span className="hint">The kind of business you want to work in. Jobs in these domains come first; a job in a different domain goes below them, even with the same title. Leave all unticked for any domain.{g && !g.domains && doms.length ? " Ticked from your industries." : ""}</span>
         </fieldset>
         <fieldset>
           <legend>How you'd like to work</legend>
@@ -99,6 +126,8 @@ function GoalItem({ g }: { g: Goal }) {
         <h3>{goalName(g)}{g.active ? null : <> <span className="chip draft">Not used to find jobs</span></>}</h3>
         <p className="item-sub">{when}</p>
         {field ? <p className="muted">{field}</p> : null}
+        {targetLevelsLine(g) ? <p className="muted">{targetLevelsLine(g)}</p> : null}
+        {domainsLine(g) ? <p className="muted">{domainsLine(g)}</p> : null}
         {g.specialties.length ? <p className="muted">Specialty: {g.specialties.join(", ")}</p> : null}
         {g.languages.length ? <p className="muted">Language: {g.languages.join(", ")}</p> : null}
         {g.companies.length ? <p className="muted">At {g.companies.join(", ")}</p> : null}

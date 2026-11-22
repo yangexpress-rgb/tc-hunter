@@ -1,4 +1,5 @@
 import type { GoalLevel } from "../jobs/normalize";
+import { domainsFromIndustries, type DomainKey } from "../jobs/domain";
 import type { SalaryPeriod, Workplace } from "../jobs/types";
 import { scoreMatch, type MatchPosting, type MatchPrefs, type MatchProfile, type MatchResult } from "./score";
 
@@ -40,6 +41,16 @@ export interface Goal {
   workplaceTypes: Workplace[];
   /** Countries the job must be in, as ISO codes ("US"). Empty means any country (Yong, 2026-11-18). */
   countries: string[];
+  /**
+   * The domains wanted, as taxonomy keys (2026-11-22). Null until the applicant saves the goal's
+   * Domains: until then they're read from the goal's industries (see effectiveDomains).
+   */
+  domains?: DomainKey[] | null;
+}
+
+/** The goal's domains: the ones saved, or else its industries read onto the taxonomy. */
+export function effectiveDomains(g: Pick<Goal, "domains" | "industries">): { domains: DomainKey[]; from: "goal" | "industries" } {
+  return g.domains ? { domains: g.domains, from: "goal" } : { domains: domainsFromIndustries(g.industries), from: "industries" };
 }
 
 /** Settings that cover the whole search, whatever the goal. */
@@ -92,6 +103,7 @@ export function prefsForGoal(goal: Goal, settings: SearchSettings, ladder: Goal 
     specialties: goal.specialties,
     languages: goal.languages,
     countries: goal.countries,
+    domains: effectiveDomains(goal).domains,
     goalName: goalName(goal),
     goalId: goal.id,
   };

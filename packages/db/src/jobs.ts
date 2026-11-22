@@ -7,6 +7,7 @@ import {
   type Adjustment, type Weights, type Fetcher, type MatchPosting, type MatchPrefs, type MatchProfile, type RawPosting, type RequirementsReader, type SourceSpec, type SourceFetchResult,
   readRequirementsText, withUsageScope, AI_MODES, currentAiProvider, scopedProvider, type AiMode, type BatchPosting, type Requirements, type RequirementsBatcher,
   RulesRequirementsReader, MasterResumeProposer, SavedLetterProposer, NamedCompaniesOnly,
+  domainOf, DOMAIN_VERSION, employerIndustryFromName, isDomainKey, type DomainKey,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
 import { findSameJob, isEmployerCopy, postingKeys } from "./sameJob";
@@ -232,6 +233,30 @@ const postingFor = (r: Record<string, any>): MatchPosting => ({
   postedAt: r.posted_at, status: r.status,
 });
 
+/**
+ * The industries of the companies the applicant follows (2026-11-22), by normalised name and by
+ * source. A company not yet seeded gets one from its name (or none), marked as seeded so the
+ * applicant's own choice on Where we look is never overwritten.
+ */
+export async function employerIndustries(c: pg.PoolClient): Promise<{ byName: Map<string, DomainKey>; bySource: Map<string, DomainKey> }> {
+  const rows = (await c.query(
+    `SELECT f.id, f.job_source_id, f.industry, f.industry_source, s.name FROM applicant_job_source f JOIN job_source s ON s.id = f.job_source_id
+      WHERE NOT f.muted AND s.kind NOT IN ('job_search','pasted_link')`)).rows;
+  const byName = new Map<string, DomainKey>(), bySource = new Map<string, DomainKey>();
+  for (const r of rows) {
+    let industry: string | null = r.industry;
+    if (!r.industry_source) {
+      industry = employerIndustryFromName(String(r.name));
+      await c.query("UPDATE applicant_job_source SET industry = $2, industry_source = 'seeded' WHERE id = $1", [r.id, industry]);
+    }
+    if (!industry || !isDomainKey(industry)) continue;
+    bySource.set(r.job_source_id, industry);
+    const key = normalizeEmployer(cleanEmployerName(String(r.name)));
+    if (key && !byName.has(key)) byName.set(key, industry);
+  }
+  return { byName, bySource };
+}
+
 /** The applicant's accepted score calibration (P10), if any. */
 export async function activeWeights(c: pg.PoolClient): Promise<{ weights: Weights; rulesVersion: string } | null> {
   const r = (await c.query("SELECT weights, rules_version FROM score_calibration WHERE active")).rows[0];
@@ -263,31 +288,49 @@ export async function matchApplicant(c: pg.PoolClient, now = new Date(), posting
   const applied = new Set((await c.query("SELECT job_posting_id FROM application WHERE stage NOT IN ('interested','tailoring','ready_to_apply')")).rows.map((r) => r.job_posting_id));
   const wanted = goalTargets(prefs);
   const targets = wanted.length ? wanted : profile.experience.map((e) => e.title);
+  const industries = await employerIndustries(c);
+  const sourcesOf = new Map<string, string[]>();
+  if (postings.length && industries.bySource.size) {
+    for (const r of (await c.query("SELECT job_posting_id, job_source_id FROM job_posting_source WHERE job_posting_id = ANY($1::uuid[])", [postings.map((p) => p.id)])).rows) {
+      sourcesOf.set(r.job_posting_id, [...(sourcesOf.get(r.job_posting_id) ?? []), r.job_source_id]);
+    }
+  }
   let related = 0, created = 0;
   for (const p of postings) {
     const prior = existing.get(p.id);
     if (!prior && !postingIds && !titleIsRelated(p.title, targets)) continue;
     related++;
-    const posting = postingFor(p);
+    // The employer's recorded industry: the followed company the job came from, or one of the same name.
+    const employerIndustry = (sourcesOf.get(p.id) ?? []).map((id) => industries.bySource.get(id)).find(Boolean)
+      ?? industries.byName.get(normalizeEmployer(cleanEmployerName(String(p.employer_canonical ?? "")))) ?? null;
+    const posting: MatchPosting = { ...postingFor(p), employerIndustry };
+    // What the posting itself says, shared by every applicant (no employer industry in it).
+    if (p.domain_version !== DOMAIN_VERSION) {
+      await c.query("UPDATE job_posting SET domain = $2, domain_version = $3 WHERE id = $1", [p.id, domainOf({ title: p.title, descriptionText: p.description_text }).domain, DOMAIN_VERSION]);
+    }
     // G-score and C-score (Yong, 2026-11-18): against the goals and against the applicant's own record.
     const g = bestGoalFit(prefs, posting);
     const cf = candidateFit(profile, posting, now);
     const res = scoreBestGoal(profile, prefs, posting, { now, dismissed: prior ? ["dismissed", "not_a_fit"].includes(prior.status) : false, applied: applied.has(p.id), adjustments, weights: cal?.weights, rulesVersion: cal?.rulesVersion });
     const r = await c.query(
       `INSERT INTO match (applicant_id, job_posting_id, score, components, matched_skills, gap_skills, filtered, filter_reasons, reason_line, ladder_tag, ladder_label,
-         adjustments, rules_version, parser_version, computed_at, found_by, goal_id, g_score, g_parts, g_summary, c_score, c_parts, c_summary, fit_version)
-       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14, $15, $16, $17, $18, $19, $20, $21, $22)
+         adjustments, rules_version, parser_version, computed_at, found_by, goal_id, g_score, g_parts, g_summary, c_score, c_parts, c_summary, fit_version,
+         tier, tier_misses, tier_reason, tier_lines, domain, domain_line, domain_version)
+       VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
        ON CONFLICT (applicant_id, job_posting_id) DO UPDATE SET score = EXCLUDED.score, components = EXCLUDED.components, matched_skills = EXCLUDED.matched_skills,
          gap_skills = EXCLUDED.gap_skills, filtered = EXCLUDED.filtered, filter_reasons = EXCLUDED.filter_reasons, reason_line = EXCLUDED.reason_line,
          ladder_tag = EXCLUDED.ladder_tag, ladder_label = EXCLUDED.ladder_label, adjustments = EXCLUDED.adjustments, rules_version = EXCLUDED.rules_version,
          parser_version = EXCLUDED.parser_version, computed_at = now(), goal_id = EXCLUDED.goal_id,
          g_score = EXCLUDED.g_score, g_parts = EXCLUDED.g_parts, g_summary = EXCLUDED.g_summary,
-         c_score = EXCLUDED.c_score, c_parts = EXCLUDED.c_parts, c_summary = EXCLUDED.c_summary, fit_version = EXCLUDED.fit_version
+         c_score = EXCLUDED.c_score, c_parts = EXCLUDED.c_parts, c_summary = EXCLUDED.c_summary, fit_version = EXCLUDED.fit_version,
+         tier = EXCLUDED.tier, tier_misses = EXCLUDED.tier_misses, tier_reason = EXCLUDED.tier_reason, tier_lines = EXCLUDED.tier_lines,
+         domain = EXCLUDED.domain, domain_line = EXCLUDED.domain_line, domain_version = EXCLUDED.domain_version
        RETURNING (xmax = 0) AS inserted`,
       [p.id, res.score, JSON.stringify(res.components), JSON.stringify(res.matchedSkills), res.gapSkills, res.filtered, res.filterReasons, res.reasonLine,
         res.ladderTag, res.ladderLabel, JSON.stringify(res.adjustments), res.rulesVersion, p.parser_version, prior?.found_by ?? foundBy,
         // The goal a job fits best is the one its G-score comes from.
-        g.goalId ?? res.goalId ?? null, g.score, JSON.stringify(g.parts), g.summary, cf.score, JSON.stringify(cf.parts), cf.summary, FIT_VERSION]);
+        g.goalId ?? res.goalId ?? null, g.score, JSON.stringify(g.parts), g.summary, cf.score, JSON.stringify(cf.parts), cf.summary, FIT_VERSION,
+        g.tier, g.tierMisses, g.tierReason, JSON.stringify(g.tierLines), g.domain, g.domainLine, DOMAIN_VERSION]);
     if (r.rows[0].inserted) created++;
   }
   return { considered: postings.length, related, newMatches: created };
@@ -996,7 +1039,7 @@ export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: 
 
 export async function listSources(pool: pg.Pool, session: Session) {
   return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
-    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.failures, s.retry_after_at, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id,
+    `SELECT s.id, s.name, s.kind, s.url, s.health, s.health_reason, s.failures, s.retry_after_at, s.last_success_at, s.last_checked_at, s.last_listed, f.origin, f.reason, f.goal_id, f.industry, f.industry_source,
        (SELECT r.read_at FROM relayed_read r WHERE r.job_source_id = s.id AND r.error IS NULL) AS relayed_at,
        (SELECT r.error FROM relayed_read r WHERE r.job_source_id = s.id) AS relayed_error,
        (SELECT r.read_at FROM relayed_read r WHERE r.job_source_id = s.id) AS relayed_tried_at,
@@ -1004,6 +1047,20 @@ export async function listSources(pool: pg.Pool, session: Session) {
        (SELECT r.checked FROM relayed_read r WHERE r.job_source_id = s.id AND r.error IS NULL) AS relayed_checked,
        (SELECT count(*) FROM job_posting_source ps JOIN job_posting p ON p.id = ps.job_posting_id WHERE ps.job_source_id = s.id AND ps.active AND p.status = 'active')::int AS open_jobs
      FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE NOT f.muted ORDER BY s.name`)).rows);
+}
+
+/**
+ * Sets a followed company's industry (2026-11-22): one of the domains, "other", or none. Its jobs
+ * are ranked again at once, so the Jobs list shows the new order.
+ */
+export async function setSourceIndustry(pool: pg.Pool, session: Session, sourceId: string, industry: string | null): Promise<void> {
+  if (industry !== null && !(isDomainKey(industry) && industry !== "unclear")) throw new DomainError("TC_FIELD_NOT_EDITABLE");
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const r = await c.query("UPDATE applicant_job_source SET industry = $2, industry_source = 'you' WHERE job_source_id = $1 RETURNING id", [sourceId, industry]);
+    if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");
+    await recordAudit(c, "source.industry", { objectType: "applicant_job_source", objectId: r.rows[0].id, payload: { industry } });
+    await matchApplicant(c, new Date());
+  });
 }
 
 /**

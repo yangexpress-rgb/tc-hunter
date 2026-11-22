@@ -341,7 +341,9 @@ export async function saveGoalAction(form: FormData) {
       : { amount, currency: String(form.get("comp_currency") ?? "USD").trim().toUpperCase().slice(0, 3) || "USD", period: String(form.get("comp_period") ?? "year") as never },
     locations: list(form.get("locations")),
     workplaceTypes: form.getAll("workplace_types").map(String) as never,
-  }, id); await requestScan(app().pool, s); }, "/profile/goals");
+    // Domains: saved whenever the form showed them, even all unticked (any domain).
+    domains: form.get("domains_shown") ? form.getAll("domains").map(String) as never : undefined,
+  }, id); await rescoreMatches(app().pool, s); await requestScan(app().pool, s); }, "/profile/goals");
 }
 
 export async function deleteGoalAction(form: FormData) {

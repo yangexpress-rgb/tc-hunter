@@ -14,7 +14,8 @@ export interface MatchFilter { status?: "new" | "saved" | "passed" | "all"; sort
 
 const SORT: Record<MatchSort, string> = {
   score: "m.filtered, m.score DESC, p.posted_at DESC NULLS LAST",
-  g: "m.filtered, m.g_score DESC NULLS LAST, m.c_score DESC NULLS LAST, m.score DESC",
+  // Tier first (level, kind of role, domain), fewer misses first within it, then G, C and Best match (2026-11-22).
+  g: "m.filtered, coalesce(m.tier, 1), coalesce(m.tier_misses, 0), m.g_score DESC NULLS LAST, m.c_score DESC NULLS LAST, m.score DESC",
   c: "m.filtered, m.c_score DESC NULLS LAST, m.g_score DESC NULLS LAST, m.score DESC",
   date: "p.posted_at DESC NULLS LAST, m.score DESC",
   salary: "coalesce(p.salary_max, p.salary_min) DESC NULLS LAST, m.score DESC",
@@ -33,6 +34,7 @@ export async function listMatches(pool: pg.Pool, session: Session, f: MatchFilte
     if (f.source) { args.push(f.source); where.push(`EXISTS (SELECT 1 FROM job_posting_source ps WHERE ps.job_posting_id = p.id AND ps.job_source_id = $${args.length})`); }
     const r = await c.query(
       `SELECT m.id, m.score, m.g_score, m.g_summary, m.c_score, m.c_summary, m.fit_version, m.reason_line, m.status, m.filtered, m.filter_reasons, m.ladder_tag, m.ladder_label, m.gap_skills, m.seen_at, m.found_by, m.goal_id,
+              m.tier, m.tier_misses, m.tier_reason, m.domain,
               p.public_ref, p.title, p.employer_canonical, p.location_raw, p.workplace_type, p.salary_min, p.salary_max, p.salary_currency, p.salary_period,
               p.posted_at, p.status AS posting_status, p.apply_url
          FROM match m JOIN job_posting p ON p.id = m.job_posting_id

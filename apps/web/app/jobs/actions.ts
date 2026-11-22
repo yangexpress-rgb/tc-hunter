@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, unfollowSource } from "@tc-hunter/db";
+import { followSource, giveFeedback, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, setSourceIndustry, unfollowSource } from "@tc-hunter/db";
 import { errorCode, parseSourceList } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 import { TIMES, ZONES } from "@/lib/schedule";
@@ -85,6 +85,13 @@ export async function searchSourceAction(form: FormData) {
 export async function unfollowSourceAction(form: FormData) {
   const s = await requireSession();
   await act(form, () => unfollowSource(app().pool, s, String(form.get("id"))), "/jobs/sources");
+}
+
+/** A followed company's industry (2026-11-22): it decides the domain of that company's jobs, unless a title says otherwise. */
+export async function sourceIndustryAction(form: FormData) {
+  const s = await requireSession();
+  const v = String(form.get("industry") ?? "").trim();
+  await act(form, () => setSourceIndustry(app().pool, s, String(form.get("id")), v || null), "/jobs/sources");
 }
 
 export async function pasteLinkAction(form: FormData) {
