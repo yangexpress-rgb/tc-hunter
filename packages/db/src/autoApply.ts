@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  ADAPTERS, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
+  ADAPTERS, RulesRequirementsReader, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
   checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, coverageLine, NEW_QUESTION, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isTransientLinkFailure, linksIn, reqIdsInUrl, reqIdsOf, trailWords, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type Coverage, type CareersLookup, type Fetcher, type SiteBrowser, type SourceSpec, type WorkdaySearch,
@@ -22,7 +22,7 @@ import { attachReceipt, cleanForm, createPacket, packetProfile, settleUnclear } 
 import { approveSubmission, consumeSubmissionKey, DomainError, recordSubmitted } from "./packets";
 import { asApplicant, dataKeyFor } from "./profile";
 import { tz, weeklyBudget } from "./tracker";
-import { upsertSource } from "./jobs";
+import { fillFullText, upsertSource } from "./jobs";
 import { findSameJob, foldCopies, mergeKnownCopies } from "./sameJob";
 import { formKey, rememberedQuestions, rememberFormQuestions } from "./formQuestions";
 import { closeHandover, endWithFallback, handoverFor, type Handover } from "./handover";
@@ -506,6 +506,8 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
       for (const x of stuck) if (companyKey(x.employer) === key) await queueApply(c, x.id, { auto: true, retry: "employer_site" }, 30);
     }
   });
+  // The employer's own posting has the full description a LinkedIn or job-board copy lacks (Yong, 2026-11-23).
+  if (r.found && r.url) await fillFullText(pool, auto, posting.id, r.url, deps.fetcher, new RulesRequirementsReader()).catch(() => false);
   applyLog.info("apply.employer_site", { found: r.found, kind: r.spec?.kind ?? null, ...(r.found ? { by: r.by } : { failure: r.failure, step: r.step, tries, retry }) });
   if (!r.found) {
     if (retry) {
@@ -638,6 +640,7 @@ async function throughJobBoard(pool: pg.Pool, auto: RequestContext, app: AppRow,
       await withApplicant(pool, auto, (c) => c.query("UPDATE job_posting SET employer_apply_url = $2, employer_lookup = $3 WHERE id = $1",
         [posting.id, here, JSON.stringify({ found: true, via: board, site: here, at: new Date() })]));
       applyLog.info("apply.job_board_followed", { board, host, hops: hop });
+      if (deps.fetcher) await fillFullText(pool, auto, posting.id, here, deps.fetcher, new RulesRequirementsReader()).catch(() => false);
       await run.note(`${board}'s link led to ${app.employer}'s own posting (${host}). Applying there`);
       if (await sameJobFound(pool, auto, app, posting.id, here, [], run)) { await page.close().catch(() => {}); return null; }
       return { url: here, page };

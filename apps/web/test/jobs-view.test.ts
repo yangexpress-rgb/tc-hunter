@@ -36,3 +36,20 @@ describe("Cards by company groups one company once (Yong, 2026-11-18)", () => {
     expect(cards.map((c) => [c.name, c.rows.length])).toEqual([["Salesforce", 3], ["84 Lumber", 1]]);
   });
 });
+
+describe("job description on the job page (Yong, 2026-11-23)", () => {
+  it("keeps every word, in paragraphs, headings and lists", async () => {
+    const { postingBlocks } = await import("../lib/jobsView");
+    const text = "Crusoe is on a mission.\n\n\n\nAbout the Role:\n\nYou will own and lead\nthe IT organization.\n\nWhat You'll Be Working On:\n\n - Lead the Service Desk\n\n - Own ERP transformations\n• Manage budgets\n  across vendors\n\nBenefits\n- Medical";
+    expect(postingBlocks(text)).toEqual([
+      { kind: "para", text: "Crusoe is on a mission." },
+      { kind: "heading", text: "About the Role" },
+      { kind: "para", text: "You will own and lead the IT organization." },
+      { kind: "heading", text: "What You'll Be Working On" },
+      { kind: "list", items: ["Lead the Service Desk", "Own ERP transformations", "Manage budgets across vendors"] },
+      { kind: "heading", text: "Benefits" },
+      { kind: "list", items: ["Medical"] },
+    ]);
+    expect(postingBlocks(null)).toEqual([]);
+  });
+});

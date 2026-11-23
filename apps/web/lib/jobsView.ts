@@ -77,3 +77,44 @@ export function groupByCompany<R extends { employer_canonical?: unknown }>(rows:
     return { name: [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Employer not given", rows: list };
   });
 }
+
+/** One block of a job description, as the job page shows it: a heading, a paragraph or a list. */
+export type PostingBlock = { kind: "heading"; text: string } | { kind: "para"; text: string } | { kind: "list"; items: string[] };
+
+const BULLET = /^\s*(?:[-*•·▪◦–]|\d{1,2}[.)])\s+/;
+
+/**
+ * A job description as readable blocks (Yong, 2026-11-23: the whole description, shown open, easy to
+ * read). Blank lines split paragraphs; "- ", "• " or "1." lines become a list; a short line ending in
+ * ":" (or standing alone before a list) is a heading. Every word of the text is kept.
+ */
+export function postingBlocks(text: string | null | undefined): PostingBlock[] {
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n").map((l) => l.replace(/[ \t ]+/g, " ").trim());
+  const out: PostingBlock[] = [];
+  let para: string[] = [];
+  const flush = () => { if (para.length) out.push({ kind: "para", text: para.join(" ") }); para = []; };
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!;
+    if (!l) { flush(); continue; }
+    if (BULLET.test(l)) {
+      flush();
+      const item = l.replace(BULLET, "");
+      const last = out[out.length - 1];
+      if (last?.kind === "list") last.items.push(item); else out.push({ kind: "list", items: [item] });
+      continue;
+    }
+    const nextText = lines.slice(i + 1).find((x) => x);
+    const short = l.length <= 80 && !/[.!?]$/.test(l);
+    if (short && (l.endsWith(":") || (nextText !== undefined && BULLET.test(nextText) && !para.length))) {
+      flush();
+      out.push({ kind: "heading", text: l.replace(/:$/, "") });
+      continue;
+    }
+    // A wrapped line of a list item carries on that item, when no blank line came between.
+    const last = out[out.length - 1];
+    if (!para.length && last?.kind === "list" && lines[i - 1]) { last.items[last.items.length - 1] += ` ${l}`; continue; }
+    para.push(l);
+  }
+  flush();
+  return out;
+}
