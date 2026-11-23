@@ -1,6 +1,7 @@
 import { canonicalSkill, findSkills } from "../jobs/skills";
 import { containsPhrase } from "../jobs/text";
 import { countryFit } from "../jobs/country";
+import { placeVerdict } from "./place";
 import { functionWords, goalLevelIndex, goalLevelLabel, goalLevelOf, LEVEL_LABEL, levelIndex, levelOf, normalizeTitle, type GoalLevel, type Level } from "../jobs/normalize";
 import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
 import type { DomainKey } from "../jobs/domain";
@@ -195,20 +196,10 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
 
   // 3. Preference fit (20 = place 10 + pay 5 + industry 5; with levels chosen, place 8 + level 6 + pay 3 + industry 3)
   const prefLines: string[] = [];
-  const loc = (posting.locationRaw ?? "").toLowerCase();
-  const isRemote = posting.workplaceType === "remote" || /\bremote\b/.test(loc);
-  const anyPlacePref = prefs.locations.length > 0 || prefs.workplaceTypes.length > 0;
   let placeRaw = 1;
-  if (anyPlacePref) {
-    const wantsRemote = prefs.workplaceTypes.includes("remote") || prefs.locations.some((l) => /remote/i.test(l));
-    const placeHit = prefs.locations.some((l) => { const c = l.toLowerCase().split(",")[0]!.trim(); return c && !/remote/.test(c) && loc.includes(c); });
-    const typeOk = !posting.workplaceType || prefs.workplaceTypes.length === 0 || prefs.workplaceTypes.includes(posting.workplaceType);
-    if (isRemote && wantsRemote) { placeRaw = 1; prefLines.push("Remote, which you want."); }
-    else if (placeHit && typeOk) { placeRaw = 1; prefLines.push(`In ${posting.locationRaw}, a place you chose.`); }
-    else if (!loc && !posting.workplaceType) { placeRaw = 0.5; prefLines.push("The posting doesn't say where."); }
-    else if (placeHit && !typeOk) { placeRaw = 0.5; prefLines.push(`In a place you chose, but ${posting.workplaceType}.`); }
-    else { placeRaw = 0; filterReasons.push(`Not in a place you chose (${posting.locationRaw ?? posting.workplaceType}).`); }
-  } else prefLines.push("You haven't set places, so any location fits.");
+  const pv = placeVerdict(prefs, posting);
+  if (pv) { placeRaw = pv.raw; (pv.out ? filterReasons : prefLines).push(pv.line); }
+  else prefLines.push("You haven't set places, so any location fits.");
   // match-4: a job clearly outside the goal's countries is ruled out for it (Yong, 2026-11-18).
   const cf = countryFit(posting, prefs.countries ?? []);
   if (cf.verdict === "out") { placeRaw = 0; filterReasons.push(cf.line); }

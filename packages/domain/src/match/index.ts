@@ -2,4 +2,5 @@ export * from "./score";
 export * from "./feedback";
 export * from "./goals";
 export * from "./fit";
+export * from "./place";
 export * from "./rank";

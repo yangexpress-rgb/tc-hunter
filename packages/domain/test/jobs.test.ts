@@ -183,7 +183,7 @@ describe("filters, early career and feedback", () => {
     const skip = scoreMatch(fx.profile, { ...fx.prefs, employersExclude: ["contoso"] }, base, { now });
     expect(skip.filterReasons).toContain("Contoso is on your skip list.");
     const onsite = scoreMatch(fx.profile, fx.prefs, { ...base, workplaceType: "onsite", locationRaw: "Seattle, WA" }, { now });
-    expect(onsite.filterReasons[0]).toMatch(/Not in a place you chose/);
+    expect(onsite.filterReasons[0]).toMatch(/^In the office \(Seattle, WA\), and this goal wants remote\.$/);
     const db = scoreMatch(fx.profile, { ...fx.prefs, dealBreakers: ["yearly team week"] }, base, { now });
     expect(db.filterReasons[0]).toMatch(/deal-breakers/);
   });
