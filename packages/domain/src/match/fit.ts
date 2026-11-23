@@ -1,6 +1,7 @@
 import { findSkills, canonicalSkill } from "../jobs/skills";
 import { containsPhrase } from "../jobs/text";
 import { countryFit } from "../jobs/country";
+import { placeVerdict } from "./place";
 import { functionWords, levelOf } from "../jobs/normalize";
 import type { SalaryPeriod } from "../jobs/types";
 import { domainLabel, domainOf, domainRelation, type DomainKey, type DomainVerdict } from "../jobs/domain";
@@ -24,7 +25,8 @@ import { applicantLevel, effectiveYears, employmentKind, languageMentioned, leve
  */
 // fit-2: the goal's countries count in Place. fit-3: tiers by level, track and domain order the list (Yong, 2026-11-22).
 // fit-4: technology domains split out (domain-2). fit-5: every goal's result is kept (match_goal) and one rule picks the primary goal (multi-goal brief §4).
-export const FIT_VERSION = "fit-5";
+// fit-6: one place rule (place.ts); a goal with ways of working but no places no longer rules a job out for its town (2026-11-23).
+export const FIT_VERSION = "fit-6";
 
 export interface FitPart { key: string; label: string; weight: number; raw: number; points: number; detail: string[] }
 export interface Fit { score: number; parts: FitPart[]; summary: string }
@@ -103,18 +105,7 @@ export function goalFit(prefs: MatchPrefs, posting: MatchPosting, verdict?: Doma
 
   // Place (20), when the goal sets places or ways of working.
   if (prefs.locations.length || prefs.workplaceTypes.length) {
-    const loc = (posting.locationRaw ?? "").toLowerCase();
-    const isRemote = posting.workplaceType === "remote" || /\bremote\b/.test(loc);
-    const wantsRemote = prefs.workplaceTypes.includes("remote") || prefs.locations.some((l) => /remote/i.test(l));
-    const placeHit = prefs.locations.find((l) => { const c = l.toLowerCase().split(",")[0]!.trim(); return c && !/remote/.test(c) && loc.includes(c); });
-    const typeOk = !posting.workplaceType || !prefs.workplaceTypes.length || prefs.workplaceTypes.includes(posting.workplaceType);
-    const [raw, line] = isRemote && wantsRemote ? [1, "Remote, which you want."]
-      : placeHit && typeOk ? [1, `In ${posting.locationRaw}, a place you chose.`]
-      : !loc && !posting.workplaceType ? [0.5, "The posting doesn't say where."]
-      : placeHit ? [0.5, `In a place you chose, but ${posting.workplaceType}.`]
-      : !prefs.locations.filter((l) => !/remote/i.test(l)).length && typeOk
-        ? (posting.workplaceType ? [1, `${WORK[posting.workplaceType]}, a way of working you chose.`] : [0.5, "The posting doesn't say if it's remote, hybrid or in the office."])
-      : [0, `Not in a place you chose (${posting.locationRaw ?? posting.workplaceType}).`];
+    const { raw, line } = placeVerdict(prefs, posting)!;
     const cf = countryFit(posting, prefs.countries ?? []);
     // Outside the goal's countries: no place points, whatever else fits. Unknown country: at most half.
     const r = cf.verdict === "out" ? 0 : cf.verdict === "unknown" ? Math.min(raw as number, 0.5) : raw as number;
@@ -237,5 +228,4 @@ export function candidateFit(profile: MatchProfile, posting: MatchPosting, now: 
 }
 
 const band = (s: number) => (s >= 80 ? "Strong fit" : s >= 60 ? "Good fit" : s >= 40 ? "Partial fit" : "Weak fit");
-const WORK: Record<string, string> = { remote: "Remote", hybrid: "Hybrid", onsite: "In the office" };
 const KIND: Record<string, string> = { full_time: "Full time", part_time: "Part time", contract: "Contract", internship: "Internship", temporary: "Temporary", volunteer: "Volunteer" };

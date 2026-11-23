@@ -107,7 +107,7 @@ export default async function JobPage(props: Props) {
                   <div><strong>G {x.g_score ?? "–"}</strong> {x.g_summary}</div>
                 </div>
                 {Array.isArray(x.tier_lines) && x.tier_lines.length ? <p className="muted small">{(x.tier_lines as string[]).join(" ")}</p> : null}
-                {x.filtered ? <p className="error">This goal&apos;s preferences rule it out: {(x.filter_reasons as string[]).join("; ")}.</p> : null}
+                {x.filtered ? <p className="error">Ruled out for this goal: {(x.filter_reasons as string[]).map((r) => r.replace(/\.$/, "")).join("; ")}.</p> : null}
                 {(x.g_parts as FitPart[] | null)?.length ? (
                   <Details summary={`How we worked out the G-score for this goal (${x.g_score})`}>
                     <table className="breakdown"><tbody>

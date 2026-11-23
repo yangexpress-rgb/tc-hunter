@@ -118,7 +118,7 @@ describe("Goals (several, each with when, type, role, occupation, industry, comp
     // Only the Durham goal is left in use, so the Raleigh job is now set aside.
     const ops = (await listMatches(pool, yong, { showFiltered: true })).rows.find((r) => r.title === "Operations Analyst")!;
     expect(ops.filtered).toBe(true);
-    expect(ops.reason_line).toMatch(/Not in a place you chose/);
+    expect(ops.reason_line).toMatch(/not one of this goal.s places \(Durham\)/);
     await deleteGoal(pool, yong, first!.id);
     expect((await listGoals(pool, yong)).map((g) => g.roles[0])).toEqual(["Warehouse Associate", "COO"]);
   });
