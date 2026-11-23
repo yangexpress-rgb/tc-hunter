@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { followSource, giveFeedback, type FeedbackAction, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, setSourceIndustry, unfollowSource } from "@tc-hunter/db";
+import { followSource, giveFeedback, type FeedbackAction, markAlertSeen, requestLink, requestScan, requestSourceScan, rescoreMatches, savePreferences, setAdjustmentActive, restoreSource, setSourceIndustry, unfollowSource } from "@tc-hunter/db";
 import { errorCode, parseSourceList } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 import { TIMES, ZONES } from "@/lib/schedule";
@@ -83,9 +83,27 @@ export async function searchSourceAction(form: FormData) {
   await act(form, () => requestSourceScan(app().pool, s, String(form.get("id"))), "/jobs/sources", "searching");
 }
 
+/**
+ * Remove on a row of Where we look (Yong, 2026-11-23): the source is no longer searched. The page
+ * comes back naming it, with Undo; jobs it already found and applications stay.
+ */
 export async function unfollowSourceAction(form: FormData) {
   const s = await requireSession();
-  await act(form, () => unfollowSource(app().pool, s, String(form.get("id"))), "/jobs/sources");
+  const id = String(form.get("id") ?? "");
+  const back = backTo(form, "/jobs/sources#status");
+  let target = withParam(back, "removed", id);
+  try { await unfollowSource(app().pool, s, id); } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("jobs.action_failed", { code });
+    target = withParam(back, "e", code);
+  }
+  redirect(target);
+}
+
+/** Undo a Remove, or use a removed source again. */
+export async function restoreSourceAction(form: FormData) {
+  const s = await requireSession();
+  await act(form, () => restoreSource(app().pool, s, String(form.get("id"))), "/jobs/sources#status", "restored");
 }
 
 /** A followed company's industry (2026-11-22): it decides the domain of that company's jobs, unless a title says otherwise. */

@@ -1143,17 +1143,37 @@ export async function followSource(pool: pg.Pool, session: Session, address: str
   });
 }
 
-export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: string): Promise<void> {
-  await withApplicant(pool, asApplicant(session), async (c) => {
-    // A place the app found is kept as "don't watch", so it isn't found and followed again.
-    const r = await c.query(
-      `WITH m AS (UPDATE applicant_job_source SET muted = true WHERE job_source_id = $1 AND origin IN ('found','search') AND NOT muted RETURNING job_source_id),
-            d AS (DELETE FROM applicant_job_source WHERE job_source_id = $1 AND origin = 'you' RETURNING job_source_id)
-       SELECT job_source_id FROM m UNION ALL SELECT job_source_id FROM d`, [sourceId]);
+/**
+ * Takes a source off the list (Yong, 2026-11-23: a Remove button on every row of Where we look).
+ * It is kept as "don't use", whoever added it, so it isn't found and followed again and Undo can
+ * bring it back as it was. Jobs it already found and any applications stay.
+ */
+export async function unfollowSource(pool: pg.Pool, session: Session, sourceId: string): Promise<{ name: string }> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const r = await c.query("UPDATE applicant_job_source SET muted = true, updated_at = now() WHERE job_source_id = $1 AND NOT muted RETURNING job_source_id", [sourceId]);
     if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");
-    const k = await c.query("SELECT kind FROM job_source WHERE id = $1", [sourceId]);
-    await recordAudit(c, "source.unfollowed", { objectType: "job_source", objectId: sourceId, payload: { kind: k.rows[0]?.kind ?? "" } });
+    const k = (await c.query("SELECT kind, name FROM job_source WHERE id = $1", [sourceId])).rows[0];
+    await recordAudit(c, "source.unfollowed", { objectType: "job_source", objectId: sourceId, payload: { kind: k?.kind ?? "" } });
+    return { name: String(k?.name ?? "") };
   });
+}
+
+/** Undo for Remove: the source is searched again with the next search, as it was before. */
+export async function restoreSource(pool: pg.Pool, session: Session, sourceId: string): Promise<void> {
+  await withApplicant(pool, asApplicant(session), async (c) => {
+    const r = await c.query("UPDATE applicant_job_source SET muted = false, updated_at = now() WHERE job_source_id = $1 AND muted RETURNING job_source_id", [sourceId]);
+    if (!r.rowCount) throw new DomainError("TC_NOT_FOUND");
+    const k = (await c.query("SELECT kind FROM job_source WHERE id = $1", [sourceId])).rows[0];
+    await recordAudit(c, "source.restored", { objectType: "job_source", objectId: sourceId, payload: { kind: k?.kind ?? "" } });
+  });
+}
+
+/** Sources taken off the list (removed, or replaced by a better address), newest first, so any can be used again. */
+export async function listRemovedSources(pool: pg.Pool, session: Session) {
+  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    `SELECT s.id, s.name, s.kind, s.url, f.origin, f.updated_at AS removed_at
+       FROM job_source s JOIN applicant_job_source f ON f.job_source_id = s.id WHERE f.muted ORDER BY f.updated_at DESC, s.name`)).rows as
+    { id: string; name: string; kind: string; url: string; origin: string; removed_at: Date }[]);
 }
 
 export async function listSources(pool: pg.Pool, session: Session) {
