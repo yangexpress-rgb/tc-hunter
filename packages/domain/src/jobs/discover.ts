@@ -1,6 +1,6 @@
 import { jobLinksFromHtml, jobPostingsFromHtml } from "./jsonld";
 import { SourceRefusedError, type Fetcher } from "./fetcher";
-import { detectSource, isNoFetchHost, parseWorkday, unreadableCareersSystem, workdayHasJobs } from "./sources";
+import { detectSource, isNoFetchHost, parseAdp, parseWorkday, unreadableCareersSystem, workdayHasJobs } from "./sources";
 import type { AtsKind, SourceSpec } from "./types";
 
 /**
@@ -145,6 +145,7 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
       const spec = detectSource(idea.careersUrl, idea.name);
       const wd = parseWorkday(idea.careersUrl);
       if (spec && wd && spec.kind === "workday") { if (await workdayHasJobs(wd, f)) return spec; }
+      else if (spec && spec.kind === "adp") return skip.has(`adp:${spec.key}`) ? null : spec;
       else if (spec && spec.kind === "careers_page" && !isNoFetchHost(spec.url)) {
         const page = await f.get(spec.url, { kind: "page" });
         const board = await boardOnPage(page.text, idea.name, f, skip);
@@ -182,6 +183,11 @@ async function boardOnPage(text: string, name: string, f: Fetcher, skip: Set<str
   if (wdSite && !skip.has(`workday:${wdSite.host}/${wdSite.tenant}/${wdSite.site}`)) {
     const answers = await workdayHasJobs(wdSite, f).catch((e) => { if (e instanceof SourceRefusedError && e.reason !== "not_found") return "refused" as const; if (e instanceof SourceRefusedError) return false; throw e; });
     if (answers) return detectSource(`https://${wdSite.host}/${wdSite.site}`, name);
+  }
+  // An ADP Workforce Now career center (BioIVT's careers page links to one, 2026-11-23).
+  for (const m of text.matchAll(/https:\/\/workforcenow\.adp\.com\/[^"'\s<>]*cid=[^"'\s<>]+/gi)) {
+    const site = parseAdp(m[0]);
+    if (site && !skip.has(`adp:${site.cid}`)) return detectSource(m[0].replace(/&amp;/g, "&"), name);
   }
   for (const m of text.matchAll(/https:\/\/(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io\/(?:embed\/job_board\?for=)?[a-z0-9_-]+|https:\/\/jobs\.(?:eu\.)?lever\.co\/[a-z0-9_.-]+|https:\/\/jobs\.ashbyhq\.com\/[a-z0-9_.%-]+|https:\/\/(?:jobs|careers)\.smartrecruiters\.com\/[a-z0-9_-]+/gi)) {
     const b = detectSource(m[0], name);

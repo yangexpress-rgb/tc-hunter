@@ -89,6 +89,67 @@ export function unreadableCareersSystem(url: string): string | null {
   return UNREADABLE_CAREERS.find(([, re]) => re.test(host))?.[0] ?? null;
 }
 
+// ADP Workforce Now (BioIVT, 2026-11-23) ---------------------------------------------------------
+// Many mid-sized employers list jobs on ADP's career center (workforcenow.adp.com/…/recruitment.html?cid=…).
+// The page is drawn by scripts, but it reads its jobs from a public JSON service on the same site,
+// 20 at a time, which we read the same way.
+
+export interface AdpSite { cid: string; ccId: string; /** The one job the address shows, when it shows one. */ jobId: string | null }
+const ADP_CCID = "19000101_000001";
+
+/** An ADP Workforce Now career center (or one of its jobs) from its address. */
+export function parseAdp(input: string): AdpSite | null {
+  let url: URL;
+  try { url = new URL(input.trim().replace(/&amp;/g, "&")); } catch { return null; }
+  if (!/(^|\.)workforcenow\.adp\.com$/i.test(url.hostname)) return null;
+  const cid = (url.searchParams.get("cid") ?? "").toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(cid)) return null;
+  const ccId = url.searchParams.get("ccId") ?? "";
+  const jobId = url.searchParams.get("jobId") ?? "";
+  return { cid, ccId: /^[0-9_]{6,40}$/.test(ccId) ? ccId : ADP_CCID, jobId: /^[0-9A-Za-z_]{3,60}$/.test(jobId) ? jobId : null };
+}
+export const adpBoardUrl = (s: Pick<AdpSite, "cid" | "ccId">) => `https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=${s.cid}&ccId=${s.ccId}&lang=en_US`;
+export const adpJobUrl = (s: Pick<AdpSite, "cid" | "ccId">, jobId: string) => `https://workforcenow.adp.com/mascsr/default/mdf/recruitment/recruitment.html?cid=${s.cid}&ccId=${s.ccId}&jobId=${encodeURIComponent(jobId)}&lang=en_US`;
+const adpApi = (_s: AdpSite) => "https://workforcenow.adp.com/mascsr/default/careercenter/public/events/staffing/v1/job-requisitions";
+const adpQuery = (s: Pick<AdpSite, "cid" | "ccId">) => `cid=${encodeURIComponent(s.cid)}&ccId=${encodeURIComponent(s.ccId)}&lang=en_US&locale=en_US`;
+
+/** One job from ADP's job service (its list rows carry no description; one job's own answer does). */
+export function readAdpJob(j: Obj, s: Pick<AdpSite, "cid" | "ccId">, employer: string): RawPosting {
+  const id = String(j.itemID ?? "");
+  const url = adpJobUrl(s, id);
+  const where = ((j.requisitionLocations ?? []) as Obj[]).map((l) => String(l?.nameCode?.shortName ?? "").trim().replace(/^,\s*/, "")).filter(Boolean);
+  const desc = htmlToText(String(j.requisitionDescription ?? ""));
+  const req = String(j.clientRequisitionID ?? "").trim();
+  const posted = typeof j.postDate === "string" && j.postDate ? (/Z|[+-]\d\d:?\d\d$/.test(j.postDate) ? j.postDate : `${j.postDate}Z`) : null;
+  return { externalId: `adp:${s.cid}:${id}`, url, employer, title: String(j.requisitionTitle ?? "").trim(), locationRaw: where.length ? [...new Set(where)].join("; ") : null,
+    workplaceType: detectWorkplace(where.join("; "), desc.slice(0, 600)), descriptionText: desc, salary: null, postedAt: posted, applyUrl: url, atsType: "adp",
+    reqIds: req ? [req] : [] };
+}
+
+/** Reads an ADP career center: the whole list, 20 a time, then the descriptions of the wanted jobs. */
+async function fetchAdp(spec: SourceSpec, f: Fetcher, wanted: (title: string) => boolean, maxDetails: number): Promise<SourceFetchResult> {
+  const site = parseAdp(spec.url) ?? { cid: spec.key, ccId: ADP_CCID, jobId: null };
+  const list: Obj[] = [];
+  let total = Infinity;
+  for (let skip = 0; skip < Math.min(total, 1000); skip += 20) {
+    const r = JSON_OR((await f.get(`${adpApi(site)}?${adpQuery(site)}&$top=20&$skip=${skip}`)).text, "ADP");
+    const page = (r.jobRequisitions ?? []) as Obj[];
+    total = Number(r.meta?.totalNumber ?? 0) || list.length + page.length;
+    list.push(...page);
+    if (page.length < 20) break;
+  }
+  const want = list.filter((j) => wanted(String(j.requisitionTitle ?? "")));
+  const postings: RawPosting[] = list.filter((j) => !want.includes(j)).map((j) => readAdpJob(j, site, spec.name));
+  for (const j of want) {
+    if (want.indexOf(j) >= maxDetails) { postings.push(readAdpJob(j, site, spec.name)); continue; }
+    try { postings.push(readAdpJob(JSON_OR((await f.get(`${adpApi(site)}/${encodeURIComponent(String(j.itemID))}?${adpQuery(site)}`)).text, "ADP"), site, spec.name)); } catch (e) {
+      if (!(e instanceof SourceRefusedError) || e.reason !== "not_found") throw e;
+      postings.push(readAdpJob(j, site, spec.name));
+    }
+  }
+  return { postings, complete: true, checked: list.length, listed: list.length, notes: want.length > maxDetails ? [`Read the first ${maxDetails} related jobs in full only.`] : [] };
+}
+
 // Workday (Yong, 2026-11-15: an Embecta job on Workday was missed) ---------------------------
 // Many large employers list jobs on Workday. Its careers sites are drawn by scripts, but they
 // read their jobs from a public JSON service on the same site, which we read the same way.
@@ -276,10 +337,12 @@ export function detectSource(input: string, name?: string): SourceSpec | null {
   }
   const wd = parseWorkday(url.href);
   if (wd) return { type: "ats_api", kind: "workday", key: workdayKey(wd), name: name?.trim() || titleCase(wd.tenant), url: `https://${wd.host}/${wd.site}` };
+  const adp = parseAdp(url.href);
+  if (adp) return { type: "ats_api", kind: "adp", key: adp.cid, name: name?.trim() || "ADP", url: adpBoardUrl(adp) };
   return { type: "careers_page", kind: "careers_page", key: `${url.origin}${url.pathname}`.replace(/\/$/, ""), name: name?.trim() || titleCase(url.hostname.replace(/^www\.|^careers\.|^jobs\./, "").split(".")[0]!), url: url.href };
 }
 
-export interface JobLink { kind: AtsKind | "workday" | "page" | "no_fetch"; board?: string; id?: string; url: string }
+export interface JobLink { kind: AtsKind | "workday" | "adp" | "page" | "no_fetch"; board?: string; id?: string; url: string }
 
 /** One job's address: which board it lives on, and its id there. */
 export function detectJobLink(input: string): JobLink | null {
@@ -299,6 +362,8 @@ export function detectJobLink(input: string): JobLink | null {
   if (m) return { kind: "smartrecruiters", board: m[1]!, id: m[2]!, url: url.href };
   const wd = parseWorkday(url.href);
   if (wd?.jobPath) return { kind: "workday", board: workdayKey(wd), id: wd.jobPath, url: url.href };
+  const adp = parseAdp(url.href);
+  if (adp?.jobId) return { kind: "adp", board: adp.cid, id: adp.jobId, url: url.href };
   return { kind: "page", url: url.href };
 }
 
@@ -461,6 +526,7 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
       return { postings, complete: false, checked: list.length, listed: list.length, notes: want.length < list.filter((j) => wanted(String(j.name ?? ""))).length ? ["Read the first 25 related jobs only."] : [] };
     }
     case "workday": return fetchWorkday(spec, f, wanted, maxDetails, terms, wait);
+    case "adp": return fetchAdp(spec, f, wanted, maxDetails);
     case "careers_page": {
       const page = await f.get(spec.url, { kind: "page" });
       let postings = jobPostingsFromHtml(page.text, page.url);
@@ -504,6 +570,11 @@ export async function fetchJobLink(link: JobLink, f: Fetcher): Promise<RawPostin
       const w = workdayFromKey(link.board ?? "");
       const d = JSON_OR((await f.get(`${workdayApi(w)}${link.id}`, { headers: WORKDAY_HEADERS })).text, "Workday");
       return readWorkdayJob(d, w, titleCase(w.tenant), link.id ?? "");
+    }
+    case "adp": {
+      const site = parseAdp(link.url) ?? { cid: link.board ?? "", ccId: ADP_CCID, jobId: link.id ?? null };
+      const d = JSON_OR((await f.get(`${adpApi(site)}/${encodeURIComponent(link.id ?? "")}?${adpQuery(site)}`)).text, "ADP");
+      return readAdpJob(d, site, "");
     }
     case "page": {
       const page = await f.get(link.url, { kind: "page" });

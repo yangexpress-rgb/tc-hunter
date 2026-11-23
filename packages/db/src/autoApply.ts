@@ -466,7 +466,7 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
     const rows = (await c.query(
       `SELECT p.employer_canonical AS employer, u.url FROM job_posting p
          CROSS JOIN LATERAL (SELECT p.apply_url AS url UNION ALL SELECT p.employer_apply_url UNION ALL SELECT ps.url FROM job_posting_source ps WHERE ps.job_posting_id = p.id) u
-        WHERE p.id <> $1 AND p.employer_canonical ILIKE $2 AND u.url ~* '(myworkdayjobs|greenhouse|lever|ashbyhq|smartrecruiters)\\.'
+        WHERE p.id <> $1 AND p.employer_canonical ILIKE $2 AND u.url ~* '(myworkdayjobs|greenhouse|lever|ashbyhq|smartrecruiters|workforcenow\\.adp)\\.'
         LIMIT 200`, [posting.id, `%${key.split(" ")[0]}%`])).rows as Array<{ employer: string; url: string }>;
     return boardFromLinks(rows.filter((x) => companyKey(x.employer) === key).map((x) => x.url), app.employer);
   });
@@ -513,7 +513,7 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
       return giveUp(lookAgain(r.reason), true);
     }
     // Final: the employer sends applicants back to the job site, a system it can't search, or four tries used.
-    if (isTransientLinkFailure(r.failure)) return giveUp(`${r.reason}. It looked ${tries} times over about ${[0, 1, 5, 14][tries - 1] ?? 14} hours, by every way it has (the posting's own links, what TC Hunter already knew, the requisition ID, the usual hiring-system names and careers addresses, and ${app.employer}'s own website), and has stopped looking`);
+    if (isTransientLinkFailure(r.failure)) return giveUp(`${r.reason}. It looked ${tries} times over about ${[0, 1, 5, 14][tries - 1] ?? 14} hours and has stopped looking`);
     return giveUp(r.reason);
   }
   const host = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
