@@ -12,6 +12,7 @@ import { tailorAction } from "@/app/documents/actions";
 import { trackAction } from "@/app/applications/actions";
 import { isStuck, journeyFor, reachedOf, runLineOf, StatusBlock, Stepper } from "@/components/applications/Journey";
 import { DocChecklist } from "@/components/applications/DocChecklist";
+import { PostingText } from "@/components/jobs/PostingText";
 
 type FitPart = { key: string; label: string; weight: number; points: number; detail: string[] };
 
@@ -78,6 +79,7 @@ export default async function JobPage(props: Props) {
   const req = (m.requirements ?? {}) as { must_have?: string[]; nice_to_have?: string[]; years?: number | null; education?: string | null; authorisation?: string | null; confidence?: string };
   const adjustments = (m.adjustments ?? []) as Array<{ label: string; delta: number }>;
   const proof = (id: string) => (m.evidence as Array<{ skill_id: string; label: string }>).filter((e) => e.skill_id === id).map((e) => e.label);
+  const thin = String(m.description_text ?? "").trim().length < 400;
   const employerPage = (m.sources as Array<{ url: string; active: boolean }>).find((s) => s.active)?.url ?? m.apply_url;
 
   return (
@@ -174,6 +176,14 @@ export default async function JobPage(props: Props) {
         </DocChecklist>
       ) : null}
 
+      {/* The whole job description, open by default (Yong, 2026-11-23): never folded away or cut short. */}
+      <section className="card job-description" aria-label="Job description">
+        <h2>Job description</h2>
+        {thin ? <p className="muted small">This is all the text {m.ats_type === "linkedin_alert" ? "the job alert" : "the site we found it on"} gave. TC Hunter reads the full description from the employer&apos;s own posting when it can.</p> : null}
+        <PostingText text={m.description_text} />
+        {employerPage ? <p><a href={employerPage} rel="noopener noreferrer" target="_blank">See it on the employer&apos;s site</a></p> : null}
+      </section>
+
       {(m.gap_skills as string[]).length ? (
         <section className="card">
           <h2>{t("jobs.gaps.title")}</h2>
@@ -232,13 +242,9 @@ export default async function JobPage(props: Props) {
         {req.years ? <p>Experience asked for: {req.years}+ years</p> : null}
         {req.education ? <p>Education: {req.education}</p> : null}
         {req.authorisation ? <p>Work permission: {req.authorisation}</p> : null}
-        {!req.must_have?.length && !req.nice_to_have?.length ? <p className="muted">We couldn't find a clear list of requirements. Read the full description below.</p> : null}
+        {!req.must_have?.length && !req.nice_to_have?.length ? <p className="muted">We couldn't find a clear list of requirements. Read the full description above.</p> : null}
       </Details>
 
-      <Details summary="Full job description">
-        <div className="posting-text">{m.description_text}</div>
-        {employerPage ? <p><a href={employerPage} rel="noopener noreferrer" target="_blank">See it on the employer's site</a></p> : null}
-      </Details>
 
       {(m.events as unknown[]).length ? (
         <Details summary="What's changed">

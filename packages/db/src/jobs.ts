@@ -43,6 +43,88 @@ export async function upsertSource(c: pg.PoolClient, spec: SourceSpec): Promise<
 
 const reqHash = (r: unknown) => sha256Hex(canonicalJson(r));
 
+/**
+ * The full description, in place of a thin copy's (Yong, 2026-11-23: the job page shows the whole
+ * description). A job board's listing or a LinkedIn alert carries a sentence or two; the employer's own
+ * posting carries all of it. The fuller text wins only when it is clearly longer: a posting that was
+ * read in full already is left as it is.
+ */
+export function isFullerText(stored: string | null | undefined, fresh: string | null | undefined): boolean {
+  const a = (stored ?? "").trim().length;
+  const b = (fresh ?? "").trim().length;
+  return b >= 400 && b > a * 1.5 + 200;
+}
+
+/** Postings with less text than this are worth reading again from the employer's own site. */
+export const THIN_TEXT_CHARS = 1500;
+
+/**
+ * The hiring systems whose job pages the server reads for one job's text. A job board or careers page is
+ * never read for it, and neither is Workday: it turns the server away, and TC Hunter for Mac reads it.
+ */
+const FULL_TEXT_KINDS = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "adp"]);
+
+/**
+ * Puts the employer's full text on a posting that had only a thin copy's, reads its requirements again
+ * (with `reader`: the rule reader in No AI mode) and has its domain worked out again on the next scoring.
+ * Returns true when the text was taken.
+ */
+export async function takeFullerText(c: pg.PoolClient, postingId: string, raw: Pick<RawPosting, "descriptionText" | "salary">, reader: RequirementsReader): Promise<boolean> {
+  const cur = (await c.query("SELECT title, description_text FROM job_posting WHERE id = $1", [postingId])).rows[0] as { title: string; description_text: string | null } | undefined;
+  if (!cur || !isFullerText(cur.description_text, raw.descriptionText)) return false;
+  const req = await reader.read(raw.descriptionText, cur.title);
+  const rh = reqHash({ must: [...req.must_have].sort(), nice: [...req.nice_to_have].sort(), years: req.years });
+  await c.query(
+    `UPDATE job_posting SET description_text = $2, description_fingerprint = $3, requirements = $4, requirements_hash = $5, parser_version = $6,
+       domain_version = NULL, full_text_checked_at = now(),
+       salary_min = coalesce(salary_min, $7), salary_max = coalesce(salary_max, $8), salary_currency = coalesce(salary_currency, $9), salary_period = coalesce(salary_period, $10)
+     WHERE id = $1`,
+    [postingId, raw.descriptionText, descriptionFingerprint(raw.descriptionText), JSON.stringify(req), rh, reader.version,
+      raw.salary?.min ?? null, raw.salary?.max ?? null, raw.salary?.currency ?? null, raw.salary?.period ?? null]);
+  return true;
+}
+
+/**
+ * Reads the employer's own posting at `url` and takes its full text when the stored one is thin.
+ * Never throws: a site that turns TC Hunter away leaves the posting as it was.
+ */
+export async function fillFullText(pool: pg.Pool, ctx: RequestContext, postingId: string, url: string, fetcher: Fetcher, reader: RequirementsReader): Promise<boolean> {
+  const link = detectJobLink(url);
+  if (!link || !FULL_TEXT_KINDS.has(link.kind)) return false;
+  let raw: RawPosting | null = null;
+  try { raw = await fetchJobLink(link, fetcher); } catch { raw = null; }
+  return withApplicant(pool, ctx, async (c) => {
+    await c.query("UPDATE job_posting SET full_text_checked_at = now() WHERE id = $1", [postingId]);
+    if (!raw) return false;
+    const took = await takeFullerText(c, postingId, raw, reader);
+    if (took) await matchApplicant(c, new Date(), [postingId]);
+    return took;
+  });
+}
+
+/**
+ * Jobs this applicant has whose description is only a thin copy, read again from the employer's own
+ * posting (at most `limit` a search, each at most once a week). This also mends jobs found before
+ * TC Hunter did this.
+ */
+export async function fillThinPostings(pool: pg.Pool, ctx: RequestContext, deps: Pick<WorkDeps, "fetcher" | "reader">, limit = 15): Promise<number> {
+  const rows = await withApplicant(pool, ctx, async (c) => (await c.query(
+    `SELECT p.id, array_remove(ARRAY[p.employer_apply_url, p.apply_url] || coalesce(array_agg(ps.url) FILTER (WHERE ps.url IS NOT NULL), '{}'), NULL) AS urls
+       FROM match m JOIN job_posting p ON p.id = m.job_posting_id LEFT JOIN job_posting_source ps ON ps.job_posting_id = p.id
+      WHERE p.merged_into IS NULL AND length(coalesce(p.description_text, '')) < $1
+        AND (p.full_text_checked_at IS NULL OR p.full_text_checked_at < now() - interval '7 days')
+      GROUP BY p.id ORDER BY max(m.updated_at) DESC NULLS LAST LIMIT 200`, [THIN_TEXT_CHARS])).rows as Array<{ id: string; urls: string[] }>);
+  let filled = 0;
+  let tried = 0;
+  for (const r of rows) {
+    const url = r.urls.find((u) => FULL_TEXT_KINDS.has(detectJobLink(u)?.kind ?? ""));
+    if (!url) continue;
+    if (tried++ >= limit) break;
+    if (await fillFullText(pool, ctx, r.id, url, deps.fetcher, deps.reader)) filled++;
+  }
+  return filled;
+}
+
 export interface IngestOutcome { postingId: string; isNew: boolean; changed: boolean; eventIds: string[] }
 
 /** One posting into the catalogue: link to an existing posting when it's the same job (F3), else add it. */
@@ -121,7 +203,9 @@ export async function ingestPosting(c: pg.PoolClient, sourceId: string, raw: Raw
               employer_apply_url = CASE WHEN employer_apply_url IS NULL AND $4::text IS NOT NULL THEN $4 ELSE employer_apply_url END
         WHERE id = $1`,
       [sameId.id, raw.employer, keys.reqIds, isEmployerCopy(own) && !isEmployerCopy(sameId.apply_url) ? own : null]);
-    return { postingId: sameId.id, isNew: false, changed: false, eventIds: events };
+    // The employer's own copy brings the full description the thin copy lacked (Yong, 2026-11-23).
+    const fuller = await takeFullerText(c, sameId.id, raw, reader);
+    return { postingId: sameId.id, isNew: false, changed: fuller, eventIds: events };
   }
 
   // Same job already in the catalogue from another source? (design 5.2 dedupe rule, F3)
@@ -763,6 +847,9 @@ async function scanSteps(pool: pg.Pool, ctx: RequestContext, deps: WorkDeps, opt
     const handed = await handToBatch(pool, ctx, deps, runId, pendingIds, tally, progress);
     if (handed) return handed;
   }
+  // Jobs that came with only a job board's or an alert's short text get the employer's full description.
+  await progress("Reading full job descriptions", total, total);
+  try { await fillThinPostings(pool, ctx, deps); } catch { /* the search's own results stand */ }
   await progress("Scoring what we found against your goals", total, total);
   return finishScan(pool, ctx, runId, now, tally);
 }

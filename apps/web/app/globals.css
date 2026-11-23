@@ -145,7 +145,12 @@ details.mini > summary { padding: 6px 4px; font-weight: 400; font-size: 14px; }
 .breakdown { width: 100%; border-collapse: collapse; }
 .breakdown th, .breakdown td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 .breakdown .num { white-space: nowrap; }
-.posting-text { white-space: pre-wrap; line-height: 1.5; }
+.posting-text { line-height: 1.55; max-width: 78ch; }
+.posting-text p { margin: 0 0 12px; }
+.posting-text h3 { font-size: 16px; margin: 18px 0 8px; }
+.posting-text ul { margin: 0 0 12px; padding-left: 22px; }
+.posting-text li { margin: 4px 0; }
+.job-description h2 { margin-top: 0; }
 .small-value { font-size: 15px; font-weight: 500; }
 .empty { margin: 18px 0; }
 .inline-actions + section.card { margin-top: 18px; }
