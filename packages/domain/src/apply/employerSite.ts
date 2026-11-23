@@ -130,8 +130,8 @@ export function boardFromLinks(urls: string[], name: string): SourceSpec | null 
   return [...count.values()].sort((a, b) => b.n - a.n)[0]?.spec ?? null;
 }
 
-const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "careers_page"]);
-const LISTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday"]);
+const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "adp", "careers_page"]);
+const LISTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "adp"]);
 
 /**
  * The link hunt (redesign §B, 2026-11-21): one fixed ladder, tried in order, every step's outcome
@@ -167,6 +167,8 @@ export function trailWords(trail: LinkTrail[]): string {
 
 /** Does a hiring site's own name fit the employer (Wiley's Workday is "wiley", Capital One's "capitalone")? */
 export function boardFits(spec: SourceSpec, employer: string): boolean {
+  // An ADP career center is named by a number, not the employer's name: a link the posting itself gives is taken as the employer's.
+  if (spec.kind === "adp") return true;
   const key = (spec.kind === "workday" ? spec.key.split("/")[1] ?? "" : spec.key).toLowerCase().replace(/[^a-z0-9]/g, "");
   if (!key) return false;
   const words = titleWords(employer).filter((w) => w.length >= 3);

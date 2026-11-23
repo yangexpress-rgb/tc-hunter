@@ -42,7 +42,7 @@ const whyText = (reason: string | null, kind?: string, failures = 0) => {
 };
 const KIND: Record<string, string> = {
   job_search: "Job search site", greenhouse: "Company jobs page (Greenhouse)", lever: "Company jobs page (Lever)", ashby: "Company jobs page (Ashby)",
-  smartrecruiters: "Company jobs page (SmartRecruiters)", workday: "Company jobs page (Workday)", careers_page: "Company careers page", pasted_link: "Pasted links",
+  smartrecruiters: "Company jobs page (SmartRecruiters)", workday: "Company jobs page (Workday)", adp: "Company jobs page (ADP)", careers_page: "Company careers page", pasted_link: "Pasted links",
 };
 /** An address without https:// and www., for showing where a source is read from. */
 const shortUrl = (u: string | null) => { try { const x = new URL(String(u)); return `${x.hostname.replace(/^www\./, "")}${x.pathname.replace(/\/$/, "")}`; } catch { return ""; } };

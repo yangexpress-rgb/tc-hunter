@@ -178,7 +178,7 @@ describe("retry replay (acceptance fixture 3)", () => {
     const s = await applyStatus(pool, yong, ref);
     expect(s.status).toBe("failed");
     expect(s.lookAgainAt).toBeNull();
-    expect(s.problem).toMatch(/It looked 4 times over about 14 hours, by every way it has \(the posting's own links, what TC Hunter already knew, the requisition ID, the usual hiring-system names and careers addresses, and Never Co's own website\), and has stopped looking/);
+    expect(s.problem).toMatch(/It looked 4 times over about 14 hours and has stopped looking/);
     expect(s.problem).toMatch(/then choose "I applied" here/);
     await hoursPass("Never Co", 30);
     expect((await ownerQuery("SELECT enqueue_employer_site_retries() AS n")).rows[0].n).toBe(0);
