@@ -155,6 +155,15 @@ export default async function JobsPage(props: PageProps) {
         );
       })()}
       <p className="muted small fit-legend"><strong>G</strong> how well a job matches your goals (role, level, type, place, pay). <strong>C</strong> how well your own experience and skills cover what the job asks for. Best match weighs both.</p>
+      {/* Opened from a row of Where we look (Yong, 2026-11-23): say whose jobs these are, and the way back. */}
+      {source ? (() => {
+        const from = sources.find((x) => x.id === source)!;
+        return (
+          <p className="source-context">
+            Jobs found at <strong>{from.name}</strong>: {from.open_jobs} open{status === "new" ? `, ${counts.new ?? 0} new for you` : ""}.{" "}
+            <a href={q({ source: undefined })}>Every source</a> · <a href="/jobs/sources#status">Back to Where we look</a>
+          </p>);
+      })() : null}
       <p className="muted small view-default">
         {narrowed ? <>Showing {filtered.length} of {matched.rows.length}{company ? <> at {company} (<a href={q({ company: undefined })}>every company</a>)</> : null}. </> : null}
         {view === defaultView ? (params.view_saved ? "Saved. Jobs opens this way from now on." : null) : (
@@ -167,6 +176,7 @@ export default async function JobsPage(props: PageProps) {
 
       {rows.length === 0 ? (
         <p className="muted empty">{narrowed ? <>No jobs fit these filters. <a href={q({ q: undefined, goal: undefined, level: undefined, work: undefined, ladder: undefined, source: undefined, company: undefined })}>Clear them</a></>
+          : source && status === "new" ? <>None of these jobs are new for you. Look in <a href={q({ tab: "saved" })}>Saved</a> or <a href={q({ tab: "passed" })}>Passed</a>{counts.filtered ? <>, or <a href={q({ filtered: "1" })}>show the {counts.filtered} hidden by your preferences</a></> : null}.</>
           : status === "new" ? (sources.length || goals.some((g) => g.active) ? t("jobs.empty") : t("jobs.no_sources")) : status === "saved" ? "You haven't saved any jobs yet." : "You haven't passed on any jobs."}</p>
       ) : view === "jobs" ? (
         <JobCards rows={rows} back={here} done={doneRow ? { id: doneRow.id, why, learned, nextId } : undefined} />

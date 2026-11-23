@@ -1,4 +1,4 @@
-import { latestDiscovery, listAppSettings, listGoals, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
+import { latestDiscovery, listAppSettings, listGoals, listRemovedSources, listSources, namedCompanies, scanStatus } from "@tc-hunter/db";
 import { LookAgainButton, ScanStatusBox, SearchAgainButton } from "@/components/jobs/ScanStatus";
 import { companyKey, GOAL_DOMAINS, goalLabel, noBoardSentence, portalFor, searchSites, t } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
@@ -8,7 +8,8 @@ import { ago } from "@/components/jobs/JobBits";
 import { TopBar } from "@/components/TopBar";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { followManySourcesAction, followSourceAction, refreshAction, saveScheduleAction, searchSourceAction, sourceIndustryAction, unfollowSourceAction } from "../actions";
+import { followManySourcesAction, followSourceAction, refreshAction, restoreSourceAction, saveScheduleAction, searchSourceAction, sourceIndustryAction, unfollowSourceAction } from "../actions";
+import { SourceRow } from "@/components/jobs/SourceRow";
 import { ScheduleForm } from "@/components/jobs/ScheduleForm";
 import { DesktopReader } from "@/components/jobs/DesktopReader";
 
@@ -70,7 +71,9 @@ function noJobsAdvice(s: { name: string; kind: string; url: string; origin: stri
 export default async function SourcesPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
-  const [{ saved, error, params }, sources, goals, last, named, scan] = await Promise.all([flashOf(props), listSources(pool, session), listGoals(pool, session), latestDiscovery(pool, session), namedCompanies(pool, session), scanStatus(pool, session)]);
+  const [{ saved, error, params }, sources, goals, last, named, scan, removed] = await Promise.all([flashOf(props), listSources(pool, session), listGoals(pool, session), latestDiscovery(pool, session), namedCompanies(pool, session), scanStatus(pool, session), listRemovedSources(pool, session)]);
+  // A job search site taken off the list isn't shown as "Not searched yet" (Yong, 2026-11-23: Remove on each row).
+  const removedUrls = new Set(removed.filter((r) => r.kind === "job_search").map((r) => r.url));
   // Companies named in a goal: read first, and shown as such (Yong, 2026-11-14).
   const namedIds = new Set(named.map((n) => n.sourceId).filter(Boolean));
   const namedKeys = new Set(named.map((n) => n.key));
@@ -85,14 +88,14 @@ export default async function SourcesPage(props: PageProps) {
   // One row per source for the status table: job sites (on or not), LinkedIn alerts, and every followed page.
   // Everything on this page is one table (Yong, 2026-11-15): job sites, LinkedIn alerts, companies named, found and added by you.
   type StatusRow = { key: string; name: string; detail?: string; kind: string; status: string; last: Date | null; jobs: number; reason: string; listed?: number | null;
-    link?: { href: string; label: string }; action?: { id: string; label: string }; again?: string };
+    link?: { href: string; label: string }; action?: { id: string; label: string }; again?: string; jobsHref?: string };
   const covers = new Map(sites.map((x) => [HOME[x.id], x.covers]));
   const kindOf = (s: (typeof sources)[number]) => s.url === "https://www.linkedin.com/jobs/" ? "LinkedIn alert emails" : s.origin === "search" ? "Job search site"
     : isNamed(s) ? "Company you named" : s.origin === "you" ? "Added by you" : s.origin === "found" ? "Found for your goals" : KIND[s.kind] ?? "Jobs page";
   const table: StatusRow[] = [
     ...sites.filter((x) => !x.on).map((x) => ({ key: `off-${x.id}`, name: x.name, detail: x.covers, kind: "Job search site", status: "Off", last: null, jobs: 0,
       reason: `Needs ${x.needs}.`, link: { href: "/settings/job-sites", label: "Add it in Settings" } })),
-    ...sites.filter((x) => x.on && !searchRows.has(HOME[x.id])).map((x) => ({ key: `on-${x.id}`, name: x.name, detail: x.covers, kind: "Job search site", status: "Not searched yet",
+    ...sites.filter((x) => x.on && !searchRows.has(HOME[x.id]) && !removedUrls.has(HOME[x.id]!)).map((x) => ({ key: `on-${x.id}`, name: x.name, detail: x.covers, kind: "Job search site", status: "Not searched yet",
       last: null, jobs: 0, reason: "On. It's searched with the next search." })),
     ...sources.map((s) => {
       const never = !s.last_checked_at;
@@ -151,7 +154,10 @@ export default async function SourcesPage(props: PageProps) {
         link: advice?.link ?? (failed && s.kind !== "job_search" && /^(refused|robots)/.test(String(s.health_reason ?? "")) ? { href: "#add", label: "Add its jobs page" } : undefined),
         // LinkedIn's alerts come in with the email check, not a search.
         again: s.url === "https://www.linkedin.com/jobs/" || unreadable ? undefined : s.id,
-        action: { id: s.id, label: s.origin === "you" ? "Stop following" : "Don't use" },
+        // Remove (Yong, 2026-11-23): on every row, at its right end; Undo brings it back.
+        action: { id: s.id, label: "Remove" },
+        // Its jobs, as company cards (Yong, 2026-11-23): a job search site shows every company it found jobs at.
+        jobsHref: `/jobs?view=companies&source=${s.id}`,
         // A company's industry (2026-11-22), for ranking its jobs by domain; not for job search sites.
         industry: s.kind !== "job_search" && s.kind !== "pasted_link" && s.origin !== "search" ? { id: s.id, value: (s.industry as string | null) ?? "", seeded: s.industry_source === "seeded" } : undefined };
     }),
@@ -170,7 +176,7 @@ export default async function SourcesPage(props: PageProps) {
   const fQ = (params.q ?? "").slice(0, 60);
   // Order (Yong, 2026-11-17): name, then how it went and Search again on the left; the rest after.
   const COLS = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["detail", "Description"], ["kind", "Kind"], ["reason", "Reason"]] as const;
-  const HEAD: [string, string][] = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["again", "Search again"], ["detail", "Description"], ["kind", "Kind"], ["industry", "Industry"], ["reason", "Reason"], ["remove", "Don't use"]];
+  const HEAD: [string, string][] = [["name", "Source"], ["status", "Status"], ["jobs", "Open jobs"], ["listed", "Jobs listed"], ["last", "Last searched"], ["again", "Search again"], ["detail", "Description"], ["kind", "Kind"], ["industry", "Industry"], ["reason", "Reason"], ["remove", "Remove"]];
   const BACK = "/jobs/sources#status";
   const industryOf = (r: object) => (r as { industry?: { id: string; value: string; seeded: boolean } }).industry;
   const sortBy = (COLS.some(([k]) => k === params.sort) ? params.sort : "name") as (typeof COLS)[number][0];
@@ -186,7 +192,7 @@ export default async function SourcesPage(props: PageProps) {
   const href = (over: Record<string, string>) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries({ kind: fKind, status: fStatus, q: fQ, ...over })) if (v) p.set(k, v);
-    return `/jobs/sources?${p}#status`;
+    return p.size ? `/jobs/sources?${p}#status` : "/jobs/sources#status";
   };
 
   return (
@@ -213,6 +219,20 @@ export default async function SourcesPage(props: PageProps) {
 
       <section className="card" id="status">
         <h2>Every source, and how its last search went</h2>
+        {(() => {
+          const gone = params.removed ? removed.find((x) => x.id === params.removed) : undefined;
+          if (gone) return (
+            <div className="status undo-line" role="status">
+              <span>Removed {gone.name}. It won't be searched again. The jobs it already found stay in Jobs, and so do your applications.</span>
+              <form action={restoreSourceAction} className="inline-form">
+                <input type="hidden" name="id" value={gone.id} /><input type="hidden" name="back" value={href({})} />
+                <button className="small secondary">Undo</button>
+              </form>
+            </div>);
+          if (params.restored) return <p className="status" role="status">Back on the list. It's searched with the next search, or press its Search again.</p>;
+          return null;
+        })()}
+        <p className="muted small">Double-click a row, or click its name, to see the jobs found there.</p>
         <form method="get" action="/jobs/sources#status" className="fields">
           <label>Kind<select name="kind" defaultValue={fKind}><option value="">All</option>{KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
           <label>Status<select name="status" defaultValue={fStatus}><option value="">All</option>{STATUSES.map((k) => <option key={k} value={k}>{k}</option>)}</select></label>
@@ -227,7 +247,7 @@ export default async function SourcesPage(props: PageProps) {
           <table className="report jobs-matrix compact-rows">
             <thead><tr>
               {HEAD.map(([k, label]) => {
-                if (!COLS.some(([c]) => c === k)) return <th key={k} scope="col">{label}</th>;
+                if (!COLS.some(([c]) => c === k)) return <th key={k} scope="col" className={k === "remove" ? "sticky-end" : undefined}>{label}</th>;
                 const on = sortBy === k;
                 const next = on ? (dir === "asc" ? "desc" : "asc") : k === "jobs" || k === "listed" || k === "last" ? "desc" : "asc";
                 return <th key={k} scope="col" className={k === "jobs" || k === "listed" ? "num" : undefined} aria-sort={on ? (dir === "asc" ? "ascending" : "descending") : "none"}>
@@ -236,8 +256,8 @@ export default async function SourcesPage(props: PageProps) {
             </tr></thead>
             <tbody>
               {shown.map((r) => (
-                <tr key={r.key}>
-                  <td><strong>{r.name}</strong></td>
+                <SourceRow key={r.key} href={r.jobsHref} name={r.name}>
+                  <td>{r.jobsHref ? <a href={r.jobsHref} className="source-name" title={`See the jobs found at ${r.name}`}><strong>{r.name}</strong></a> : <strong>{r.name}</strong>}</td>
                   <td className={bad(r.status) ? "error" : r.status === "Succeeded" ? "" : "muted"}>{r.status}</td>
                   <td className="num">{r.jobs}</td>
                   <td className="num" title="Jobs the place listed in its last read, before matching to your goals">{r.listed ?? ""}</td>
@@ -265,17 +285,42 @@ export default async function SourcesPage(props: PageProps) {
                   <td className={bad(r.status) ? "error small" : "muted small"}>{r.reason ? <details className="more one-line"><summary title="Show all">{r.reason}</summary>
                     {r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</details>
                     : r.link ? <a href={r.link.href} target={r.link.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer">{r.link.label}</a> : null}</td>
-                  <td>{r.action ? (
+                  {/* Always in view at the right end, however far the table scrolls (Yong, 2026-11-23). */}
+                  <td className="sticky-end">{r.action ? (
                     <form action={unfollowSourceAction}>
-                      <input type="hidden" name="id" value={r.action.id} /><input type="hidden" name="back" value={BACK} />
-                      <button className="small secondary">{r.action.label}</button>
+                      <input type="hidden" name="id" value={r.action.id} /><input type="hidden" name="back" value={href({})} />
+                      <button className="small secondary remove-source" aria-label={`Remove ${r.name}`}
+                        title={`Stop searching ${r.name}. Jobs it already found and your applications stay. You can undo this.`}>{r.action.label}</button>
                     </form>) : null}</td>
-                </tr>
+                </SourceRow>
               ))}
               {shown.length === 0 ? <tr><td colSpan={11} className="muted">No sources match these filters.</td></tr> : null}
             </tbody>
           </table>
         </div>
+        {removed.length ? (
+          <details className="removed-sources" open={!!params.removed}>
+            <summary>Removed sources ({removed.length}): not searched. Use any of them again.</summary>
+            <div className="table-wrap">
+              <table className="report compact-rows">
+                <thead><tr><th scope="col">Source</th><th scope="col">Kind</th><th scope="col">Removed</th><th scope="col"><span className="sr-only">Use again</span></th></tr></thead>
+                <tbody>
+                  {removed.map((x) => (
+                    <tr key={x.id}>
+                      <td>{x.name}<div className="muted small">{x.kind === "job_search" ? "" : shortUrl(x.url)}</div></td>
+                      <td>{x.kind === "job_search" ? "Job search site" : KIND[x.kind] ?? "Jobs page"}</td>
+                      <td>{ago(x.removed_at)}</td>
+                      <td><form action={restoreSourceAction}>
+                        <input type="hidden" name="id" value={x.id} /><input type="hidden" name="back" value={BACK} />
+                        <button className="small secondary" title={`Search ${x.name} again with every search`}>Use again</button>
+                      </form></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
+        ) : null}
       </section>
 
       <p className="muted small">LinkedIn and Indeed don't let other apps search them, so we never read them directly. Adzuna and Jooble bring in many of the same jobs, with a link to the original, and LinkedIn's own alert emails bring in the rest. You can also paste any job's link in <a href="/jobs#add-job">Add a job on Matches</a>.</p>

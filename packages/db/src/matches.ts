@@ -55,13 +55,15 @@ export async function listMatches(pool: pg.Pool, session: Session, f: MatchFilte
          FROM ${from}
         WHERE (${where[0]}) ${where.slice(1).map((w) => `AND ${w}`).join(" ")}
         ORDER BY ${SORT[f.sort ?? "score"]} LIMIT 200`, args);
+    // Opened for one source (Where we look, 2026-11-23): the tab counts are that source's too.
+    const srcWhere = (n: number) => (f.source ? ` AND EXISTS (SELECT 1 FROM job_posting_source ps WHERE ps.job_posting_id = p.id AND ps.job_source_id = $${n})` : "");
     const counts = (await c.query(
       `SELECT count(*) FILTER (WHERE m.status = 'new' AND NOT s.filtered AND p.status = 'active')::int AS new,
               count(*) FILTER (WHERE m.status = 'new' AND NOT s.filtered AND p.status = 'active' AND m.seen_at IS NULL)::int AS unseen,
               count(*) FILTER (WHERE m.status = 'saved')::int AS saved,
               count(*) FILTER (WHERE m.status IN ('dismissed','not_a_fit'))::int AS passed,
               count(*) FILTER (WHERE s.filtered AND m.status = 'new' AND p.status = 'active')::int AS filtered
-         FROM ${from} WHERE p.merged_into IS NULL`, f.goal ? [f.goal] : [])).rows[0];
+         FROM ${from} WHERE p.merged_into IS NULL${srcWhere(f.goal ? 2 : 1)}`, [...(f.goal ? [f.goal] : []), ...(f.source ? [f.source] : [])])).rows[0];
     return { rows: r.rows, counts };
   });
 }

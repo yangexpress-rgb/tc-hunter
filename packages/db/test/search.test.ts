@@ -5,7 +5,7 @@ import {
   type Fetcher, type MailReader, type RawPosting, type SearchQuery, type SearchSite,
 } from "@tc-hunter/domain";
 import {
-  addEvidence, addFact, connectEmail, latestScan, recoverInterruptedWork, scanStatus, listMatches, listSources, requestEmailCheck, requestScan, runNextWork, saveGoal, unfollowSource,
+  addEvidence, addFact, connectEmail, latestScan, recoverInterruptedWork, scanStatus, listMatches, listSources, requestEmailCheck, requestScan, runNextWork, saveGoal, unfollowSource, listRemovedSources, restoreSource,
   type AppConfig, type GoalInput, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -88,10 +88,26 @@ describe("job search sites, searched first for every goal", () => {
 
   it("a site the person turns off isn't searched again", async () => {
     const before = site.queries.length;
-    await unfollowSource(pool, yong, (await listSources(pool, yong)).find((s) => s.name === "Adzuna")!.id);
+    const adzuna = (await listSources(pool, yong)).find((s) => s.name === "Adzuna")!.id;
+    // Its jobs, as Where we look links to them (Yong, 2026-11-23): only that source's, with its own tab counts.
+    const mine = await listMatches(pool, yong, { source: adzuna });
+    expect(mine.rows.map((r) => r.employer_canonical)).toEqual(["Contoso"]);
+    expect(mine.counts.new).toBe(1);
+    expect(await unfollowSource(pool, yong, adzuna)).toEqual({ name: "Adzuna" });
+    expect((await listRemovedSources(pool, yong)).map((s) => s.name)).toEqual(["Adzuna"]);
     await requestScan(pool, yong);
     await drain();
     expect(site.queries.length).toBe(before);
+    // The jobs it already found stay.
+    expect((await listMatches(pool, yong)).rows.map((r) => r.employer_canonical)).toContain("Contoso");
+    // Undo: back on the list, searched again.
+    await restoreSource(pool, yong, adzuna);
+    expect(await listRemovedSources(pool, yong)).toEqual([]);
+    await requestScan(pool, yong);
+    await drain();
+    expect(site.queries.length).toBeGreaterThan(before);
+    await expect(restoreSource(pool, yong, adzuna)).rejects.toThrow("TC_NOT_FOUND");
+    await unfollowSource(pool, yong, adzuna);
   });
 });
 
