@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, exportLeakSpots, type ExportLeakSpot, extractText, goalLabel, goalPosting, isStale, letterForJob, ownLetterParagraphs, ownLetterSource, refreshResume, renderDocument, standardLetterSource,
-  type Blocked, type DocHeader, type Gap, type LetterProposer, type LetterSource, type ResumeProposer, type ResumeSource,
+  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, exportLeakSpots, type ExportLeakSpot, detectKind, extractText, goalLabel, MAX_RESUME_BYTES, open as openSealed, seal, goalPosting, isStale, letterForJob, ownLetterParagraphs, ownLetterSource, refreshResume, renderDocument, standardLetterSource,
+  type Blocked, type DocHeader, type Gap, type LetterProposer, type LetterSource, type ResumeFileSource, type ResumeProposer, type ResumeSource,
   type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -22,7 +22,32 @@ import { ensureApplication } from "./tracker";
  */
 export type DocKind = "resume" | "letter";
 const TYPE: Record<DocKind, string> = { resume: "tailored_resume", letter: "cover_letter" };
-export type DocSource = ResumeSource | LetterSource;
+export type DocSource = ResumeSource | LetterSource | ResumeFileSource;
+
+// ---------------------------------------------------------------------------
+// The applicant's own resume file (Yong, 2026-11-24): sent exactly as uploaded
+// ---------------------------------------------------------------------------
+
+const FILE_AAD = "file:document.file";
+const MIME = { pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" } as const;
+
+/** Reads an uploaded resume file: PDF or Word only (what employers' forms take), with its text for answers. */
+async function readResumeUpload(file: { name: string; bytes: Uint8Array }, target: ResumeFileSource["target"]): Promise<ResumeFileSource> {
+  if (!file.bytes.length) throw new DomainError("TC_RESUME_UNREADABLE");
+  if (file.bytes.length > MAX_RESUME_BYTES) throw new DomainError("TC_RESUME_TOO_BIG");
+  const kind = detectKind(file.name, file.bytes);
+  if (kind !== "pdf" && kind !== "docx") throw new DomainError("TC_RESUME_FILE_KIND");
+  let text = "";
+  try { text = (await extractText(kind, file.bytes)).trim(); } catch { text = ""; }
+  const fileName = file.name.replace(/[\u0000-\u001f/\\]/g, "").trim().slice(0, 160) || `resume.${kind}`;
+  return { v: 1, kind: "resume_file", target, fileName, fileKind: kind, byteSize: file.bytes.length, text: text.slice(0, 40_000) };
+}
+
+/** The file an own-resume document carries, as uploaded. */
+async function ownFile(c: pg.PoolClient, cfg: AppConfig, applicantId: string, d: { file_enc: Buffer; source_json: ResumeFileSource }) {
+  const bytes = openSealed(await dataKeyFor(c, cfg, applicantId), d.file_enc, FILE_AAD);
+  return { bytes, fileName: d.source_json.fileName, contentType: MIME[d.source_json.fileKind] };
+}
 
 export interface TailorDeps {
   resume: ResumeProposer; letter: LetterProposer; cfg: AppConfig;
@@ -119,6 +144,7 @@ const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 function claimsOf(source: DocSource) {
   const out: Array<{ section: string; ordinal: number; text: string; type: string; facts: string[]; transform: string }> = [];
   let n = 0;
+  if (source.kind === "resume_file") return out;
   if (source.kind === "letter") {
     for (const p of source.paragraphs.filter((x) => x.included)) out.push({ section: p.role, ordinal: ++n, text: p.text, type: "paragraph", facts: p.factIds, transform: p.transform });
     return out;
@@ -145,7 +171,7 @@ async function writeClaims(c: pg.PoolClient, docId: string, source: DocSource) {
 }
 
 async function insertDocument(c: pg.PoolClient, kind: DocKind, posting: { id: string; matchId: string }, source: DocSource, meta: Record<string, unknown>,
-  blocked: Blocked[], gaps: Gap[], parentId: string | null, createdBy: "app" | "applicant" = "app"): Promise<{ id: string; ref: string; version: number }> {
+  blocked: Blocked[], gaps: Gap[], parentId: string | null, createdBy: "app" | "applicant" = "app", fileEnc: Buffer | null = null): Promise<{ id: string; ref: string; version: number }> {
   const type = TYPE[kind];
   // One draft at a time per job and kind: a new draft replaces an unapproved one.
   await c.query("DELETE FROM document WHERE match_id = $1 AND type = $2 AND status = 'draft'", [posting.matchId, type]);
@@ -153,9 +179,9 @@ async function insertDocument(c: pg.PoolClient, kind: DocKind, posting: { id: st
   const parent = parentId ?? (await c.query(
     "SELECT id FROM document WHERE match_id = $1 AND type = $2 AND status <> 'draft' ORDER BY version DESC LIMIT 1", [posting.matchId, type])).rows[0]?.id ?? null;
   const d = (await c.query(
-    `INSERT INTO document (applicant_id, type, version, parent_document_id, job_posting_id, match_id, created_by, source_json, content_hash, generation_meta)
-     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $9, $6, $7, $8) RETURNING id, public_ref`,
-    [type, version, parent, posting.id, posting.matchId, JSON.stringify(source), hashOf(source), JSON.stringify(meta), createdBy])).rows[0];
+    `INSERT INTO document (applicant_id, type, version, parent_document_id, job_posting_id, match_id, created_by, source_json, content_hash, generation_meta, file_enc)
+     VALUES (app_applicant_id(), $1, $2, $3, $4, $5, $9, $6, $7, $8, $10) RETURNING id, public_ref`,
+    [type, version, parent, posting.id, posting.matchId, JSON.stringify(source), hashOf(source), JSON.stringify(meta), createdBy, fileEnc])).rows[0];
   await writeClaims(c, d.id, source);
   for (const b of blocked) {
     await c.query(
@@ -198,9 +224,12 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
       const std = standards.get(kind);
       if (std) {
         const meta = { proposer: "goal-standard", standard_from: std.ref, goal: std.goalLabel, generated_at: new Date().toISOString() };
-        const doc = std.source.kind === "resume"
+        const target = { postingId: posting.id, title: posting.title, employer: posting.employer };
+        const doc = std.source.kind === "resume_file"
+          ? { ...(await insertDocument(c, kind, posting, { ...std.source, target }, meta, [], [], null, "applicant", std.fileEnc)), blocked: 0 }
+          : std.source.kind === "resume"
           ? await (async () => { const d = refreshResume(std.source as ResumeSource, profile, posting); return { ...(await insertDocument(c, kind, posting, d.source, meta, d.blocked, d.gaps, null)), blocked: d.blocked.length }; })()
-          : { ...(await insertDocument(c, kind, posting, letterForJob(std.source, posting), meta, [], [], null, std.createdBy)), blocked: 0 };
+          : { ...(await insertDocument(c, kind, posting, letterForJob(std.source as LetterSource, posting), meta, [], [], null, std.createdBy)), blocked: 0 };
         made.push({ kind, ref: doc.ref, version: doc.version, blocked: doc.blocked });
         await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: doc.blocked } });
         continue;
@@ -275,7 +304,7 @@ export async function saveOwnLetter(pool: pg.Pool, session: Session, jobRef: str
 // Standard documents per goal (Yong, 2026-11-24)
 // ---------------------------------------------------------------------------
 
-interface StandardRow { id: string; ref: string; source: DocSource; createdBy: "app" | "applicant"; goalLabel: string }
+interface StandardRow { id: string; ref: string; source: DocSource; createdBy: "app" | "applicant"; goalLabel: string; fileEnc: Buffer | null }
 
 /** A goal as the "job" its standard documents are for. */
 async function goalTarget(c: pg.PoolClient, goalId: string): Promise<TailorPosting> {
@@ -289,10 +318,10 @@ async function standardsForMatch(c: pg.PoolClient, matchId: string): Promise<Map
   const out = new Map<DocKind, StandardRow>();
   const a = (await c.query("SELECT goal_id FROM application WHERE match_id = $1 AND goal_id IS NOT NULL ORDER BY created_at LIMIT 1", [matchId])).rows[0];
   if (!a) return out;
-  const rows = (await c.query("SELECT id, public_ref, type, source_json, created_by FROM document WHERE standard AND goal_id = $1", [a.goal_id])).rows;
+  const rows = (await c.query("SELECT id, public_ref, type, source_json, created_by, file_enc FROM document WHERE standard AND goal_id = $1", [a.goal_id])).rows;
   if (!rows.length) return out;
   const label = (await goalTarget(c, a.goal_id)).title;
-  for (const r of rows) out.set(kindOf(r.type), { id: r.id, ref: r.public_ref, source: r.source_json, createdBy: r.created_by, goalLabel: label });
+  for (const r of rows) out.set(kindOf(r.type), { id: r.id, ref: r.public_ref, source: r.source_json, createdBy: r.created_by, goalLabel: label, fileEnc: r.file_enc ?? null });
   return out;
 }
 
@@ -316,12 +345,12 @@ export async function resumesToCopy(pool: pg.Pool, session: Session): Promise<Ar
 
 /** One goal's standard document: replaces the one it had. */
 async function insertStandard(c: pg.PoolClient, kind: DocKind, goalId: string, source: DocSource, meta: Record<string, unknown>,
-  createdBy: "app" | "applicant", blocked: Blocked[] = []): Promise<{ id: string; ref: string }> {
+  createdBy: "app" | "applicant", blocked: Blocked[] = [], fileEnc: Buffer | null = null): Promise<{ id: string; ref: string }> {
   await c.query("DELETE FROM document WHERE standard AND goal_id = $1 AND type = $2", [goalId, TYPE[kind]]);
   const d = (await c.query(
-    `INSERT INTO document (applicant_id, type, version, goal_id, standard, created_by, source_json, content_hash, generation_meta)
-     VALUES (app_applicant_id(), $1, 1, $2, true, $3, $4, $5, $6) RETURNING id, public_ref`,
-    [TYPE[kind], goalId, createdBy, JSON.stringify(source), hashOf(source), JSON.stringify(meta)])).rows[0];
+    `INSERT INTO document (applicant_id, type, version, goal_id, standard, created_by, source_json, content_hash, generation_meta, file_enc)
+     VALUES (app_applicant_id(), $1, 1, $2, true, $3, $4, $5, $6, $7) RETURNING id, public_ref`,
+    [TYPE[kind], goalId, createdBy, JSON.stringify(source), hashOf(source), JSON.stringify(meta), fileEnc])).rows[0];
   await writeClaims(c, d.id, source);
   for (const b of blocked) {
     await c.query(
@@ -341,13 +370,18 @@ export async function makeStandardResume(pool: pg.Pool, cfg: AppConfig, session:
   return withApplicant(pool, asApplicant(session), async (c) => {
     const target = await goalTarget(c, goalId);
     const profile = await loadTailorProfile(c, await dataKeyFor(c, cfg, session.applicantId));
-    if (!profile.experience.length) throw new DomainError("TC_STANDARD_NO_PROFILE");
     if (fromRef) {
-      const from = (await c.query("SELECT public_ref, source_json FROM document WHERE public_ref = $1 AND type = 'tailored_resume'", [fromRef])).rows[0];
+      const from = (await c.query("SELECT public_ref, source_json, file_enc FROM document WHERE public_ref = $1 AND type = 'tailored_resume'", [fromRef])).rows[0];
       if (!from) throw new DomainError("TC_NOT_FOUND");
+      if (from.source_json.kind === "resume_file") {
+        return (await insertStandard(c, "resume", goalId, { ...from.source_json, target: { postingId: target.id, title: target.title, employer: "" } },
+          { proposer: "own-resume", copied_from: from.public_ref, generated_at: new Date().toISOString() }, "applicant", [], from.file_enc)).ref;
+      }
+      if (!profile.experience.length) throw new DomainError("TC_STANDARD_NO_PROFILE");
       const d = refreshResume(from.source_json as ResumeSource, profile, target);
       return (await insertStandard(c, "resume", goalId, d.source, { proposer: "standard-copy", copied_from: from.public_ref, generated_at: new Date().toISOString() }, "app", d.blocked)).ref;
     }
+    if (!profile.experience.length) throw new DomainError("TC_STANDARD_NO_PROFILE");
     const pages = (await c.query("SELECT tailor_target_pages FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.tailor_target_pages ?? 2;
     const d = buildResume(profile, target, { lines: [], skill_ids: [], asIs: true }, pages);
     return (await insertStandard(c, "resume", goalId, d.source, { proposer: "standard-profile", generated_at: new Date().toISOString() }, "app", d.blocked)).ref;
@@ -363,6 +397,44 @@ export async function saveStandardLetter(pool: pg.Pool, session: Session, goalId
   return withApplicant(pool, asApplicant(session), async (c) => {
     const target = await goalTarget(c, goalId);
     return (await insertStandard(c, "letter", goalId, standardLetterSource(text, target), { proposer: "own-letter", written_by: "applicant", generated_at: new Date().toISOString() }, "applicant")).ref;
+  });
+}
+
+/** A goal's standard resume as the applicant's own file (PDF or Word), sent exactly as uploaded. Returns its ref. */
+export async function saveStandardResumeFile(pool: pg.Pool, cfg: AppConfig, session: Session, goalId: string, file: { name: string; bytes: Uint8Array }): Promise<string> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const target = await goalTarget(c, goalId);
+    const source = await readResumeUpload(file, { postingId: target.id, title: target.title, employer: "" });
+    const enc = seal(await dataKeyFor(c, cfg, session.applicantId), Buffer.from(file.bytes), FILE_AAD);
+    return (await insertStandard(c, "resume", goalId, source, { proposer: "own-resume", written_by: "applicant", generated_at: new Date().toISOString() }, "applicant", [], enc)).ref;
+  });
+}
+
+/**
+ * The applicant's own resume file for one job: a revised copy of their standard, or any file of theirs. It
+ * replaces an unapproved draft resume and becomes the next version, approved like any other; it is sent to the
+ * employer exactly as uploaded. No AI is used.
+ */
+export async function saveOwnResumeFile(pool: pg.Pool, cfg: AppConfig, session: Session, jobRef: string, file: { name: string; bytes: Uint8Array }): Promise<string> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const m = (await c.query("SELECT m.id FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
+    if (!m) throw new DomainError("TC_NOT_FOUND");
+    await ensureApplication(c, jobRef, "tailoring");
+    const posting = await postingForMatch(c, m.id);
+    const source = await readResumeUpload(file, { postingId: posting.id, title: posting.title, employer: posting.employer });
+    const enc = seal(await dataKeyFor(c, cfg, session.applicantId), Buffer.from(file.bytes), FILE_AAD);
+    const doc = await insertDocument(c, "resume", posting, source, { proposer: "own-resume", written_by: "applicant", generated_at: new Date().toISOString() }, [], [], null, "applicant", enc);
+    await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE.resume, version: doc.version, proposer: "own-resume", blocked: 0 } });
+    return doc.ref;
+  });
+}
+
+/** An own resume file, for download from its page (drafts too: it is the applicant's own file). */
+export async function downloadOwnResume(pool: pg.Pool, cfg: AppConfig, session: Session, ref: string) {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const d = (await c.query("SELECT file_enc, source_json FROM document WHERE public_ref = $1 AND file_enc IS NOT NULL", [ref])).rows[0];
+    if (!d) throw new DomainError("TC_NOT_FOUND");
+    return ownFile(c, cfg, session.applicantId, d);
   });
 }
 
@@ -454,7 +526,7 @@ export async function getDocument(pool: pg.Pool, cfg: AppConfig, session: Sessio
       profile,
       usedIn: [...new Set(used.rows.map((u) => u.public_ref as string))],
       applicationRef: appRow?.public_ref ?? null,
-      leaks: d.status === "draft" && d.created_by !== "applicant" && !standard ? await leakSpots(c, d.id, d.source_json as DocSource, profile, employer) : [],
+      leaks: d.status === "draft" && d.created_by !== "applicant" && !standard ? await leakSpots(c, d.id, d.source_json as ResumeSource | LetterSource, profile, employer) : [],
       createdBy: d.created_by,
     };
   });
@@ -497,6 +569,8 @@ export async function editDocument(pool: pg.Pool, cfg: AppConfig, session: Sessi
     if (!d) throw new DomainError("TC_NOT_FOUND");
     if (d.status !== "draft") throw new DomainError("TC_DOCUMENT_IMMUTABLE");
     const s = d.source_json as DocSource;
+    // An uploaded file is changed by uploading a revised one.
+    if (s.kind === "resume_file") throw new DomainError("TC_BAD_INPUT");
     const check = async (text: string, facts: string[]) => {
       const dk = await dataKeyFor(c, cfg, session.applicantId);
       const r = checkLine(text, facts, checkContext(await loadTailorProfile(c, dk), d.standard ? await goalTarget(c, d.goal_id) : await postingForMatch(c, d.match_id)));
@@ -607,7 +681,7 @@ async function leakTermsFor(c: pg.PoolClient, docId: string): Promise<{ gapSkill
 export type DocLeak = ExportLeakSpot & { kind: "gap" | "held_back" };
 
 /** Where a draft would fail the export check, phrase by phrase (shown at the top of the page before Approve). */
-async function leakSpots(c: pg.PoolClient, docId: string, source: DocSource, profile: TailorProfile, employer: string): Promise<DocLeak[]> {
+async function leakSpots(c: pg.PoolClient, docId: string, source: ResumeSource | LetterSource, profile: TailorProfile, employer: string): Promise<DocLeak[]> {
   const { gapSkills, heldBack } = await leakTermsFor(c, docId);
   const gap = exportLeakSpots(source, profile, gapSkills, [employer]).map((l) => ({ ...l, kind: "gap" as const }));
   const held = exportLeakSpots(source, profile, heldBack, [employer]).map((l) => ({ ...l, kind: "held_back" as const }))
@@ -616,7 +690,7 @@ async function leakSpots(c: pg.PoolClient, docId: string, source: DocSource, pro
 }
 
 /** Renders both files and runs the export check over their text (risk 3, layer 5). Throws TC_EXPORT_LEAK on any leak. */
-async function renderChecked(c: pg.PoolClient, cfg: AppConfig, applicantId: string, docId: string, source: DocSource, when: Date, own = false) {
+async function renderChecked(c: pg.PoolClient, cfg: AppConfig, applicantId: string, docId: string, source: ResumeSource | LetterSource, when: Date, own = false) {
   const header = await headerFor(c, cfg, applicantId);
   const dk = await dataKeyFor(c, cfg, applicantId);
   const profile = await loadTailorProfile(c, dk);
@@ -645,14 +719,21 @@ export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Se
     if (d.standard) throw new DomainError("TC_DOCUMENT_STANDARD");
     if (d.created_by === "app" && !d.diff_viewed_at) throw new DomainError("TC_DIFF_NOT_VIEWED");
     const source = d.source_json as DocSource;
-    if (!documentText(source).trim()) throw new DomainError("TC_DOCUMENT_EMPTY");
     const when = new Date();
-    const r = await renderChecked(c, cfg, session.applicantId, docId, source, when, d.created_by === "applicant");
+    let r: { pdf: Buffer | Uint8Array; docx: Buffer | Uint8Array };
+    if (source.kind === "resume_file") {
+      // The applicant's own file: sent as it is, so there is nothing to render or check.
+      const f = await ownFile(c, cfg, session.applicantId, d);
+      r = { pdf: f.bytes, docx: f.bytes };
+    } else {
+      if (!documentText(source).trim()) throw new DomainError("TC_DOCUMENT_EMPTY");
+      r = await renderChecked(c, cfg, session.applicantId, docId, source, when, d.created_by === "applicant");
+    }
     await c.query("UPDATE document SET status = 'superseded' WHERE match_id = $1 AND type = $2 AND status = 'approved' AND id <> $3", [d.match_id, d.type, docId]);
     await c.query(
       `UPDATE document SET status = 'approved', content_hash = $2, pdf_ref = $3, docx_ref = $4,
          generation_meta = coalesce(generation_meta, '{}'::jsonb) || jsonb_build_object('rendered_at', $5::text), updated_at = now() WHERE id = $1`,
-      [docId, hashOf(source), sha(r.pdf), sha(r.docx), when.toISOString()]);
+      [docId, hashOf(source), sha(Buffer.from(r.pdf)), sha(Buffer.from(r.docx)), when.toISOString()]);
     await recordAudit(c, "document.approved", { objectType: "document", objectId: docId, payload: { document_ref: d.public_ref, type: d.type, version: d.version, content_hash: hashOf(source) } });
     if (d.type === "tailored_resume") {
       const jobRef = (await c.query("SELECT public_ref FROM job_posting WHERE id = $1", [d.job_posting_id])).rows[0]?.public_ref;
@@ -677,7 +758,7 @@ export async function newVersion(pool: pg.Pool, session: Session, docId: string)
     const gaps = (await c.query("SELECT requirement_text, skill_term FROM document_gap WHERE document_id = $1", [docId])).rows
       .map((g) => ({ requirement: g.requirement_text, skill: g.skill_term, note: "" }));
     const doc = await insertDocument(c, kindOf(d.type), { id: d.job_posting_id, matchId: d.match_id }, d.source_json,
-      { ...(d.generation_meta ?? {}), rendered_at: undefined, edited_from: d.public_ref }, [], gaps, d.id, d.created_by);
+      { ...(d.generation_meta ?? {}), rendered_at: undefined, edited_from: d.public_ref }, [], gaps, d.id, d.created_by, d.file_enc ?? null);
     return doc.ref;
   });
 }
@@ -688,6 +769,12 @@ export async function exportDocument(pool: pg.Pool, cfg: AppConfig, session: Ses
     const d = (await c.query("SELECT * FROM document WHERE public_ref = $1", [ref])).rows[0];
     if (!d || d.standard) throw new DomainError("TC_NOT_FOUND");
     if (d.status === "draft" || !d.approved_at) throw new DomainError("TC_DOCUMENT_NOT_APPROVED");
+    if (d.file_enc) {
+      // The applicant's own resume file goes out exactly as uploaded, whatever format was asked for.
+      const f = await ownFile(c, cfg, session.applicantId, d);
+      await recordAudit(c, "document.exported", { objectType: "document", objectId: d.id, payload: { document_ref: d.public_ref, format: d.source_json.fileKind } });
+      return { bytes: f.bytes, fileName: f.fileName, contentType: f.contentType };
+    }
     const when = d.generation_meta?.rendered_at ? new Date(d.generation_meta.rendered_at) : new Date(d.approved_at);
     const r = await renderChecked(c, cfg, session.applicantId, d.id, d.source_json, when, d.created_by === "applicant");
     await recordAudit(c, "document.exported", { objectType: "document", objectId: d.id, payload: { document_ref: d.public_ref, format } });

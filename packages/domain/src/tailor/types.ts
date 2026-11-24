@@ -114,6 +114,17 @@ export interface ResumeSource {
   credentials: Array<{ id: string; name: string; issuer: string | null; issuedOn: string | null }>;
 }
 
+/**
+ * The applicant's own resume file (Yong, 2026-11-24: "resume should be able to upload a document"), sent
+ * exactly as uploaded. The file itself is kept encrypted on the document row; this holds its name and kind,
+ * and its text (for answering questions from the resume and for showing it on the page).
+ */
+export interface ResumeFileSource {
+  v: 1; kind: "resume_file";
+  target: { postingId: string; title: string; employer: string };
+  fileName: string; fileKind: "pdf" | "docx"; byteSize: number; text: string;
+}
+
 export interface LetterParagraph { factIds: string[]; text: string; role: LetterRole; transform: Transform; included: boolean }
 export interface LetterSource {
   v: 1; kind: "letter";

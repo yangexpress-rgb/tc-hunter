@@ -10,7 +10,7 @@ import { goalSummaryLine } from "@/lib/goals";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { deleteGoalAction, saveGoalAction, saveSearchSettingsAction } from "../actions";
-import { makeStandardResumeAction, removeStandardAction } from "@/app/documents/actions";
+import { makeStandardResumeAction, removeStandardAction, resumeFileAction } from "@/app/documents/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -121,6 +121,18 @@ function GoalForm({ g }: { g?: Goal }) {
 
 type CopyFrom = Array<{ ref: string; title: string; employer: string; status: string }>;
 
+/** "Upload your resume file": a PDF or Word file becomes the goal's standard, sent exactly as uploaded. */
+function UploadResume({ g, label }: { g: Goal; label: string }) {
+  return (
+    <form action={resumeFileAction} className="inline-form copy-resume">
+      <input type="hidden" name="goal" value={g.id} />
+      <label className="sr-only" htmlFor={`upload-${g.id}`}>Resume file</label>
+      <input id={`upload-${g.id}`} type="file" name="file" accept=".pdf,.docx" required />
+      <button className="small secondary">{label}</button>
+    </form>
+  );
+}
+
 /** "Copy from a job's resume": one of the resumes already made for a job becomes the goal's standard. */
 function CopyResume({ g, from, label }: { g: Goal; from: CopyFrom; label: string }) {
   if (!from.length) return null;
@@ -164,6 +176,7 @@ function GoalStandards({ g, docs, from }: { g: Goal; docs: StandardDoc[]; from: 
                 <button className="small secondary">From my profile</button>
               </form>
               <CopyResume g={g} from={from} label="Copy this one" />
+              <UploadResume g={g} label="Upload a file instead" />
             </Details>
           </>) : (<>
             <span className="muted">None yet.</span>
@@ -172,6 +185,7 @@ function GoalStandards({ g, docs, from }: { g: Goal; docs: StandardDoc[]; from: 
               <button className="small">Make one from my profile</button>
             </form>
             <CopyResume g={g} from={from} label="Copy a job's resume" />
+            <UploadResume g={g} label="Upload my resume file" />
           </>)}
         </li>
         <li>
@@ -183,7 +197,7 @@ function GoalStandards({ g, docs, from }: { g: Goal; docs: StandardDoc[]; from: 
           </>)}
         </li>
       </ul>
-      <p className="hint">New applications under this goal start with copies of these, ready for you to revise for that job and approve. In the letter, [Company] and [Job title] are filled in for each job.</p>
+      <p className="hint">New applications under this goal start with copies of these, ready for you to revise for that job and approve. An uploaded resume file (PDF or Word) is sent exactly as it is; for a job, upload a revised file on its resume page. In the letter, [Company] and [Job title] are filled in for each job.</p>
     </div>
   );
 }

@@ -68,9 +68,11 @@ export function DocChecklist({ resume, letter, resumeState, letterState, packet,
         <li>
           <span className={`jchip tone-${r.tone}`}>{r.text}</span>
           <span>Tailored resume{resume ? ` v${resume.version}` : ""}</span>
-          {resume ? <a href={`/documents/${resume.public_ref}`}>{resume.status === "approved" ? "Open" : "Look over and approve"}</a>
+          {resume ? <span>
+              <a href={`/documents/${resume.public_ref}`}>{resume.status === "approved" ? "Open" : "Look over and approve"}</a>
+              <span className="small"> · <a href={`/jobs/${jobRef}/resume`}>Upload your own file instead</a></span></span>
             : resumeState === "writing" ? <span className="small muted">This page updates when it&apos;s ready</span>
-            : <a href={`/jobs/${jobRef}#prepare`}>Prepare a resume for this job</a>}
+            : <span><a href={`/jobs/${jobRef}#prepare`}>Prepare a resume for this job</a><span className="small"> · <a href={`/jobs/${jobRef}/resume`}>Upload your own</a></span></span>}
         </li>
         <li>
           <span className={`jchip tone-${l.tone}`}>{l.text}</span>

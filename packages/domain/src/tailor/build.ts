@@ -2,7 +2,7 @@ import { canonicalSkill, findSkills, sameSkill } from "../jobs/skills";
 import { words } from "../jobs/text";
 import { checkContext, checkLine, type CheckContext } from "./checker";
 import type {
-  Blocked, Gap, LetterParagraph, LetterProposal, LetterSource, ResumeItem, ResumeLine, ResumeProposal, ResumeSource, ResumeSummary, TailorPosting, TailorProfile,
+  Blocked, Gap, LetterParagraph, LetterProposal, LetterSource, ResumeFileSource, ResumeItem, ResumeLine, ResumeProposal, ResumeSource, ResumeSummary, TailorPosting, TailorProfile,
   TExperience,
 } from "./types";
 
@@ -190,7 +190,8 @@ export function buildLetter(profile: TailorProfile, posting: TailorPosting, prop
 }
 
 /** The content a version is approved against (excludes contact details, which are printed from the encrypted profile at export). */
-export function documentText(source: ResumeSource | LetterSource): string {
+export function documentText(source: ResumeSource | LetterSource | ResumeFileSource): string {
+  if (source.kind === "resume_file") return source.text;
   if (source.kind === "letter") return source.paragraphs.filter((p) => p.included).map((p) => p.text).join("\n");
   return [
     ...(source.summary?.included ? [source.summary.text] : []),
