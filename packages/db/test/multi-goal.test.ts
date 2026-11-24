@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { FIT_VERSION } from "@tc-hunter/domain";
-import { listApplications, listGoals, listMatches, matchApplicant, matchGoals, saveGoal, saveOwnLetter, setApplicationGoal, trackJob, withApplicant, type GoalInput, type Session } from "../src";
+import { listApplications, listGoals, listMatches, matchApplicant, missingGoalRows, matchGoals, saveGoal, saveOwnLetter, setApplicationGoal, trackJob, withApplicant, type GoalInput, type Session } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
 /**
@@ -181,6 +181,21 @@ describe("the Jobs list in a goal context (stage 3)", () => {
     const c = await saveGoal(pool, yong, goal({ roles: ["Chief Nursing Officer"], label: "Goal-C" }));
     expect((await list(c, true)).rows).toEqual([]);
     await ownerQuery("DELETE FROM hunt_goal WHERE id = $1", [c]);
+  });
+
+  it("a job missing its row for a goal in use is noticed, and a rescore brings it back (2026-11-24 audit)", async () => {
+    expect(await missingGoalRows(pool, yong)).toBe(false);
+    await ownerQuery("DELETE FROM match_goal WHERE goal_id = $1 AND match_id = (SELECT id FROM match WHERE job_posting_id = $2)", [B, ids.get("J1")]);
+    expect(find((await list(B, true)).rows, "J1")).toBeUndefined();
+    expect(await missingGoalRows(pool, yong)).toBe(true);
+    await rematch();
+    expect(await missingGoalRows(pool, yong)).toBe(false);
+    expect(find((await list(B, true)).rows, "J1")).toBeDefined();
+  });
+
+  it("the Jobs page rescores when a row is missing, not only on an old fit version", () => {
+    const page = readFileSync(join(__dirname, "..", "..", "..", "apps", "web", "app", "jobs", "page.tsx"), "utf8");
+    expect(page).toMatch(/fit_version !== FIT_VERSION\) \|\| await missingGoalRows\(pool, session\)\) \{ await rescoreMatches/);
   });
 
   it("the job page lists every goal's verdict, primary first", async () => {

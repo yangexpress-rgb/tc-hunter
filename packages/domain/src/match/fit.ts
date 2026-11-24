@@ -1,5 +1,5 @@
 import { findSkills, canonicalSkill } from "../jobs/skills";
-import { containsPhrase } from "../jobs/text";
+import { industryHit, specialtyFit } from "./overlap";
 import { countryFit } from "../jobs/country";
 import { placeVerdict } from "./place";
 import { functionWords, levelOf } from "../jobs/normalize";
@@ -26,7 +26,8 @@ import { applicantLevel, effectiveYears, employmentKind, languageMentioned, leve
 // fit-2: the goal's countries count in Place. fit-3: tiers by level, track and domain order the list (Yong, 2026-11-22).
 // fit-4: technology domains split out (domain-2). fit-5: every goal's result is kept (match_goal) and one rule picks the primary goal (multi-goal brief §4).
 // fit-6: one place rule (place.ts); a goal with ways of working but no places no longer rules a job out for its town (2026-11-23).
-export const FIT_VERSION = "fit-6";
+// fit-7: specialties and industries match by word overlap (overlap.ts); a posting silent on specialty or language leaves that part out (2026-11-24 audit).
+export const FIT_VERSION = "fit-7";
 
 export interface FitPart { key: string; label: string; weight: number; raw: number; points: number; detail: string[] }
 export interface Fit { score: number; parts: FitPart[]; summary: string }
@@ -131,30 +132,32 @@ export function goalFit(prefs: MatchPrefs, posting: MatchPosting, verdict?: Doma
     parts.push({ key: "pay", label: "Pay", weight: 10, raw, detail: [line] });
   }
 
-  // Company or industry (10), when the goal names any.
+  // Company or industry (10), when the goal names any. Industries match by word overlap (half or more of its words).
   const companies = (prefs.companiesInclude ?? []).filter((x) => x.trim());
-  if (companies.length || prefs.industriesInclude.length) {
+  const industries = prefs.industriesInclude.filter((x) => x.trim());
+  if (companies.length || industries.length) {
     const company = companies.find((x) => sameEmployer(posting.employer, x));
-    const industry = prefs.industriesInclude.find((i) => containsPhrase(`${posting.employer}\n${text}`, i));
+    const industry = industryHit(industries, `${posting.employer}\n${text}`);
     parts.push({ key: "company", label: "Company or industry", weight: 10, raw: company || industry ? 1 : 0,
       detail: [company ? `At ${posting.employer}, a company you named.` : industry ? `Mentions ${industry}, an industry you want.` : "Not a company or industry you named."] });
   }
 
-  // Specialty (10) and language (10), when the goal sets them.
-  const specs = (prefs.specialties ?? []).filter((x) => x.trim());
-  if (specs.length) {
-    const hits = specs.filter((x) => containsPhrase(text, x));
-    parts.push({ key: "specialty", label: "Specialty", weight: 10, raw: hits.length ? 0.5 + 0.5 * hits.length / specs.length : 0,
-      detail: [hits.length ? `Mentions ${hits.join(", ")}.` : `Doesn't mention ${specs.join(" or ")}.`] });
-  }
+  // Specialty (10) and language (10) are boosters: a job that mentions them scores higher. A posting
+  // that says nothing on one leaves that part out, as if the goal didn't set it (2026-11-24 audit);
+  // the row stays visible as not counted.
+  const specs = specialtyFit(prefs.specialties ?? [], text);
+  if (specs) parts.push(specs.mean > 0
+    ? { key: "specialty", label: "Specialty", weight: 10, raw: specs.raw, detail: specs.lines }
+    : { key: "specialty", label: "Specialty", weight: 0, raw: 0, detail: [`The posting doesn't mention ${specs.entries.join(" or ")}, so this doesn't count.`] });
   const langs = (prefs.languages ?? []).filter((x) => x.trim());
   if (langs.length) {
     const hit = langs.find((l) => languageMentioned(text, l));
-    parts.push({ key: "language", label: "Language", weight: 10, raw: hit ? 1 : 0, detail: [hit ? `Asks for ${hit}.` : `Doesn't mention ${langs.join(" or ")}.`] });
+    parts.push(hit ? { key: "language", label: "Language", weight: 10, raw: 1, detail: [`Asks for ${hit}.`] }
+      : { key: "language", label: "Language", weight: 0, raw: 0, detail: [`The posting doesn't mention ${langs.join(" or ")}, so this doesn't count.`] });
   }
 
   const { score, parts: done } = finish(parts);
-  const weak = done.filter((p) => p.raw < 0.5).map((p) => p.label.toLowerCase());
+  const weak = done.filter((p) => p.weight > 0 && p.raw < 0.5).map((p) => p.label.toLowerCase());
   const summary = `${band(score)} for ${prefs.goalName ?? "your goal"}${weak.length ? `; off on ${weak.join(", ")}` : ""}.`;
   const tier = tierFor({ levels: prefs.levels, roles: prefs.targetTitles, occupation: prefs.occupation, domains: goalDomains },
     { title: posting.title, years: posting.requirements?.years ?? null }, dom.domain);

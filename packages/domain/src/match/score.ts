@@ -2,6 +2,7 @@ import { canonicalSkill, findSkills } from "../jobs/skills";
 import { containsPhrase } from "../jobs/text";
 import { countryFit } from "../jobs/country";
 import { placeVerdict } from "./place";
+import { industryHit, specialtyFit } from "./overlap";
 import { functionWords, goalLevelIndex, goalLevelLabel, goalLevelOf, LEVEL_LABEL, levelIndex, levelOf, normalizeTitle, type GoalLevel, type Level } from "../jobs/normalize";
 import type { Requirements, SalaryPeriod, Workplace } from "../jobs/types";
 import type { DomainKey } from "../jobs/domain";
@@ -11,7 +12,7 @@ import type { DomainKey } from "../jobs/domain";
  * number explained. AI never sets a score. Changing any rule here means a new
  * RULES_VERSION, so stored scores stay reproducible.
  */
-export const RULES_VERSION = "match-4";  // match-2: goals (companies, kind of work, occupation); match-3: the goal's levels; match-4: the goal's countries
+export const RULES_VERSION = "match-5";  // match-2: goals (companies, kind of work, occupation); match-3: the goal's levels; match-4: the goal's countries; match-5: specialties and industries by word overlap
 export const WEIGHTS = { skills: 35, experience: 25, preferences: 20, keywords: 10, recency: 10 } as const;
 
 /** Early-career experience counts toward years at a recorded, visible discount (P2). */
@@ -226,7 +227,7 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
   if (excluded) { indRaw = 0; filterReasons.push(`Mentions ${excluded}, an industry you skip.`); }
   else if (prefs.industriesInclude.length || companies.length) {
     const company = companies.find((x) => sameEmployer(posting.employer, x));
-    const hit = prefs.industriesInclude.find((i) => containsPhrase(hay, i));
+    const hit = industryHit(prefs.industriesInclude, hay);
     indRaw = company || hit ? 1 : 0.5;
     prefLines.push(company ? `At ${posting.employer}, a company you named.` : hit ? `Mentions ${hit}, an industry you like.`
       : companies.length && prefs.industriesInclude.length ? "Not a company or industry you named."
@@ -258,9 +259,9 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
   let kwRaw: number | null = null;
   if (prefs.mustHaveKeywords.length) kwRaw = prefs.mustHaveKeywords.filter((k) => containsPhrase(text, k)).length / prefs.mustHaveKeywords.length;
   // match-3: the goal's specialties and languages count here too, languages twice over (Yong: jobs that ask for them come first).
-  const specs = (prefs.specialties ?? []).filter((x) => x.trim());
-  const specHits = specs.filter((x) => containsPhrase(text, x));
-  const specRaw = specs.length ? (specHits.length ? 0.5 + 0.5 * specHits.length / specs.length : 0) : null;
+  // match-5: specialties by word overlap, the same reading as the G-score (specialtyFit).
+  const specs = specialtyFit(prefs.specialties ?? [], text);
+  const specRaw = specs ? specs.raw : null;
   const langs = (prefs.languages ?? []).filter((x) => x.trim());
   const langHit = langs.find((l) => languageMentioned(text, l));
   const langRaw = langs.length ? (langHit ? 1 : 0.3) : null;
@@ -269,7 +270,7 @@ export function scoreMatch(profile: MatchProfile, prefs: MatchPrefs, posting: Ma
   const keywordRaw = parts.reduce((s, [v, w]) => s + v * w, 0) / parts.reduce((s, [, w]) => s + w, 0);
   const kwDetail = [`${shared.length} of your skills and terms appear in the posting${shared.length ? `: ${shared.slice(0, 8).join(", ")}` : ""}.`,
     ...(kwRaw !== null ? [`Mentions ${Math.round(kwRaw * prefs.mustHaveKeywords.length)} of your ${prefs.mustHaveKeywords.length} must-have words.`] : []),
-    ...(specRaw !== null ? [specHits.length ? `Mentions your specialty: ${specHits.join(", ")}.` : `Doesn't mention your specialty (${specs.join(", ")}).`] : []),
+    ...(specs ? [specs.mean > 0 ? `Your specialties: ${specs.lines.join("; ")}.` : `Doesn't mention your specialty (${specs.entries.join(", ")}).`] : []),
     ...(langRaw !== null ? [langHit ? `Asks for ${langHit}, a language you chose.` : `Doesn't mention ${langs.join(" or ")}.`] : [])];
 
   // 5. Recency and availability (10 = recency 7 + availability 3) -------------------------

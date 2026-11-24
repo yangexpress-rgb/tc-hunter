@@ -199,6 +199,18 @@ export async function setAdjustmentActive(pool: pg.Pool, session: Session, id: s
   });
 }
 
+/**
+ * Whether any of the applicant's jobs lacks its row for a goal in use (2026-11-24 audit). With a goal
+ * picked, Jobs lists only that goal's rows, so a missing row would hide the job; the Jobs page rescores.
+ * Jobs merged into another are left out: rescoring never writes their rows.
+ */
+export async function missingGoalRows(pool: pg.Pool, session: Session): Promise<boolean> {
+  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    `SELECT EXISTS (SELECT 1 FROM match m JOIN job_posting p ON p.id = m.job_posting_id CROSS JOIN hunt_goal g
+       WHERE g.active AND p.merged_into IS NULL
+         AND NOT EXISTS (SELECT 1 FROM match_goal s WHERE s.match_id = m.id AND s.goal_id = g.id)) AS missing`)).rows[0].missing === true);
+}
+
 /** Rescores every match now (after a profile or preference change). No fetching. */
 export async function rescoreMatches(pool: pg.Pool, session: Session): Promise<void> {
   await withApplicant(pool, asApplicant(session), (c) => matchApplicant(c, new Date()));

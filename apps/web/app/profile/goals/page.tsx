@@ -257,6 +257,7 @@ export default async function GoalsPage(props: PageProps) {
       <ProfileSection title="Goals" id="goals" addTitle="Add a goal" addForm={<GoalForm />}
         empty={goals.length ? undefined : "Add a goal so we know what jobs to look for. You can have more than one, for now and for later."}>
         {goals.length ? <p className="muted small">Each job is scored against every goal in use, and keeps the one it fits best.</p> : null}
+        {goals.length ? <p className="muted small">A goal's G-score averages only the things that goal asks for — a goal that asks for less isn't marked down for the rest.</p> : null}
         {goals.map((g) => <GoalItem key={g.id} g={g} docs={standards} from={copyFrom} />)}
       </ProfileSection>
 
