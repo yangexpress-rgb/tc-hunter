@@ -1,5 +1,5 @@
 import { describeSchedule } from "@/lib/schedule";
-import { emailStatus, getPreferences, listGoals } from "@tc-hunter/db";
+import { emailStatus, getPreferences, listGoals, listStandardDocuments, resumesToCopy, type StandardDoc } from "@tc-hunter/db";
 import { bandLabel, COUNTRIES, countryName, domainLabel, effectiveDomains, GOAL_DOMAINS, GOAL_LEVELS, GOAL_TYPES, goalBand, goalLabel, goalLevelLabel, goalName, goalTypeLabel, TIME_FRAMES, timeFrameLabel, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { EditDialog } from "@/components/profile/EditDialog";
@@ -10,6 +10,7 @@ import { goalSummaryLine } from "@/lib/goals";
 import { flashOf, type PageProps } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
 import { deleteGoalAction, saveGoalAction, saveSearchSettingsAction } from "../actions";
+import { makeStandardResumeAction, removeStandardAction } from "@/app/documents/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -118,13 +119,82 @@ function GoalForm({ g }: { g?: Goal }) {
   );
 }
 
-function GoalItem({ g }: { g: Goal }) {
+type CopyFrom = Array<{ ref: string; title: string; employer: string; status: string }>;
+
+/** "Copy from a job's resume": one of the resumes already made for a job becomes the goal's standard. */
+function CopyResume({ g, from, label }: { g: Goal; from: CopyFrom; label: string }) {
+  if (!from.length) return null;
+  return (
+    <form action={makeStandardResumeAction} className="inline-form copy-resume">
+      <input type="hidden" name="goal" value={g.id} />
+      <label className="sr-only" htmlFor={`copy-${g.id}`}>Resume to copy</label>
+      <select id={`copy-${g.id}`} name="from" required defaultValue="">
+        <option value="" disabled>Pick a job&apos;s resume…</option>
+        {from.map((r) => <option key={r.ref} value={r.ref}>{r.title} · {r.employer}{r.status === "approved" ? " (approved)" : ""}</option>)}
+      </select>
+      <button className="small secondary">{label}</button>
+    </form>
+  );
+}
+
+/**
+ * The goal's standard resume and cover letter (Yong, 2026-11-24): every new application under this goal
+ * starts with copies of them, for the applicant to revise for that job and approve.
+ */
+function GoalStandards({ g, docs, from }: { g: Goal; docs: StandardDoc[]; from: CopyFrom }) {
+  const resume = docs.find((d) => d.goalId === g.id && d.kind === "resume");
+  const letter = docs.find((d) => d.goalId === g.id && d.kind === "letter");
+  const remove = (kind: "resume" | "letter") => (
+    <form action={removeStandardAction} className="inline-form">
+      <input type="hidden" name="goal" value={g.id} /><input type="hidden" name="kind" value={kind} />
+      <button className="link danger small">Remove</button>
+    </form>
+  );
+  return (
+    <div className="goal-standards">
+      <h4>Standard resume and cover letter</h4>
+      <ul className="plain">
+        <li>
+          <strong>Resume:</strong>{" "}
+          {resume ? (<>
+            <a href={`/documents/${resume.ref}`}>Open and edit</a> <span className="muted small">changed {new Date(resume.updatedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span> {remove("resume")}
+            <Details summary="Start it over">
+              <form action={makeStandardResumeAction} className="inline-form">
+                <input type="hidden" name="goal" value={g.id} />
+                <button className="small secondary">From my profile</button>
+              </form>
+              <CopyResume g={g} from={from} label="Copy this one" />
+            </Details>
+          </>) : (<>
+            <span className="muted">None yet.</span>
+            <form action={makeStandardResumeAction} className="inline-form">
+              <input type="hidden" name="goal" value={g.id} />
+              <button className="small">Make one from my profile</button>
+            </form>
+            <CopyResume g={g} from={from} label="Copy a job's resume" />
+          </>)}
+        </li>
+        <li>
+          <strong>Cover letter:</strong>{" "}
+          {letter ? (<>
+            <a href={`/documents/${letter.ref}`}>Open and edit</a> · <a href={`/profile/goals/${g.id}/letter`}>Replace</a> {remove("letter")}
+          </>) : (<>
+            <span className="muted">None yet.</span> <a href={`/profile/goals/${g.id}/letter`}>Write or upload one</a>
+          </>)}
+        </li>
+      </ul>
+      <p className="hint">New applications under this goal start with copies of these, ready for you to revise for that job and approve. In the letter, [Company] and [Job title] are filled in for each job.</p>
+    </div>
+  );
+}
+
+function GoalItem({ g, docs, from }: { g: Goal; docs: StandardDoc[]; from: CopyFrom }) {
   const when = [timeFrameLabel(g.timeFrame), g.levels.map(goalLevelLabel).join(", "), g.employmentTypes.map(goalTypeLabel).join(", ")].filter(Boolean).join(" · ");
   const field = [g.occupation, g.industries.join(", ")].filter(Boolean).join(" · ");
   const where = [g.locations.join(", "), g.workplaceTypes.map((w) => WORKPLACES.find(([k]) => k === w)?.[1] ?? w).join(", ")].filter(Boolean).join(" · ");
   const p = pay(g);
   return (
-    <article className="profile-item">
+    <article className="profile-item" id={`goal-${g.id}`}>
       <div className="item-body">
         <h3>{goalLabel(g)}{g.active ? null : <> <span className="chip draft">Not used to find jobs</span></>}</h3>
         {goalSummaryLine(g) ? <p className="muted goal-summary">{goalSummaryLine(g)}</p> : null}
@@ -138,6 +208,7 @@ function GoalItem({ g }: { g: Goal }) {
         {p ? <p className="muted">Pay you expect: {p}</p> : null}
         {where ? <p className="muted">{where}</p> : null}
         <p className="muted">Country: {g.countries.length ? g.countries.map(countryName).join(", ") : "Any"}</p>
+        <GoalStandards g={g} docs={docs} from={from} />
       </div>
       <EditDialog icon="pencil" label="Edit this goal" title="Edit goal"><GoalForm g={g} /></EditDialog>
     </article>
@@ -149,7 +220,8 @@ export default async function GoalsPage(props: PageProps) {
   const session = await requireSession();
   const { pool } = app();
   const { cfg } = app();
-  const [{ saved, error }, goals, p, mail] = await Promise.all([flashOf(props), listGoals(pool, session), getPreferences(pool, session), emailStatus(pool, cfg, session)]);
+  const [{ saved, error }, goals, p, mail, standards, copyFrom] = await Promise.all([flashOf(props), listGoals(pool, session), getPreferences(pool, session), emailStatus(pool, cfg, session),
+    listStandardDocuments(pool, session), resumesToCopy(pool, session)]);
   const linkedin = (g: Goal) => {
     const q = new URLSearchParams({ keywords: g.roles[0] ?? g.occupation ?? "" });
     const where = g.locations.find((l) => !/^remote$/i.test(l.trim()));
@@ -171,7 +243,7 @@ export default async function GoalsPage(props: PageProps) {
       <ProfileSection title="Goals" id="goals" addTitle="Add a goal" addForm={<GoalForm />}
         empty={goals.length ? undefined : "Add a goal so we know what jobs to look for. You can have more than one, for now and for later."}>
         {goals.length ? <p className="muted small">Each job is scored against every goal in use, and keeps the one it fits best.</p> : null}
-        {goals.map((g) => <GoalItem key={g.id} g={g} />)}
+        {goals.map((g) => <GoalItem key={g.id} g={g} docs={standards} from={copyFrom} />)}
       </ProfileSection>
 
       {goals.some((g) => g.active && (g.roles.length || g.occupation)) ? (

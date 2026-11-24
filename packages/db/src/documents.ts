@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type pg from "pg";
 import {
-  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, exportLeakSpots, type ExportLeakSpot, extractText, isStale, ownLetterParagraphs, ownLetterSource, renderDocument,
+  buildLetter, buildResume, careerYears, checkContext, cleanEmployerName, proofreadLetter, proofreadResume, type Proofreader, checkLine, decryptField, documentText, exportLeaks, exportLeakSpots, type ExportLeakSpot, extractText, goalLabel, goalPosting, isStale, letterForJob, ownLetterParagraphs, ownLetterSource, refreshResume, renderDocument, standardLetterSource,
   type Blocked, type DocHeader, type Gap, type LetterProposer, type LetterSource, type ResumeProposer, type ResumeSource,
   type TailorPosting, type TailorProfile,
 } from "@tc-hunter/domain";
@@ -11,7 +11,7 @@ import type { Session } from "./auth";
 import type { AppConfig } from "./config";
 import { withApplicant, type RequestContext } from "./context";
 import { DomainError } from "./packets";
-import { asApplicant, dataKeyFor } from "./profile";
+import { asApplicant, dataKeyFor, goalFromRow } from "./profile";
 import { ensureApplication } from "./tracker";
 
 /**
@@ -186,12 +186,25 @@ export async function runTailor(pool: pg.Pool, ctx: RequestContext, payload: { m
     const pages = (await c.query("SELECT tailor_target_pages FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.tailor_target_pages ?? 2;
     const made: Array<{ kind: DocKind; ref: string; version: number; blocked: number }> = [];
     const skipped: DocKind[] = [];
+    // The application's goal and its standard documents (Yong, 2026-11-24): a new resume or letter starts from them.
+    // "Revise with feedback" works on the version in hand instead.
+    const standards = from ? new Map<DocKind, StandardRow>() : await standardsForMatch(c, payload.match_id);
     // Counts only (never content), so the worker log shows what the profile gave the writer.
     const counts = { roles: profile.experience.length, lines: profile.experience.reduce((n, e) => n + e.bullets.length, 0), skills: profile.skills.length,
       education: profile.education.length, credentials: profile.credentials.length };
     // With no work history at all, a resume or letter would be empty: say so instead of making one.
     if (!profile.experience.length) return { jobRef: posting.ref, documents: made, empty: true, ...counts };
     for (const kind of payload.kinds?.length ? payload.kinds : (["resume", "letter"] as DocKind[])) {
+      const std = standards.get(kind);
+      if (std) {
+        const meta = { proposer: "goal-standard", standard_from: std.ref, goal: std.goalLabel, generated_at: new Date().toISOString() };
+        const doc = std.source.kind === "resume"
+          ? await (async () => { const d = refreshResume(std.source as ResumeSource, profile, posting); return { ...(await insertDocument(c, kind, posting, d.source, meta, d.blocked, d.gaps, null)), blocked: d.blocked.length }; })()
+          : { ...(await insertDocument(c, kind, posting, letterForJob(std.source, posting), meta, [], [], null, std.createdBy)), blocked: 0 };
+        made.push({ kind, ref: doc.ref, version: doc.version, blocked: doc.blocked });
+        await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE[kind], version: doc.version, proposer: meta.proposer, blocked: doc.blocked } });
+        continue;
+      }
       if (kind === "resume") {
         const { proposal: first, meta } = await deps.resume.propose(profile, posting, opts);
         const pr = deps.proofread ? await proofreadResume(first, profile, posting, deps.proofread) : null;
@@ -226,7 +239,15 @@ export async function requestTailor(pool: pg.Pool, session: Session, jobRef: str
     const r = await c.query(
       `INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING RETURNING id`,
       [JSON.stringify({ match_id: m.id, kinds })]);
-    return r.rows[0]?.id ?? (await c.query("SELECT id FROM work_item WHERE kind = 'tailor' AND payload->>'match_id' = $1 AND status IN ('queued','running')", [m.id])).rows[0].id;
+    if (r.rows[0]) return r.rows[0].id;
+    // Already waiting (for example the goal's standard documents, queued when the application was made):
+    // it makes these kinds too.
+    const w = (await c.query("SELECT id, status, payload FROM work_item WHERE kind = 'tailor' AND payload->>'match_id' = $1 AND status IN ('queued','running')", [m.id])).rows[0];
+    const had = (w.payload.kinds ?? ["resume", "letter"]) as DocKind[];
+    if (w.status === "queued" && kinds.some((k) => !had.includes(k)) && !w.payload.from_doc) {
+      await c.query("UPDATE work_item SET payload = jsonb_set(payload, '{kinds}', $2::jsonb) WHERE id = $1", [w.id, JSON.stringify([...new Set([...had, ...kinds])])]);
+    }
+    return w.id;
   });
 }
 
@@ -248,6 +269,106 @@ export async function saveOwnLetter(pool: pg.Pool, session: Session, jobRef: str
     await recordAudit(c, "document.generated", { objectType: "document", objectId: doc.id, payload: { document_ref: doc.ref, type: TYPE.letter, version: doc.version, proposer: "own-letter", blocked: 0 } });
     return doc.ref;
   });
+}
+
+// ---------------------------------------------------------------------------
+// Standard documents per goal (Yong, 2026-11-24)
+// ---------------------------------------------------------------------------
+
+interface StandardRow { id: string; ref: string; source: DocSource; createdBy: "app" | "applicant"; goalLabel: string }
+
+/** A goal as the "job" its standard documents are for. */
+async function goalTarget(c: pg.PoolClient, goalId: string): Promise<TailorPosting> {
+  const g = (await c.query("SELECT * FROM hunt_goal WHERE id = $1", [goalId])).rows[0];
+  if (!g) throw new DomainError("TC_NOT_FOUND");
+  return goalPosting({ id: g.id, label: goalLabel(goalFromRow(g)) });
+}
+
+/** The standard resume and letter of the goal this job's application is pursued under. */
+async function standardsForMatch(c: pg.PoolClient, matchId: string): Promise<Map<DocKind, StandardRow>> {
+  const out = new Map<DocKind, StandardRow>();
+  const a = (await c.query("SELECT goal_id FROM application WHERE match_id = $1 AND goal_id IS NOT NULL ORDER BY created_at LIMIT 1", [matchId])).rows[0];
+  if (!a) return out;
+  const rows = (await c.query("SELECT id, public_ref, type, source_json, created_by FROM document WHERE standard AND goal_id = $1", [a.goal_id])).rows;
+  if (!rows.length) return out;
+  const label = (await goalTarget(c, a.goal_id)).title;
+  for (const r of rows) out.set(kindOf(r.type), { id: r.id, ref: r.public_ref, source: r.source_json, createdBy: r.created_by, goalLabel: label });
+  return out;
+}
+
+export interface StandardDoc { goalId: string; kind: DocKind; ref: string; updatedAt: Date; own: boolean }
+
+/** Every goal's standard documents, for the Goals page. */
+export async function listStandardDocuments(pool: pg.Pool, session: Session): Promise<StandardDoc[]> {
+  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    "SELECT goal_id, type, public_ref, updated_at, created_by FROM document WHERE standard ORDER BY updated_at DESC")).rows
+    .map((r) => ({ goalId: r.goal_id, kind: kindOf(r.type), ref: r.public_ref, updatedAt: r.updated_at, own: r.created_by === "applicant" })));
+}
+
+/** Resumes that can be copied into a goal's standard: the latest version of each job's resume. */
+export async function resumesToCopy(pool: pg.Pool, session: Session): Promise<Array<{ ref: string; title: string; employer: string; status: string }>> {
+  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    `SELECT * FROM (SELECT DISTINCT ON (d.match_id) d.public_ref, d.status, d.created_at, p.title, p.employer_canonical
+       FROM document d JOIN job_posting p ON p.id = d.job_posting_id
+      WHERE d.type = 'tailored_resume' AND NOT d.standard ORDER BY d.match_id, d.version DESC) x ORDER BY created_at DESC LIMIT 50`)).rows
+    .map((r) => ({ ref: r.public_ref, title: r.title, employer: cleanEmployerName(r.employer_canonical) || r.employer_canonical, status: r.status })));
+}
+
+/** One goal's standard document: replaces the one it had. */
+async function insertStandard(c: pg.PoolClient, kind: DocKind, goalId: string, source: DocSource, meta: Record<string, unknown>,
+  createdBy: "app" | "applicant", blocked: Blocked[] = []): Promise<{ id: string; ref: string }> {
+  await c.query("DELETE FROM document WHERE standard AND goal_id = $1 AND type = $2", [goalId, TYPE[kind]]);
+  const d = (await c.query(
+    `INSERT INTO document (applicant_id, type, version, goal_id, standard, created_by, source_json, content_hash, generation_meta)
+     VALUES (app_applicant_id(), $1, 1, $2, true, $3, $4, $5, $6) RETURNING id, public_ref`,
+    [TYPE[kind], goalId, createdBy, JSON.stringify(source), hashOf(source), JSON.stringify(meta)])).rows[0];
+  await writeClaims(c, d.id, source);
+  for (const b of blocked) {
+    await c.query(
+      "INSERT INTO blocked_addition (applicant_id, document_id, proposed_text, reason, terms, skill_id) VALUES (app_applicant_id(), $1, $2, $3, $4, $5)",
+      [d.id, b.text.slice(0, 2000), b.reason, b.terms, b.alias?.skill_id ?? null]);
+  }
+  await recordAudit(c, "document.generated", { objectType: "document", objectId: d.id, payload: { document_ref: d.public_ref, type: TYPE[kind], version: 1, proposer: meta.proposer, blocked: blocked.length } });
+  return { id: d.id, ref: d.public_ref };
+}
+
+/**
+ * A goal's standard resume, made from the profile as it is (every role, line and skill, nothing reworded:
+ * the applicant then picks and words it in the studio), or copied from a resume made for a job (`fromRef`).
+ * No AI is used. Returns the new document's ref.
+ */
+export async function makeStandardResume(pool: pg.Pool, cfg: AppConfig, session: Session, goalId: string, fromRef?: string | null): Promise<string> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const target = await goalTarget(c, goalId);
+    const profile = await loadTailorProfile(c, await dataKeyFor(c, cfg, session.applicantId));
+    if (!profile.experience.length) throw new DomainError("TC_STANDARD_NO_PROFILE");
+    if (fromRef) {
+      const from = (await c.query("SELECT public_ref, source_json FROM document WHERE public_ref = $1 AND type = 'tailored_resume'", [fromRef])).rows[0];
+      if (!from) throw new DomainError("TC_NOT_FOUND");
+      const d = refreshResume(from.source_json as ResumeSource, profile, target);
+      return (await insertStandard(c, "resume", goalId, d.source, { proposer: "standard-copy", copied_from: from.public_ref, generated_at: new Date().toISOString() }, "app", d.blocked)).ref;
+    }
+    const pages = (await c.query("SELECT tailor_target_pages FROM hunt_preference WHERE active LIMIT 1")).rows[0]?.tailor_target_pages ?? 2;
+    const d = buildResume(profile, target, { lines: [], skill_ids: [], asIs: true }, pages);
+    return (await insertStandard(c, "resume", goalId, d.source, { proposer: "standard-profile", generated_at: new Date().toISOString() }, "app", d.blocked)).ref;
+  });
+}
+
+/**
+ * A goal's standard cover letter: the applicant's own text (pasted, typed or read from their file), word for
+ * word, like "Write or upload your own". [Company] and [Job title] are filled in for each job. Returns its ref.
+ */
+export async function saveStandardLetter(pool: pg.Pool, session: Session, goalId: string, text: string): Promise<string> {
+  if (!ownLetterParagraphs(text).length) throw new DomainError("TC_LETTER_EMPTY");
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const target = await goalTarget(c, goalId);
+    return (await insertStandard(c, "letter", goalId, standardLetterSource(text, target), { proposer: "own-letter", written_by: "applicant", generated_at: new Date().toISOString() }, "applicant")).ref;
+  });
+}
+
+/** Takes a goal's standard resume or letter off. Documents already made from it stay as they are. */
+export async function removeStandardDocument(pool: pg.Pool, session: Session, goalId: string, kind: DocKind): Promise<void> {
+  await withApplicant(pool, asApplicant(session), (c) => c.query("DELETE FROM document WHERE standard AND goal_id = $1 AND type = $2", [goalId, TYPE[kind]]));
 }
 
 /**
@@ -299,6 +420,8 @@ export interface DocumentView {
   leaks: DocLeak[];
   /** "applicant": the applicant's own letter, word for word (not checked against the profile). */
   createdBy: "app" | "applicant";
+  /** A goal's standard resume or letter (no job): the starting point for that goal's applications. */
+  standard: { goalId: string; goalLabel: string } | null;
 }
 
 const kindOf = (type: string): DocKind => (type === "cover_letter" ? "letter" : "resume");
@@ -307,28 +430,31 @@ export async function getDocument(pool: pg.Pool, cfg: AppConfig, session: Sessio
   return withApplicant(pool, asApplicant(session), async (c) => {
     const d = (await c.query(
       `SELECT d.*, p.public_ref AS job_ref, p.title, p.employer_canonical, m.score FROM document d
-         JOIN job_posting p ON p.id = d.job_posting_id JOIN match m ON m.id = d.match_id WHERE d.public_ref = $1`, [ref])).rows[0];
-    if (!d) return null;
+         LEFT JOIN job_posting p ON p.id = d.job_posting_id LEFT JOIN match m ON m.id = d.match_id WHERE d.public_ref = $1`, [ref])).rows[0];
+    if (!d || (!d.standard && !d.job_ref)) return null;
+    const standard = d.standard ? { goalId: d.goal_id as string, goalLabel: (await goalTarget(c, d.goal_id)).title } : null;
     const dk = await dataKeyFor(c, cfg, session.applicantId);
     const blocked = await c.query("SELECT id, proposed_text, reason, terms, skill_id, resolved_at FROM blocked_addition WHERE document_id = $1 ORDER BY created_at", [d.id]);
     const gaps = await c.query("SELECT requirement_text, skill_term FROM document_gap WHERE document_id = $1 ORDER BY created_at", [d.id]);
-    const versions = await c.query("SELECT public_ref, version, status, approved_at FROM document WHERE match_id = $1 AND type = $2 ORDER BY version DESC", [d.match_id, d.type]);
+    const versions = standard ? { rows: [{ public_ref: d.public_ref, version: d.version, status: d.status, approved_at: null }] }
+      : await c.query("SELECT public_ref, version, status, approved_at FROM document WHERE match_id = $1 AND type = $2 ORDER BY version DESC", [d.match_id, d.type]);
     const used = await c.query(`SELECT a.public_ref FROM application_packet k JOIN application a ON a.id = k.application_id
                 WHERE k.tailored_resume_document_id = $1 OR k.cover_letter_document_id = $1`, [d.id]);
     const profile = await loadTailorProfile(c, dk);
-    const appRow = (await c.query("SELECT public_ref FROM application WHERE match_id = $1 ORDER BY created_at DESC LIMIT 1", [d.match_id])).rows[0];
-    const employer = cleanEmployerName(d.employer_canonical) || d.employer_canonical;
+    const appRow = standard ? null : (await c.query("SELECT public_ref FROM application WHERE match_id = $1 ORDER BY created_at DESC LIMIT 1", [d.match_id])).rows[0];
+    const employer = standard ? "" : cleanEmployerName(d.employer_canonical) || d.employer_canonical;
     return {
       id: d.id, ref: d.public_ref, type: d.type, kind: kindOf(d.type), version: d.version, status: d.status, source: d.source_json, contentHash: d.content_hash,
       diffViewedAt: d.diff_viewed_at, approvedAt: d.approved_at, createdAt: d.created_at, meta: d.generation_meta ?? {},
-      job: { ref: d.job_ref, title: d.title, employer, matchId: d.match_id, score: d.score },
+      job: standard ? { ref: "", title: standard.goalLabel, employer: "", matchId: "", score: 0 } : { ref: d.job_ref, title: d.title, employer, matchId: d.match_id, score: d.score },
+      standard,
       blocked: blocked.rows.map((b) => ({ id: b.id, text: b.proposed_text, reason: b.reason, terms: b.terms, skillId: b.skill_id, resolvedAt: b.resolved_at })),
       gaps: gaps.rows.map((g) => ({ requirement: g.requirement_text, skill: g.skill_term })),
       versions: versions.rows.map((v) => ({ ref: v.public_ref, version: v.version, status: v.status, approvedAt: v.approved_at })),
       profile,
       usedIn: [...new Set(used.rows.map((u) => u.public_ref as string))],
       applicationRef: appRow?.public_ref ?? null,
-      leaks: d.status === "draft" && d.created_by !== "applicant" ? await leakSpots(c, d.id, d.source_json as DocSource, profile, employer) : [],
+      leaks: d.status === "draft" && d.created_by !== "applicant" && !standard ? await leakSpots(c, d.id, d.source_json as DocSource, profile, employer) : [],
       createdBy: d.created_by,
     };
   });
@@ -367,13 +493,13 @@ const move = <T>(a: T[], i: number, dir: number) => { const j = i + dir; if (i <
  */
 export async function editDocument(pool: pg.Pool, cfg: AppConfig, session: Session, docId: string, e: EditOp): Promise<void> {
   await withApplicant(pool, asApplicant(session), async (c) => {
-    const d = (await c.query("SELECT id, status, source_json, match_id, created_by FROM document WHERE id = $1 FOR UPDATE", [docId])).rows[0];
+    const d = (await c.query("SELECT id, status, source_json, match_id, created_by, standard, goal_id FROM document WHERE id = $1 FOR UPDATE", [docId])).rows[0];
     if (!d) throw new DomainError("TC_NOT_FOUND");
     if (d.status !== "draft") throw new DomainError("TC_DOCUMENT_IMMUTABLE");
     const s = d.source_json as DocSource;
     const check = async (text: string, facts: string[]) => {
       const dk = await dataKeyFor(c, cfg, session.applicantId);
-      const r = checkLine(text, facts, checkContext(await loadTailorProfile(c, dk), await postingForMatch(c, d.match_id)));
+      const r = checkLine(text, facts, checkContext(await loadTailorProfile(c, dk), d.standard ? await goalTarget(c, d.goal_id) : await postingForMatch(c, d.match_id)));
       if (!r.ok) throw new DomainError(`TC_CLAIM_BLOCKED_${r.reason.toUpperCase()}`);
       return r;
     };
@@ -515,6 +641,8 @@ export async function approveDocument(pool: pg.Pool, cfg: AppConfig, session: Se
     const d = (await c.query("SELECT * FROM document WHERE id = $1 FOR UPDATE", [docId])).rows[0];
     if (!d) throw new DomainError("TC_NOT_FOUND");
     if (d.status !== "draft") throw new DomainError("TC_DOCUMENT_IMMUTABLE");
+    // A goal's standard is a starting point, never sent: each job's copy is what gets approved.
+    if (d.standard) throw new DomainError("TC_DOCUMENT_STANDARD");
     if (d.created_by === "app" && !d.diff_viewed_at) throw new DomainError("TC_DIFF_NOT_VIEWED");
     const source = d.source_json as DocSource;
     if (!documentText(source).trim()) throw new DomainError("TC_DOCUMENT_EMPTY");
@@ -545,7 +673,7 @@ export async function newVersion(pool: pg.Pool, session: Session, docId: string)
   return withApplicant(pool, asApplicant(session), async (c) => {
     const d = (await c.query("SELECT * FROM document WHERE id = $1", [docId])).rows[0];
     if (!d) throw new DomainError("TC_NOT_FOUND");
-    if (d.status === "draft") return d.public_ref;
+    if (d.status === "draft" || d.standard) return d.public_ref;
     const gaps = (await c.query("SELECT requirement_text, skill_term FROM document_gap WHERE document_id = $1", [docId])).rows
       .map((g) => ({ requirement: g.requirement_text, skill: g.skill_term, note: "" }));
     const doc = await insertDocument(c, kindOf(d.type), { id: d.job_posting_id, matchId: d.match_id }, d.source_json,
@@ -558,7 +686,7 @@ export async function newVersion(pool: pg.Pool, session: Session, docId: string)
 export async function exportDocument(pool: pg.Pool, cfg: AppConfig, session: Session, ref: string, format: "pdf" | "docx") {
   return withApplicant(pool, asApplicant(session), async (c) => {
     const d = (await c.query("SELECT * FROM document WHERE public_ref = $1", [ref])).rows[0];
-    if (!d) throw new DomainError("TC_NOT_FOUND");
+    if (!d || d.standard) throw new DomainError("TC_NOT_FOUND");
     if (d.status === "draft" || !d.approved_at) throw new DomainError("TC_DOCUMENT_NOT_APPROVED");
     const when = d.generation_meta?.rendered_at ? new Date(d.generation_meta.rendered_at) : new Date(d.approved_at);
     const r = await renderChecked(c, cfg, session.applicantId, d.id, d.source_json, when, d.created_by === "applicant");

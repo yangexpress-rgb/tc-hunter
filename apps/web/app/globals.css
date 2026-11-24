@@ -635,3 +635,11 @@ table.compact-rows tr.row-link:hover td.sticky-end { background: var(--bg); }
 .undo-line form { margin: 0; }
 details.removed-sources { margin-top: 12px; }
 details.removed-sources > summary { cursor: pointer; color: var(--muted); }
+
+/* A goal's standard resume and cover letter (2026-11-24). */
+.goal-standards { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.goal-standards h4 { margin: 0 0 6px; font-size: 0.95rem; }
+.goal-standards li { margin: 6px 0; }
+.goal-standards li > .inline-form { display: inline-flex; margin: 0 0 0 6px; vertical-align: middle; }
+.goal-standards select { max-width: 100%; width: 420px; }
+.goal-standards li > .copy-resume, .goal-standards .copy-resume { display: flex; margin: 8px 0 0; align-items: center; }

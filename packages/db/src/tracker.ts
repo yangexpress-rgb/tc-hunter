@@ -51,6 +51,22 @@ async function goalToStamp(c: pg.PoolClient, matchId: string, wanted?: string | 
  * Used by tracking, and when the applicant starts tailoring or approves a resume: moves forward only, never back.
  * A new application is stamped with its goal (`goal`, see goalToStamp); an existing one keeps its stamp.
  */
+/**
+ * A new application under a goal with a standard resume or letter (Yong, 2026-11-24) gets its own copies
+ * straight away, as drafts to revise: the worker makes them (no AI, so it takes moments). Only kinds the
+ * goal has a standard for, and only when the job has no documents yet.
+ */
+async function queueStandardDocuments(c: pg.PoolClient, matchId: string, goalId: string | null): Promise<void> {
+  if (!goalId) return;
+  const kinds = (await c.query(
+    `SELECT CASE type WHEN 'tailored_resume' THEN 'resume' ELSE 'letter' END AS kind FROM document d
+      WHERE d.standard AND d.goal_id = $1
+        AND NOT EXISTS (SELECT 1 FROM document x WHERE x.match_id = $2 AND x.type = d.type) ORDER BY type DESC`, [goalId, matchId])).rows.map((r) => r.kind as string);
+  if (!kinds.length) return;
+  await c.query(`INSERT INTO work_item (applicant_id, kind, payload) VALUES (app_applicant_id(), 'tailor', $1) ON CONFLICT DO NOTHING`,
+    [JSON.stringify({ match_id: matchId, kinds })]);
+}
+
 export async function ensureApplication(c: pg.PoolClient, jobRef: string, atLeast: ApplicationStage, goal?: string | null): Promise<string> {
   const m = (await c.query("SELECT m.id, m.job_posting_id, m.status FROM match m JOIN job_posting p ON p.id = m.job_posting_id WHERE p.public_ref = $1", [jobRef])).rows[0];
   if (!m) throw new DomainError("TC_NOT_FOUND");
@@ -82,8 +98,9 @@ export async function ensureApplication(c: pg.PoolClient, jobRef: string, atLeas
       return r.rows[0].public_ref;
     }
     const r = await c.query(
-      "INSERT INTO application (applicant_id, job_posting_id, match_id, stage, stage_set_by, goal_id) VALUES (app_applicant_id(), $1, $2, $3, 'applicant', $4) RETURNING public_ref",
+      "INSERT INTO application (applicant_id, job_posting_id, match_id, stage, stage_set_by, goal_id) VALUES (app_applicant_id(), $1, $2, $3, 'applicant', $4) RETURNING public_ref, goal_id",
       [m.job_posting_id, m.id, atLeast, await goalToStamp(c, m.id, goal)]);
+    await queueStandardDocuments(c, m.id, r.rows[0].goal_id);
     return r.rows[0].public_ref;
   }
   const order = ["interested", "tailoring", "ready_to_apply"];
