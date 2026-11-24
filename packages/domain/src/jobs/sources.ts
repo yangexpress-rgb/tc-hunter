@@ -152,6 +152,90 @@ async function fetchAdp(spec: SourceSpec, f: Fetcher, wanted: (title: string) =>
   return { postings, complete: true, checked: list.length, listed: list.length, notes: want.length > maxDetails ? [`Read the first ${maxDetails} related jobs in full only.`] : [] };
 }
 
+// Dayforce (Taiho Oncology, 2026-11-24) -------------------------------------------------------------
+// Employers on Ceridian Dayforce list jobs at jobs.dayforcehcm.com/{lang}/{client}/{board} (older links:
+// usNN.dayforcehcm.com/CandidatePortal/{lang}/{client}). The page is drawn by scripts; it reads its jobs,
+// descriptions included, from a JSON service on the same site, after asking the site for a request
+// token (no sign-in), which we do the same way. One job's own page carries the job in its page data.
+
+export interface DayforceSite { client: string; board: string; /** The one job the address shows, when it shows one. */ jobId: string | null }
+const DAYFORCE_BOARD = "CANDIDATEPORTAL";
+const DF = "https://jobs.dayforcehcm.com";
+
+/** A Dayforce job board (or one of its jobs) from its address. */
+export function parseDayforce(input: string): DayforceSite | null {
+  let url: URL;
+  try { url = new URL(input.trim()); } catch { return null; }
+  const host = url.hostname.toLowerCase();
+  if (!/(^|\.)dayforcehcm\.com$/.test(host)) return null;
+  const parts = url.pathname.split("/").filter(Boolean).map((p) => decodeURIComponent(p));
+  const name = (x: string | undefined) => (x && /^[A-Za-z0-9_-]{2,60}$/.test(x) ? x : null);
+  const id = (x: string | undefined) => (x && /^\d{1,12}$/.test(x) ? x : null);
+  if (host === "jobs.dayforcehcm.com") {
+    // /en-US/taiho/CANDIDATEPORTAL[/jobs/5183], or without the language.
+    const p = /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(parts[0] ?? "") ? parts.slice(1) : parts;
+    const client = name(p[0]);
+    if (!client || client.toLowerCase() === "api" || client.startsWith("_")) return null;
+    return { client: client.toLowerCase(), board: name(p[1]) ?? DAYFORCE_BOARD, jobId: p[2]?.toLowerCase() === "jobs" ? id(p[3]) : null };
+  }
+  // usNN.dayforcehcm.com/CandidatePortal/en-US/taiho[/Site/BOARD][/Posting/View/3586]
+  const i = parts.findIndex((x) => x.toLowerCase() === "candidateportal");
+  if (i < 0) return null;
+  const rest = /^[a-z]{2}(-[A-Za-z]{2,4})?$/.test(parts[i + 1] ?? "") ? parts.slice(i + 2) : parts.slice(i + 1);
+  const client = name(rest[0]);
+  if (!client) return null;
+  const site = rest.findIndex((x) => x.toLowerCase() === "site");
+  const view = rest.findIndex((x) => x.toLowerCase() === "view");
+  return { client: client.toLowerCase(), board: (site > 0 && name(rest[site + 1])) || DAYFORCE_BOARD, jobId: view > 0 ? id(rest[view + 1]) : null };
+}
+export const dayforceKey = (s: Pick<DayforceSite, "client" | "board">) => `${s.client}/${s.board}`;
+export const dayforceBoardUrl = (s: Pick<DayforceSite, "client" | "board">) => `${DF}/en-US/${s.client}/${s.board}`;
+export const dayforceJobUrl = (s: Pick<DayforceSite, "client" | "board">, jobId: string | number) => `${dayforceBoardUrl(s)}/jobs/${jobId}`;
+const dayforceFromKey = (key: string): DayforceSite => { const [client = "", board = DAYFORCE_BOARD] = key.split("/"); return { client, board, jobId: null }; };
+
+/** One Dayforce job, from its job list row or from its own page's data (whose text sits in jobPostingContent). */
+export function readDayforceJob(j: Obj, s: Pick<DayforceSite, "client" | "board">, employer: string): RawPosting {
+  const id = String(j.jobPostingId ?? "");
+  const url = dayforceJobUrl(s, id);
+  const where = ((j.postingLocations ?? []) as Obj[]).map((l) => String(l?.formattedAddress ?? [l?.cityName, l?.stateCode, l?.isoCountryCode].filter(Boolean).join(", ")).trim()).filter(Boolean);
+  const c = (j.jobPostingContent ?? {}) as Obj;
+  const desc = htmlToText([j.jobDescription, c.jobDescriptionHeader, c.jobDescription, c.jobDescriptionFooter].filter((x) => typeof x === "string" && x).join("\n"));
+  const virtual = j.hasVirtualLocation === true ? "Remote" : "";
+  return { externalId: `dayforce:${s.client}:${id}`, url, employer, title: String(j.jobTitle ?? "").trim(), locationRaw: where.length ? [...new Set(where)].join("; ") : virtual || null,
+    workplaceType: detectWorkplace([virtual, ...where].join("; "), desc.slice(0, 600)), descriptionText: desc, salary: null,
+    postedAt: typeof j.postingStartTimestampUTC === "string" ? j.postingStartTimestampUTC : null, applyUrl: url, atsType: "dayforce" };
+}
+
+/** Reads a Dayforce board: a request token first, then the whole list (descriptions included), a page at a time. */
+async function fetchDayforce(spec: SourceSpec, f: Fetcher): Promise<SourceFetchResult> {
+  const site = parseDayforce(spec.url) ?? dayforceFromKey(spec.key);
+  const tok = await f.get(`${DF}/api/auth/csrf`);
+  const csrf = String(JSON_OR(tok.text, "Dayforce").csrfToken ?? "");
+  if (!csrf) throw new SourceRefusedError("unreachable", "Dayforce gave no request token");
+  const headers: Record<string, string> = { "x-csrf-token": csrf, ...(tok.cookies?.length ? { Cookie: tok.cookies.join("; ") } : {}) };
+  const list: Obj[] = [];
+  for (let start = 0; start < 1000;) {
+    const r = JSON_OR((await f.get(`${DF}/api/geo/${encodeURIComponent(site.client)}/jobposting/search`, {
+      headers, body: { clientNamespace: site.client, jobBoardCode: site.board, cultureCode: "en-US", distanceUnit: 0, paginationStart: start },
+    })).text, "Dayforce");
+    const page = (r.jobPostings ?? []) as Obj[];
+    list.push(...page);
+    start += page.length;
+    if (!page.length || start >= Number(r.maxCount ?? r.count ?? 0)) break;
+  }
+  return { postings: list.map((j) => readDayforceJob(j, site, spec.name)), complete: true, checked: list.length, listed: list.length, notes: [] };
+}
+
+/** One Dayforce job from its own page, whose page data (__NEXT_DATA__) carries the job. */
+export function dayforceJobFromPage(html: string, s: Pick<DayforceSite, "client" | "board">, employer: string): RawPosting | null {
+  const m = /<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/.exec(html);
+  if (!m) return null;
+  try {
+    const j = (JSON.parse(m[1]!) as Obj).props?.pageProps?.jobData as Obj | undefined;
+    return j && j.jobTitle ? readDayforceJob(j, s, employer) : null;
+  } catch { return null; }
+}
+
 // Workday (Yong, 2026-11-15: an Embecta job on Workday was missed) ---------------------------
 // Many large employers list jobs on Workday. Its careers sites are drawn by scripts, but they
 // read their jobs from a public JSON service on the same site, which we read the same way.
@@ -341,10 +425,12 @@ export function detectSource(input: string, name?: string): SourceSpec | null {
   if (wd) return { type: "ats_api", kind: "workday", key: workdayKey(wd), name: name?.trim() || titleCase(wd.tenant), url: `https://${wd.host}/${wd.site}` };
   const adp = parseAdp(url.href);
   if (adp) return { type: "ats_api", kind: "adp", key: adp.cid, name: name?.trim() || "ADP", url: adpBoardUrl(adp) };
+  const df = parseDayforce(url.href);
+  if (df) return { type: "ats_api", kind: "dayforce", key: dayforceKey(df), name: name?.trim() || titleCase(df.client), url: dayforceBoardUrl(df) };
   return { type: "careers_page", kind: "careers_page", key: `${url.origin}${url.pathname}`.replace(/\/$/, ""), name: name?.trim() || titleCase(url.hostname.replace(/^www\.|^careers\.|^jobs\./, "").split(".")[0]!), url: url.href };
 }
 
-export interface JobLink { kind: AtsKind | "workday" | "adp" | "page" | "no_fetch"; board?: string; id?: string; url: string }
+export interface JobLink { kind: AtsKind | "workday" | "adp" | "dayforce" | "page" | "no_fetch"; board?: string; id?: string; url: string }
 
 /** One job's address: which board it lives on, and its id there. */
 export function detectJobLink(input: string): JobLink | null {
@@ -366,6 +452,8 @@ export function detectJobLink(input: string): JobLink | null {
   if (wd?.jobPath) return { kind: "workday", board: workdayKey(wd), id: wd.jobPath, url: url.href };
   const adp = parseAdp(url.href);
   if (adp?.jobId) return { kind: "adp", board: adp.cid, id: adp.jobId, url: url.href };
+  const df = parseDayforce(url.href);
+  if (df?.jobId) return { kind: "dayforce", board: dayforceKey(df), id: df.jobId, url: dayforceJobUrl(df, df.jobId) };
   return { kind: "page", url: url.href };
 }
 
@@ -529,6 +617,7 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
     }
     case "workday": return fetchWorkday(spec, f, wanted, maxDetails, terms, wait);
     case "adp": return fetchAdp(spec, f, wanted, maxDetails);
+    case "dayforce": return fetchDayforce(spec, f);
     case "careers_page": {
       const page = await f.get(spec.url, { kind: "page" });
       let postings = jobPostingsFromHtml(page.text, page.url);
@@ -577,6 +666,11 @@ export async function fetchJobLink(link: JobLink, f: Fetcher): Promise<RawPostin
       const site = parseAdp(link.url) ?? { cid: link.board ?? "", ccId: ADP_CCID, jobId: link.id ?? null };
       const d = JSON_OR((await f.get(`${adpApi(site)}/${encodeURIComponent(link.id ?? "")}?${adpQuery(site)}`)).text, "ADP");
       return readAdpJob(d, site, "");
+    }
+    case "dayforce": {
+      const site = dayforceFromKey(link.board ?? "");
+      const page = await f.get(dayforceJobUrl(site, link.id ?? ""), { kind: "page" });
+      return dayforceJobFromPage(page.text, site, "");
     }
     case "page": {
       const page = await f.get(link.url, { kind: "page" });

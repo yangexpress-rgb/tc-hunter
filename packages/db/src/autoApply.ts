@@ -483,7 +483,7 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
     const rows = (await c.query(
       `SELECT p.employer_canonical AS employer, u.url FROM job_posting p
          CROSS JOIN LATERAL (SELECT p.apply_url AS url UNION ALL SELECT p.employer_apply_url UNION ALL SELECT ps.url FROM job_posting_source ps WHERE ps.job_posting_id = p.id) u
-        WHERE p.id <> $1 AND p.employer_canonical ILIKE $2 AND u.url ~* '(myworkdayjobs|greenhouse|lever|ashbyhq|smartrecruiters|workforcenow\\.adp)\\.'
+        WHERE p.id <> $1 AND p.employer_canonical ILIKE $2 AND u.url ~* '(myworkdayjobs|greenhouse|lever|ashbyhq|smartrecruiters|workforcenow\\.adp|dayforcehcm)\\.'
         LIMIT 200`, [posting.id, `%${key.split(" ")[0]}%`])).rows as Array<{ employer: string; url: string }>;
     return boardFromLinks(rows.filter((x) => companyKey(x.employer) === key).map((x) => x.url), employer);
   });

@@ -5,7 +5,8 @@
  */
 export const USER_AGENT = "TCHunter/1.0 (personal job search for one household; polite, cached, rate-limited)";
 
-export interface FetchResult { status: number; text: string; url: string; contentType: string; /** Retry-After, when the site sent one. */ retryAfter?: string }
+export interface FetchResult { status: number; text: string; url: string; contentType: string; /** Retry-After, when the site sent one. */ retryAfter?: string;
+  /** Cookies the site set, as "name=value" (a site's own sign-in-free token, e.g. Dayforce's request check). */ cookies?: string[] }
 /** headers: extra request headers (an API key a job-search site asks for). body: sends a JSON POST instead of a GET. */
 /** The start of an error page, as plain text: ` — "Access denied …"`. */
 export function excerpt(text: string): string {
@@ -47,7 +48,7 @@ export class SourceRefusedError extends Error {
 }
 
 type RawFetch = (url: string, init: { headers: Record<string, string>; signal: AbortSignal; redirect: "follow"; method?: string; body?: string }) => Promise<{
-  status: number; url: string; headers: { get(n: string): string | null }; text(): Promise<string>;
+  status: number; url: string; headers: { get(n: string): string | null; getSetCookie?(): string[] }; text(): Promise<string>;
 }>;
 
 /** Parses a robots.txt for our agent ("TCHunter") or "*". Returns a function: may we fetch this path? */
@@ -120,7 +121,9 @@ export class PoliteFetcher implements Fetcher {
       // Job feeds of big employers (Databricks on Greenhouse, Veeva on Lever) run past 5 MB; web pages stay capped lower.
       const cap = this.opts.maxBytes ?? (accept === "application/json" ? 40_000_000 : 5_000_000);
       if (text.length > cap) throw new SourceRefusedError("too_big", `${text.length} bytes`);
-      return { status: r.status, text, url: r.url || url, contentType: r.headers.get("content-type") ?? "", retryAfter: r.headers.get("retry-after") ?? undefined };
+      const set = r.headers.getSetCookie?.() ?? (r.headers.get("set-cookie") ? [r.headers.get("set-cookie")!] : []);
+      const cookies = set.map((c) => c.split(";")[0]!.trim()).filter((c) => /^[^=\s]+=/.test(c));
+      return { status: r.status, text, url: r.url || url, contentType: r.headers.get("content-type") ?? "", retryAfter: r.headers.get("retry-after") ?? undefined, ...(cookies.length ? { cookies } : {}) };
     } catch (e) {
       if (e instanceof SourceRefusedError) throw e;
       throw new SourceRefusedError("unreachable", (e as Error).message);
