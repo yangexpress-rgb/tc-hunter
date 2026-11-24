@@ -8,9 +8,10 @@ import {
 } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, approveDocument, deleteGoal, editDocument, getDocument, listDocuments, listMatches, listStandardDocuments, makeStandardResume,
-  removeStandardDocument, requestLink, requestTailor, resumesToCopy, runNextWork, saveGoal, saveStandardLetter, tailorWork, trackJob,
+  downloadOwnResume, exportDocument, removeStandardDocument, requestLink, saveOwnResumeFile, saveStandardResumeFile, requestTailor, resumesToCopy, runNextWork, saveGoal, saveStandardLetter, tailorWork, trackJob,
   type AppConfig, type GoalInput, type Session, type WorkDeps,
 } from "../src";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
 
 /**
@@ -191,6 +192,66 @@ describe("a new application under the goal starts from its standards", () => {
     expect(d.standard!.goalLabel).toBe("Goal-B");
     expect((d.source as ResumeSource).target.employer).toBe("");
     expect((d.source as ResumeSource).experience[0]!.included).toBe(false);
+  });
+});
+
+async function pdfWith(text: string): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage();
+  page.drawText(text, { x: 50, y: 700, size: 12, font: await doc.embedFont(StandardFonts.Helvetica) });
+  return doc.save();
+}
+
+describe("the applicant's own resume file (Yong, 2026-11-24: upload a document)", () => {
+  let file: Uint8Array;
+  it("becomes a goal's standard resume, kept exactly as uploaded", async () => {
+    file = await pdfWith("Yong Yang Solutions Lead Acme Logistics");
+    await expect(saveStandardResumeFile(pool, cfg, yong, goalA, { name: "notes.txt", bytes: new TextEncoder().encode("hello") })).rejects.toThrow("TC_RESUME_FILE_KIND");
+    const ref = await saveStandardResumeFile(pool, cfg, yong, goalA, { name: "Yong resume - Goal A.pdf", bytes: file });
+    const d = (await getDocument(pool, cfg, yong, ref))!;
+    expect(d.source.kind).toBe("resume_file");
+    expect(d.createdBy).toBe("applicant");
+    expect(d.source.kind === "resume_file" && [d.source.fileName, d.source.fileKind]).toEqual(["Yong resume - Goal A.pdf", "pdf"]);
+    expect(d.source.kind === "resume_file" && d.source.text).toContain("Solutions Lead");
+    expect(Buffer.from((await downloadOwnResume(pool, cfg, yong, ref)).bytes).equals(Buffer.from(file))).toBe(true);
+    await expect(editDocument(pool, cfg, yong, d.id, { op: "toggle_summary" })).rejects.toThrow("TC_BAD_INPUT");
+    // The file is encrypted at rest.
+    const raw = (await ownerQuery("SELECT file_enc FROM document WHERE public_ref = $1", [ref])).rows[0].file_enc as Buffer;
+    expect(raw.includes(Buffer.from("Solutions Lead"))).toBe(false);
+  });
+
+  it("a new application under the goal gets the same file, and sends it exactly as uploaded", async () => {
+    await requestLink(pool, yong, { url: "https://www.linkedin.com/jobs/view/4245", title: post.title, employer: "Fourth Co", location: "Remote", text: "Lead things." });
+    await drain();
+    const job = (await listMatches(pool, yong, { status: "all" })).rows.find((r: { employer_canonical: string }) => r.employer_canonical === "Fourth Co")!.public_ref;
+    await trackJob(pool, yong, job, "interested", goalA);
+    await drain();
+    const { resume } = await docsFor(job);
+    expect(resume!.source.kind).toBe("resume_file");
+    expect(resume!.createdBy).toBe("applicant");
+    expect(resume!.meta.proposer).toBe("goal-standard");
+    expect(resume!.source.target.employer).toBe("Fourth Co");
+    // Approve without What changed (it's the applicant's own), then the export is the file itself.
+    await approveDocument(pool, cfg, yong, resume!.id);
+    const out = await exportDocument(pool, cfg, yong, resume!.ref, "pdf");
+    expect(Buffer.from(out.bytes).equals(Buffer.from(file))).toBe(true);
+    expect([out.fileName, out.contentType]).toEqual(["Yong resume - Goal A.pdf", "application/pdf"]);
+
+    // Revising for this job: upload the edited file. It's the next version, a draft to approve.
+    const revised = await pdfWith("Yong Yang Solutions Lead for Fourth Co");
+    const ref2 = await saveOwnResumeFile(pool, cfg, yong, job, { name: "Yong resume - Fourth Co.pdf", bytes: revised });
+    const d2 = (await getDocument(pool, cfg, yong, ref2))!;
+    expect([d2.version, d2.status]).toEqual([2, "draft"]);
+    await approveDocument(pool, cfg, yong, d2.id);
+    expect(Buffer.from((await exportDocument(pool, cfg, yong, ref2, "docx")).bytes).equals(Buffer.from(revised))).toBe(true);
+    // The standard is unchanged.
+    const std = (await listStandardDocuments(pool, yong)).find((x) => x.goalId === goalA && x.kind === "resume")!;
+    expect(Buffer.from((await downloadOwnResume(pool, cfg, yong, std.ref)).bytes).equals(Buffer.from(file))).toBe(true);
+  });
+
+  it("Leo can't download it", async () => {
+    const std = (await listStandardDocuments(pool, yong)).find((x) => x.goalId === goalA && x.kind === "resume")!;
+    await expect(downloadOwnResume(pool, cfg, leo, std.ref)).rejects.toThrow("TC_NOT_FOUND");
   });
 });
 

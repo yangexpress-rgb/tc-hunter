@@ -1,4 +1,4 @@
-import { exportDocument } from "@tc-hunter/db";
+import { downloadOwnResume, exportDocument } from "@tc-hunter/db";
 import { errorCode } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -8,10 +8,11 @@ export const dynamic = "force-dynamic";
 export async function GET(_req: Request, ctx: { params: Promise<{ ref: string; format: string }> }): Promise<Response> {
   const session = await requireSession();
   const { ref, format } = await ctx.params;
-  if (!/^D-\d+$/.test(ref) || (format !== "pdf" && format !== "docx")) return new Response("Not found", { status: 404 });
+  if (!/^D-\d+$/.test(ref) || (format !== "pdf" && format !== "docx" && format !== "file")) return new Response("Not found", { status: 404 });
   const { pool, cfg } = app();
   try {
-    const f = await exportDocument(pool, cfg, session, ref, format);
+    // "file": the applicant's own uploaded resume, as uploaded (drafts too).
+    const f = format === "file" ? await downloadOwnResume(pool, cfg, session, ref) : await exportDocument(pool, cfg, session, ref, format);
     return new Response(new Uint8Array(f.bytes), {
       headers: {
         "Content-Type": f.contentType,

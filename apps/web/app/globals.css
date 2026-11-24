@@ -643,3 +643,4 @@ details.removed-sources > summary { cursor: pointer; color: var(--muted); }
 .goal-standards li > .inline-form { display: inline-flex; margin: 0 0 0 6px; vertical-align: middle; }
 .goal-standards select { max-width: 100%; width: 420px; }
 .goal-standards li > .copy-resume, .goal-standards .copy-resume { display: flex; margin: 8px 0 0; align-items: center; }
+.file-text { white-space: pre-wrap; font: inherit; font-size: 0.9rem; max-height: 480px; overflow: auto; }

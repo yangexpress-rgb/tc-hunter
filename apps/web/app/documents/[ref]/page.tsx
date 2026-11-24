@@ -1,13 +1,13 @@
 import { notFound } from "next/navigation";
 import { getDocument, markDiffViewed, remakeDocument, tailorReadiness, tailorWork, type DocumentView } from "@tc-hunter/db";
-import { activeAiProvider, docCopy, formatMetric, monthYear, type DocCopy, type LetterSource, type ResumeSource } from "@tc-hunter/domain";
+import { activeAiProvider, docCopy, formatMetric, monthYear, type DocCopy, type LetterSource, type ResumeFileSource, type ResumeSource } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
 import { TopBar } from "@/components/TopBar";
 import { flashOf } from "@/lib/profile";
 import { app, requireSession } from "@/lib/server";
-import { approveAction, confirmAliasAction, editAction, newVersionAction, reviseAction } from "../actions";
+import { approveAction, confirmAliasAction, editAction, newVersionAction, resumeFileAction, reviseAction } from "../actions";
 import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -41,9 +41,12 @@ export default async function DocumentPage(props: Props) {
   const { saved, error, params } = await flashOf(props);
   // Mode-aware words (A2, 2026-11-21): in No AI nothing on this page says an AI is writing or revising.
   const copy = docCopy(await activeAiProvider());
-  const pane = ["changes", "profile"].includes(params.pane ?? "") ? params.pane! : "doc";
+  let pane = ["changes", "profile"].includes(params.pane ?? "") ? params.pane! : "doc";
   let d = await getDocument(pool, cfg, session, ref);
   if (!d) notFound();
+  // The applicant's own resume file has one view: the file.
+  const isFile = d.source.kind === "resume_file";
+  if (isFile) pane = "doc";
   if (pane === "changes" && d.status === "draft" && !d.diffViewedAt) {
     await markDiffViewed(pool, session, d.id);
     d = (await getDocument(pool, cfg, session, ref))!;
@@ -81,12 +84,15 @@ export default async function DocumentPage(props: Props) {
       {revisionFailed ? <p className="error" role="alert">The new version couldn't be made this time. Your feedback wasn't lost: send it again below.</p> : null}
       {d.standard ? (
         <p className="status" role="status">{params.standard === "1" ? "Saved as this goal's standard. " : ""}Every new application under {d.standard.goalLabel} starts with a copy of this {d.kind === "letter" ? "letter" : "resume"}, ready for you to revise for that job and approve.
-          {d.kind === "resume" ? " Leave out, reorder or reword lines and pick your skills here once; changes count for applications made from now on." : " Write [Company] and [Job title] where each job's company and title should go."}
+          {isFile ? " It's your own file, sent exactly as uploaded. Upload a revised file here any time." : d.kind === "resume" ? " Leave out, reorder or reword lines and pick your skills here once; changes count for applications made from now on." : " Write [Company] and [Job title] where each job's company and title should go."}
           {" "}Documents already made for jobs stay as they are.</p>
       ) : d.meta.proposer === "goal-standard" ? (
         <p className="status" role="status">Started from your standard {d.kind === "letter" ? "cover letter" : "resume"}{d.meta.goal ? ` for ${String(d.meta.goal)}` : ""}. Revise it for this job, then approve it.</p>
       ) : null}
-      {d.createdBy === "applicant" && !d.standard ? (
+      {isFile && !d.standard ? (
+        <p className="status" role="status">{params.own === "1" ? "Your resume file is saved as a draft. " : ""}This is your own resume file. It&apos;s sent to {d.job.employer} exactly as you uploaded it.
+          To change it, edit your copy and upload the revised file below, then approve it.</p>
+      ) : d.createdBy === "applicant" && !d.standard ? (
         <p className="status" role="status">{params.own === "1" ? "Your letter is saved as a draft. " : ""}This is your own letter, kept in your words: TC Hunter doesn&apos;t rewrite it or check it against your profile.
           Look it over, edit or leave out any paragraph, then approve it.</p>
       ) : null}
@@ -95,19 +101,19 @@ export default async function DocumentPage(props: Props) {
           {d.meta.feedback_applied === false ? <span className="warn"> {copy.feedbackNotFollowed}</span> : null}</p>
       ) : null}
 
-      <nav className="tabs" aria-label="Views">
+      {isFile ? null : <nav className="tabs" aria-label="Views">
         <a href={`/documents/${d.ref}`} aria-current={pane === "doc" ? "page" : undefined}>This version</a>
         <a href={`/documents/${d.ref}?pane=changes`} aria-current={pane === "changes" ? "page" : undefined}>
           What changed{d.blocked.filter((b) => !b.resolvedAt).length + d.gaps.length ? <span className="count">{d.blocked.filter((b) => !b.resolvedAt).length + d.gaps.length}</span> : null}
         </a>
         <a href={`/documents/${d.ref}?pane=profile`} aria-current={pane === "profile" ? "page" : undefined}>Your profile</a>
-      </nav>
+      </nav>}
 
       {d.standard ? null : <ApproveBar d={d} here={here} />}
-      {!revising && !d.standard && (d.status === "draft" || d.status === "approved") && d.ref === latest?.ref ? (copy.revise ? <ReviseBox d={d} copy={copy} /> : draft && copy.editByHand ? <p className="muted">{copy.editByHand}</p> : null) : null}
+      {!revising && !d.standard && !isFile && (d.status === "draft" || d.status === "approved") && d.ref === latest?.ref ? (copy.revise ? <ReviseBox d={d} copy={copy} /> : draft && copy.editByHand ? <p className="muted">{copy.editByHand}</p> : null) : null}
       {d.status === "superseded" && latest ? <p className="muted">A newer version exists: <a href={`/documents/${latest.ref}`}>version {latest.version}</a>.</p> : null}
 
-      {pane === "doc" ? (d.source.kind === "resume" ? <ResumePane d={d} s={d.source} here={here} editable={draft} /> : <LetterPane d={d} s={d.source} here={here} editable={draft} name={session.preferredName} />) : null}
+      {pane === "doc" ? (d.source.kind === "resume_file" ? <FilePane d={d} s={d.source} latest={d.ref === latest?.ref} /> : d.source.kind === "resume" ? <ResumePane d={d} s={d.source} here={here} editable={draft} /> : <LetterPane d={d} s={d.source} here={here} editable={draft} name={session.preferredName} />) : null}
       {pane === "changes" ? <ChangesPane d={d} here={here} /> : null}
       {pane === "profile" ? <ProfilePane d={d} /> : null}
 
@@ -203,7 +209,8 @@ function ApproveBar({ d, here }: { d: DocumentView; here: string }) {
   }
   return (
     <section className="card approve-bar inline-actions">
-      {d.status === "approved" ? (<>
+      {d.status === "approved" && d.source.kind === "resume_file" ? <a className="button" href={`/documents/${d.ref}/file`}>Download your file</a>
+      : d.status === "approved" ? (<>
         <a className="button" href={`/documents/${d.ref}/pdf`}>Download PDF</a>
         <a className="button secondary" href={`/documents/${d.ref}/docx`}>Download Word</a>
       </>) : null}
@@ -219,6 +226,31 @@ const hidden = (d: DocumentView, here: string, fields: Record<string, string | n
     {Object.entries(fields).map(([k, v]) => <input key={k} type="hidden" name={k} value={String(v)} />)}
   </>
 );
+
+/** The applicant's own resume file: its name, a download, its text, and a way to upload a revised file. */
+function FilePane({ d, s, latest }: { d: DocumentView; s: ResumeFileSource; latest: boolean }) {
+  const size = s.byteSize >= 1024 * 1024 ? `${(s.byteSize / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(s.byteSize / 1024))} KB`;
+  return (
+    <section className="doc-preview" aria-label="This version">
+      <p><strong>{s.fileName}</strong> <span className="muted">{s.fileKind === "pdf" ? "PDF" : "Word document"} · {size}</span>{" "}
+        <a href={`/documents/${d.ref}/file`}>Download</a></p>
+      {latest ? (
+        <form action={resumeFileAction} className="inline-form">
+          {d.standard ? <input type="hidden" name="goal" value={d.standard.goalId} /> : <input type="hidden" name="job" value={d.job.ref} />}
+          <input type="hidden" name="back" value={`/documents/${d.ref}`} />
+          <label>Upload a revised file<input type="file" name="file" accept=".pdf,.docx" required /></label>
+          <button className="small secondary">Upload</button>
+        </form>
+      ) : null}
+      {s.text ? (
+        <Details summary="The text in this file">
+          <p className="muted small">TC Hunter reads this to answer the employer&apos;s questions. The file itself is sent as it is.</p>
+          <pre className="file-text">{s.text}</pre>
+        </Details>
+      ) : <p className="muted">No text could be read from this file (a scanned PDF, perhaps). It can still be sent; questions are answered from your profile.</p>}
+    </section>
+  );
+}
 
 function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource; here: string; editable: boolean }) {
   const total = s.experience.reduce((n, i) => n + i.lines.length, 0);
@@ -414,7 +446,7 @@ function ChangesPane({ d, here }: { d: DocumentView; here: string }) {
           <p className="muted">Skills listed: {s.skills.filter((k) => k.included).map((k) => k.name).join(", ") || "none"}.
             {s.skills.some((k) => !k.included) ? ` Left out: ${s.skills.filter((k) => !k.included).map((k) => k.name).join(", ")}.` : ""}</p>
         </div>
-      ) : (
+      ) : s.kind === "resume_file" ? null : (
         <div className="card">
           <h2>Where each paragraph comes from</h2>
           <ul className="plain">{s.paragraphs.map((p, i) => <li key={i}><span className="chip">{{ opening: "Opening", fit: "Why you fit", standout: "What sets you apart", evidence: "Your experience", motivation: "Your saved answer", closing: "Closing" }[p.role]}</span> {p.included ? p.text : <span className="muted">(left out) {p.text}</span>}</li>)}</ul>

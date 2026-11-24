@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { approveDocument, confirmAlias, editDocument, makeStandardResume, newVersion, removeStandardDocument, requestTailor, reviseDocument, saveOwnLetter, saveStandardLetter, type DocKind, type EditOp } from "@tc-hunter/db";
+import { approveDocument, confirmAlias, editDocument, makeStandardResume, newVersion, removeStandardDocument, requestTailor, reviseDocument, saveOwnLetter, saveOwnResumeFile, saveStandardLetter, saveStandardResumeFile, type DocKind, type EditOp } from "@tc-hunter/db";
 import { MAX_OWN_LETTER_CHARS, MAX_RESUME_BYTES, detectKind, errorCode, extractText } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -180,4 +180,31 @@ export async function removeStandardAction(form: FormData) {
   let target = `${GOALS}?saved=1#goal-${goal}`;
   try { await removeStandardDocument(app().pool, s, goal, kind); } catch (e) { target = `${GOALS}?e=${errorCode(e) ?? "TC_UNKNOWN"}#goal-${goal}`; }
   redirect(target);
+}
+
+/**
+ * The applicant's own resume file (Yong, 2026-11-24: "resume should be able to upload a document"): PDF or
+ * Word, sent exactly as uploaded. For a goal (its standard) when `goal` is set, else for one job (`job`).
+ */
+export async function resumeFileAction(form: FormData) {
+  const s = await requireSession();
+  const goal = String(form.get("goal") ?? "");
+  const job = String(form.get("job") ?? "");
+  const isGoal = /^[0-9a-f-]{36}$/.test(goal);
+  if (!isGoal && !/^[A-Za-z0-9-]{1,40}$/.test(job)) redirect(GOALS);
+  const back = String(form.get("back") ?? "");
+  const here = /^\/documents\/D-\d+$/.test(back) ? back : isGoal ? `${GOALS}#goal-${goal}` : `/jobs/${job}/resume`;
+  const file = form.get("file");
+  if (!(file instanceof File) || file.size === 0) redirect(withParam(here, "e", "TC_RESUME_UNREADABLE"));
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let ref = "";
+  try {
+    ref = isGoal ? await saveStandardResumeFile(app().pool, app().cfg, s, goal, { name: file.name, bytes })
+      : await saveOwnResumeFile(app().pool, app().cfg, s, job, { name: file.name, bytes });
+  } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("documents.resume_file_failed", { code });
+    redirect(withParam(here, "e", code));
+  }
+  redirect(`/documents/${ref}?${isGoal ? "standard" : "own"}=1`);
 }
