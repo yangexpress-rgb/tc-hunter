@@ -53,13 +53,13 @@ export default async function DocumentPage(props: Props) {
   const latest = d.versions[0];
   // A resume drafted while the profile had no work history: once the profile has roles, make it again by itself
   // (Yong, 2026-11-15: "just take all the latest information available"). The empty draft stays in the history.
-  if (d.source.kind === "resume" && draft && d.source.experience.length === 0 && params.revising !== "1" && d.ref === latest?.ref
+  if (d.source.kind === "resume" && draft && !d.standard && d.source.experience.length === 0 && params.revising !== "1" && d.ref === latest?.ref
       && (await tailorReadiness(pool, session)).roles > 0) {
     await remakeDocument(pool, session, d.id);
     redirect(`/documents/${d.ref}?revising=1`);
   }
   // After "Revise with feedback": wait here, then move to the new version once it's made.
-  const work = params.revising === "1" ? await tailorWork(pool, session, d.job.ref) : null;
+  const work = params.revising === "1" && !d.standard ? await tailorWork(pool, session, d.job.ref) : null;
   const revising = !!work && (work.status === "queued" || work.status === "running");
   if (params.revising === "1" && !revising && latest && latest.ref !== d.ref) redirect(`/documents/${latest.ref}?revised=1`);
   const revisionFailed = params.revising === "1" && work?.status === "failed";
@@ -68,17 +68,25 @@ export default async function DocumentPage(props: Props) {
     <>
       <TopBar signedIn />
       {/* Review starts from and returns to the application's tracker page (Yong, 2026-11-19); the job page when there's no application yet. */}
-      <p>{d.applicationRef
+      <p>{d.standard ? <a href={`/profile/goals#goal-${d.standard.goalId}`}>← Back to your goals</a>
+        : d.applicationRef
         ? <a href={`/applications/${d.applicationRef}#stage-getting_ready`}>← Back to your application: {d.job.title}</a>
         : <a href={`/jobs/${d.job.ref}#stage-getting_ready`}>← Back to {d.job.title}</a>}</p>
-      <h1>{KIND_LABEL[d.kind]} for {d.job.title}</h1>
-      <p className="job-meta">{d.job.employer} · Version {d.version} · {STATUS_LABEL[d.status]}</p>
+      <h1>{d.standard ? `Standard ${KIND_LABEL[d.kind].toLowerCase()} for ${d.standard.goalLabel}` : `${KIND_LABEL[d.kind]} for ${d.job.title}`}</h1>
+      <p className="job-meta">{d.standard ? "Your starting point for this goal's applications" : `${d.job.employer} · Version ${d.version} · ${STATUS_LABEL[d.status]}`}</p>
       {draft && d.leaks.length ? <LeakBanner d={d} stopped={params.e === "TC_EXPORT_LEAK"} /> : <Flash saved={saved || params.approved === "1"} error={error} />}
       {params.approved === "1" ? <p className="status" role="status">Approved. You can download it below.</p> : null}
       {revising ? <><meta httpEquiv="refresh" content="4" /><p className="status" role="status">{d.source.kind === "resume" && d.source.experience.length === 0
         ? copy.remaking : copy.revising}</p></> : null}
       {revisionFailed ? <p className="error" role="alert">The new version couldn't be made this time. Your feedback wasn't lost: send it again below.</p> : null}
-      {d.createdBy === "applicant" ? (
+      {d.standard ? (
+        <p className="status" role="status">{params.standard === "1" ? "Saved as this goal's standard. " : ""}Every new application under {d.standard.goalLabel} starts with a copy of this {d.kind === "letter" ? "letter" : "resume"}, ready for you to revise for that job and approve.
+          {d.kind === "resume" ? " Leave out, reorder or reword lines and pick your skills here once; changes count for applications made from now on." : " Write [Company] and [Job title] where each job's company and title should go."}
+          {" "}Documents already made for jobs stay as they are.</p>
+      ) : d.meta.proposer === "goal-standard" ? (
+        <p className="status" role="status">Started from your standard {d.kind === "letter" ? "cover letter" : "resume"}{d.meta.goal ? ` for ${String(d.meta.goal)}` : ""}. Revise it for this job, then approve it.</p>
+      ) : null}
+      {d.createdBy === "applicant" && !d.standard ? (
         <p className="status" role="status">{params.own === "1" ? "Your letter is saved as a draft. " : ""}This is your own letter, kept in your words: TC Hunter doesn&apos;t rewrite it or check it against your profile.
           Look it over, edit or leave out any paragraph, then approve it.</p>
       ) : null}
@@ -95,8 +103,8 @@ export default async function DocumentPage(props: Props) {
         <a href={`/documents/${d.ref}?pane=profile`} aria-current={pane === "profile" ? "page" : undefined}>Your profile</a>
       </nav>
 
-      <ApproveBar d={d} here={here} />
-      {!revising && (d.status === "draft" || d.status === "approved") && d.ref === latest?.ref ? (copy.revise ? <ReviseBox d={d} copy={copy} /> : draft && copy.editByHand ? <p className="muted">{copy.editByHand}</p> : null) : null}
+      {d.standard ? null : <ApproveBar d={d} here={here} />}
+      {!revising && !d.standard && (d.status === "draft" || d.status === "approved") && d.ref === latest?.ref ? (copy.revise ? <ReviseBox d={d} copy={copy} /> : draft && copy.editByHand ? <p className="muted">{copy.editByHand}</p> : null) : null}
       {d.status === "superseded" && latest ? <p className="muted">A newer version exists: <a href={`/documents/${latest.ref}`}>version {latest.version}</a>.</p> : null}
 
       {pane === "doc" ? (d.source.kind === "resume" ? <ResumePane d={d} s={d.source} here={here} editable={draft} /> : <LetterPane d={d} s={d.source} here={here} editable={draft} name={session.preferredName} />) : null}
@@ -278,7 +286,8 @@ function ResumePane({ d, s, here, editable }: { d: DocumentView; s: ResumeSource
 function SummaryBlock({ d, s, here, editable }: { d: DocumentView; s: ResumeSource; here: string; editable: boolean }) {
   const sum = s.summary;
   if (!sum) {
-    return editable ? <p className="muted">No summary at the top: your profile has no About yet. <a href="/profile#about">Add your About</a>, then make a new version.</p> : null;
+    return editable ? <p className="muted">No summary at the top: your profile has no About yet. <a href="/profile#about">Add your About</a>{d.standard
+      ? ", and it goes at the top of each job's copy." : ", then make a new version."}</p> : null;
   }
   return (
     <div id="summary" className={`doc-para${sum.included ? "" : " is-off"}${leakAt(d, "summary") ? " has-leak" : ""}`}>
@@ -305,7 +314,7 @@ function SummaryBlock({ d, s, here, editable }: { d: DocumentView; s: ResumeSour
 function LetterPane({ d, s, here, editable, name }: { d: DocumentView; s: LetterSource; here: string; editable: boolean; name: string }) {
   return (
     <section className="doc-preview" aria-label="This version">
-      <p>Dear {s.target.employer} hiring team,</p>
+      <p>Dear {s.target.employer || "[Company]"} hiring team,</p>
       {s.paragraphs.map((p, i) => (
         <div key={i} id={`para-${i}`} className={`doc-para${p.included ? "" : " is-off"}${leakAt(d, `para-${i}`) ? " has-leak" : ""}`}>
           <p>{p.text}</p>

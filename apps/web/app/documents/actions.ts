@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { approveDocument, confirmAlias, editDocument, newVersion, requestTailor, reviseDocument, saveOwnLetter, type DocKind, type EditOp } from "@tc-hunter/db";
+import { approveDocument, confirmAlias, editDocument, makeStandardResume, newVersion, removeStandardDocument, requestTailor, reviseDocument, saveOwnLetter, saveStandardLetter, type DocKind, type EditOp } from "@tc-hunter/db";
 import { MAX_OWN_LETTER_CHARS, MAX_RESUME_BYTES, detectKind, errorCode, extractText } from "@tc-hunter/domain";
 import { app, log, requireSession } from "@/lib/server";
 
@@ -122,4 +122,62 @@ export async function reviseAction(form: FormData) {
   const ref = String(form.get("ref") ?? "");
   const back = /^D-\d+$/.test(ref) ? `/documents/${ref}` : "/documents";
   await act(form, () => reviseDocument(app().pool, s, String(form.get("doc")), String(form.get("feedback") ?? "")), back, "revising");
+}
+
+// ---------------------------------------------------------------------------
+// Standard documents per goal (Yong, 2026-11-24)
+// ---------------------------------------------------------------------------
+
+const GOALS = "/profile/goals";
+const goalIdOf = (form: FormData) => {
+  const id = String(form.get("goal") ?? "");
+  if (!/^[0-9a-f-]{36}$/.test(id)) redirect(GOALS);
+  return id;
+};
+
+/** A goal's standard resume: from the profile as it is, or copied from a resume made for a job. Opens it in the studio. */
+export async function makeStandardResumeAction(form: FormData) {
+  const s = await requireSession();
+  const goal = goalIdOf(form);
+  const from = String(form.get("from") ?? "").trim();
+  let ref = "";
+  try { ref = await makeStandardResume(app().pool, app().cfg, s, goal, /^D-\d+$/.test(from) ? from : null); } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("documents.standard_resume_failed", { code });
+    redirect(`${GOALS}?e=${code}#goal-${goal}`);
+  }
+  redirect(`/documents/${ref}?standard=1`);
+}
+
+/** A goal's standard cover letter: pasted text, or the text of a PDF, Word or text file. Kept word for word. */
+export async function standardLetterAction(form: FormData) {
+  const s = await requireSession();
+  const goal = goalIdOf(form);
+  const here = `${GOALS}/${goal}/letter`;
+  let text = String(form.get("text") ?? "");
+  const file = form.get("file");
+  if (file instanceof File && file.size > 0) {
+    if (file.size > MAX_RESUME_BYTES) redirect(`${here}?e=TC_RESUME_TOO_BIG`);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const kind = detectKind(file.name, bytes);
+    if (!kind) redirect(`${here}?e=TC_LETTER_UNREADABLE`);
+    try { text = await extractText(kind, bytes); } catch { redirect(`${here}?e=TC_LETTER_UNREADABLE`); }
+    if (!text.trim()) redirect(`${here}?e=TC_LETTER_UNREADABLE`);
+  }
+  let ref = "";
+  try { ref = await saveStandardLetter(app().pool, s, goal, text.slice(0, MAX_OWN_LETTER_CHARS)); } catch (e) {
+    const code = errorCode(e) ?? "TC_UNKNOWN";
+    log.warn("documents.standard_letter_failed", { code });
+    redirect(`${here}?e=${code}`);
+  }
+  redirect(`/documents/${ref}?standard=1`);
+}
+
+export async function removeStandardAction(form: FormData) {
+  const s = await requireSession();
+  const goal = goalIdOf(form);
+  const kind: DocKind = form.get("kind") === "letter" ? "letter" : "resume";
+  let target = `${GOALS}?saved=1#goal-${goal}`;
+  try { await removeStandardDocument(app().pool, s, goal, kind); } catch (e) { target = `${GOALS}?e=${errorCode(e) ?? "TC_UNKNOWN"}#goal-${goal}`; }
+  redirect(target);
 }
