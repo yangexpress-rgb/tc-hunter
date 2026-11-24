@@ -62,7 +62,7 @@ export const THIN_TEXT_CHARS = 1500;
  * The hiring systems whose job pages the server reads for one job's text. A job board or careers page is
  * never read for it, and neither is Workday: it turns the server away, and TC Hunter for Mac reads it.
  */
-const FULL_TEXT_KINDS = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "adp"]);
+const FULL_TEXT_KINDS = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "adp", "dayforce"]);
 
 /**
  * Puts the employer's full text on a posting that had only a thin copy's, reads its requirements again

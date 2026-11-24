@@ -1,4 +1,4 @@
-import { careersGuesses, findBoard, tokenGuesses, type CareersLookup } from "../jobs/discover";
+import { careersGuesses, findBoard, rankCareers, tokenGuesses, type CareersLookup } from "../jobs/discover";
 import { SourceRefusedError, type Fetcher } from "../jobs/fetcher";
 import { detectJobLink, detectSource, fetchSource, isJobBoardHost, isNoFetchHost, unreadableCareersSystem, workdayFromKey, type WorkdaySite } from "../jobs/sources";
 import { detectAts, isAvature } from "../packet/adapters";
@@ -130,8 +130,8 @@ export function boardFromLinks(urls: string[], name: string): SourceSpec | null 
   return [...count.values()].sort((a, b) => b.n - a.n)[0]?.spec ?? null;
 }
 
-const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "adp", "careers_page"]);
-const LISTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "adp"]);
+const SUPPORTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "adp", "dayforce", "careers_page"]);
+const LISTED = new Set(["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "adp", "dayforce"]);
 
 /**
  * The link hunt (redesign §B, 2026-11-21): one fixed ladder, tried in order, every step's outcome
@@ -169,7 +169,7 @@ export function trailWords(trail: LinkTrail[]): string {
 export function boardFits(spec: SourceSpec, employer: string): boolean {
   // An ADP career center is named by a number, not the employer's name: a link the posting itself gives is taken as the employer's.
   if (spec.kind === "adp") return true;
-  const key = (spec.kind === "workday" ? spec.key.split("/")[1] ?? "" : spec.key).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const key = (spec.kind === "workday" ? spec.key.split("/")[1] ?? "" : spec.kind === "dayforce" ? spec.key.split("/")[0] ?? "" : spec.key).toLowerCase().replace(/[^a-z0-9]/g, "");
   if (!key) return false;
   const words = titleWords(employer).filter((w) => w.length >= 3);
   const joined = words.join("");
@@ -602,7 +602,9 @@ export async function hiringSiteByBrowsing(starts: string[], name: string, brows
         .filter((l) => { try { const u = new URL(l.href); return u.protocol === "https:" && sites.has(siteOf(u.hostname)) && (CAREER_WORDS.test(l.text ?? "") || CAREER_PATH.test(`${u.hostname}${u.pathname}`)); } catch { return false; } })
         .sort((a, b) => Number(CAREER_WORDS.test(b.text ?? "")) - Number(CAREER_WORDS.test(a.text ?? "")))
         .map((l) => l.href);
-      queue.unshift(...next.slice(0, 3).filter((h) => !seen.has(h.replace(/[#?].*$/, "").replace(/\/$/, ""))));
+      // A front page that only asks which country's site to open leads on to the US site (Taiho Oncology, 2026-11-24).
+      if (!next.length) next.push(...links.map((l) => l.href).filter((h) => { try { const u = new URL(h); return u.protocol === "https:" && sites.has(siteOf(u.hostname)) && /^\/(us|usa|en-us|us-en)\/?$/i.test(u.pathname); } catch { return false; } }).slice(0, 1));
+      queue.unshift(...rankCareers(next).slice(0, 3).filter((h) => !seen.has(h.replace(/[#?].*$/, "").replace(/\/$/, ""))));
     }
     return null;
   } finally {

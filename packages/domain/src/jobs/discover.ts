@@ -1,6 +1,6 @@
 import { jobLinksFromHtml, jobPostingsFromHtml } from "./jsonld";
 import { SourceRefusedError, type Fetcher } from "./fetcher";
-import { detectSource, isNoFetchHost, parseAdp, parseWorkday, unreadableCareersSystem, workdayHasJobs } from "./sources";
+import { detectSource, isNoFetchHost, parseAdp, parseDayforce, parseWorkday, unreadableCareersSystem, workdayHasJobs } from "./sources";
 import type { AtsKind, SourceSpec } from "./types";
 
 /**
@@ -145,7 +145,7 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
       const spec = detectSource(idea.careersUrl, idea.name);
       const wd = parseWorkday(idea.careersUrl);
       if (spec && wd && spec.kind === "workday") { if (await workdayHasJobs(wd, f)) return spec; }
-      else if (spec && spec.kind === "adp") return skip.has(`adp:${spec.key}`) ? null : spec;
+      else if (spec && (spec.kind === "adp" || spec.kind === "dayforce")) return skip.has(`${spec.kind}:${spec.key}`) ? null : spec;
       else if (spec && spec.kind === "careers_page" && !isNoFetchHost(spec.url)) {
         const page = await f.get(spec.url, { kind: "page" });
         const board = await boardOnPage(page.text, idea.name, f, skip);
@@ -157,12 +157,24 @@ async function findBoardRaw(idea: Pick<CompanyIdea, "name" | "boards" | "careers
           try { if (jobPostingsFromHtml((await f.get(link, { kind: "page" })).text, link).length) return spec; } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
         }
         // A front page or "about us" page that links on to the careers page (Wiley, 2026-11-21: wiley.com's
-        // careers page is /en-us/about-us/careers, which links to wiley.wd1.myworkdayjobs.com). Two hops at most.
-        for (const link of careersLinks(page.text, page.url).slice(0, 2)) {
+        // careers page is /en-us/about-us/careers, which links to wiley.wd1.myworkdayjobs.com). A front page
+        // that only asks for a country leads on to its US site first (Taiho Oncology, 2026-11-24:
+        // taihooncology.com → /us/ → /us/careers/job-postings/ → its Dayforce board). Links that name job
+        // postings or openings go first. Three more pages at most.
+        let queue = careersLinks(page.text, page.url);
+        if (!queue.length) queue = regionLinks(page.text, page.url).slice(0, 1);
+        queue = rankCareers(queue);
+        const seen = new Set([page.url.replace(/\/$/, "")]);
+        for (let budget = 3; queue.length && budget > 0;) {
+          const link = queue.shift()!;
+          if (seen.has(link.replace(/\/$/, ""))) continue;
+          seen.add(link.replace(/\/$/, ""));
+          budget--;
           try {
             const next = await f.get(link, { kind: "page" });
             const b = await boardOnPage(next.text, idea.name, f, skip);
             if (b) return b;
+            queue = rankCareers([...queue, ...careersLinks(next.text, next.url).filter((u) => !seen.has(u.replace(/\/$/, "")) && !queue.includes(u))]);
           } catch (e) { if (!(e instanceof SourceRefusedError)) throw e; }
         }
       }
@@ -189,6 +201,11 @@ async function boardOnPage(text: string, name: string, f: Fetcher, skip: Set<str
     const site = parseAdp(m[0]);
     if (site && !skip.has(`adp:${site.cid}`)) return detectSource(m[0].replace(/&amp;/g, "&"), name);
   }
+  // A Dayforce job board (Taiho Oncology's job postings page links to one, 2026-11-24).
+  for (const m of text.matchAll(/https:\/\/[a-z0-9-]+\.dayforcehcm\.com\/[^"'\s<>]+/gi)) {
+    const site = parseDayforce(m[0].replace(/&amp;/g, "&"));
+    if (site && !skip.has(`dayforce:${site.client}/${site.board}`)) return detectSource(m[0].replace(/&amp;/g, "&"), name);
+  }
   for (const m of text.matchAll(/https:\/\/(?:boards|job-boards)(?:\.eu)?\.greenhouse\.io\/(?:embed\/job_board\?for=)?[a-z0-9_-]+|https:\/\/jobs\.(?:eu\.)?lever\.co\/[a-z0-9_.-]+|https:\/\/jobs\.ashbyhq\.com\/[a-z0-9_.%-]+|https:\/\/(?:jobs|careers)\.smartrecruiters\.com\/[a-z0-9_-]+/gi)) {
     const b = detectSource(m[0], name);
     if (!b || b.kind === "careers_page" || b.kind === "workday" || skip.has(`${b.kind}:${b.key}`)) continue;
@@ -214,6 +231,32 @@ export function careersLinks(html: string, pageUrl: string): string[] {
     out.push(href);
   }
   return out;
+}
+
+/** Careers links that name job postings or openings first ("/careers/job-postings/" before "/careers/culture/"), the rest in order. */
+export function rankCareers(links: string[]): string[] {
+  const jobsy = (u: string) => /job|posting|opening|opportunit|position|vacanc|search|current/i.test(u.replace(/^https?:\/\/[^/]+/, ""));
+  return [...links.filter(jobsy), ...links.filter((u) => !jobsy(u))];
+}
+
+/**
+ * A front page that only asks which country's site to open (taihooncology.com, 2026-11-24): its links to
+ * the US or English site on the same company's web address ("/us/", "/en-us/"), US first.
+ */
+export function regionLinks(html: string, pageUrl: string): string[] {
+  let here: URL;
+  try { here = new URL(pageUrl); } catch { return []; }
+  const site = (h: string) => h.split(".").slice(-2).join(".");
+  const out: string[] = [];
+  for (const m of html.matchAll(/href="([^"]+)"/g)) {
+    let u: URL;
+    try { u = new URL(m[1]!.replace(/&amp;/g, "&"), here); } catch { continue; }
+    if (u.protocol !== "https:" || site(u.hostname) !== site(here.hostname)) continue;
+    if (!/^\/(us|usa|en-us|us-en|en_us|en)\/?$/i.test(u.pathname)) continue;
+    u.hash = ""; u.search = "";
+    if (!out.includes(u.href)) out.push(u.href);
+  }
+  return out.sort((a, b) => Number(/\/en\/?$/i.test(new URL(a).pathname)) - Number(/\/en\/?$/i.test(new URL(b).pathname)));
 }
 
 /** Looks up where an employer lists its jobs when the usual board names don't answer (Claude, when set up). */
