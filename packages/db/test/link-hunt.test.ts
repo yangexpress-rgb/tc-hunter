@@ -205,6 +205,41 @@ describe("Capital One from LinkedIn, found by its requisition ID (acceptance fix
   });
 });
 
+describe("job posters that hide the employer (Swooped, 2026-11-24)", () => {
+  it("a Swooped job that says only \"our client\": no hunt for Swooped's careers site, no retries, a plain final reason", async () => {
+    fetcher = { get: async (u) => { asked.push(u); return notFound(u); } };
+    const before = asked.length;
+    const ref = await linkedInJob("Swooped", 7, "Vice President Information Technology", "Our client is seeking a Vice President of Information Technology.\n\nRequirements:\n- IT leadership");
+    await runApplies();
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.status).toBe("failed");
+    expect(s.problem).toMatch(/posted by Swooped, which posts other companies' jobs without naming them\. The posting doesn't say who the employer is/);
+    expect(s.problem).not.toMatch(/looks again/);
+    expect(s.lookAgainAt).toBeNull();
+    // Nothing was fetched looking for "Swooped's" site.
+    expect(asked.slice(before).filter((u) => /swooped/i.test(u))).toEqual([]);
+    const p = (await ownerQuery("SELECT employer_lookup FROM job_posting WHERE employer_canonical = 'Swooped'")).rows[0];
+    expect(p.employer_lookup).toMatchObject({ found: false, failure: "hidden_employer", retry: false });
+  });
+
+  it("a Swooped job that names the employer outright is looked for on that employer's own board", async () => {
+    const api = "https://boards-api.greenhouse.io/v1/boards/acmefreight/jobs";
+    const job = { id: 9, title: "Director of IT", location: { name: "Remote, US" }, absolute_url: "https://job-boards.greenhouse.io/acmefreight/jobs/9", content: "IT" };
+    fetcher = { async get(url) {
+      if (url === api) return json(url, { jobs: [{ id: 9 }] });
+      if (url === `${api}?content=true`) return json(url, { jobs: [job] });
+      return notFound(url);
+    } };
+    const ref = await linkedInJob("Swooped", 8, "Director of IT", "Swooped is hiring on behalf of Acme Freight.\n\nRequirements:\n- IT leadership");
+    await runApplies();
+    const p = (await ownerQuery("SELECT employer_apply_url FROM job_posting WHERE employer_canonical = 'Swooped' AND title = 'Director of IT'")).rows[0];
+    expect(p.employer_apply_url).toBe("https://job-boards.greenhouse.io/acmefreight/jobs/9");
+    const s = await applyStatus(pool, yong, ref);
+    expect(s.steps.map((x) => x.text).join("\n")).toMatch(/Swooped posted this job for Acme Freight, as its text says/);
+    expect(s.steps.map((x) => x.text).join("\n")).toMatch(/Opening Acme Freight's job page/);
+  });
+});
+
 describe("pasted links take the strong path (§B)", () => {
   const owner = (): DeviceOwner => ({ deviceId: "test-desktop", session: yong });
   const link = "https://wiley.wd1.myworkdayjobs.com/en-US/External/job/Hoboken-NJ/Senior-Product-Manager_R2601352";

@@ -58,6 +58,8 @@ const JOB_BOARDS: Array<[string, RegExp]> = [
   ["Working Nomads", /(^|\.)workingnomads\.com$/i],
   ["Jobgether", /(^|\.)jobgether\.com$/i],
   ["Getwork", /(^|\.)getwork\.com$/i],
+  ["Swooped", /(^|\.)swooped\.co$/i],
+  ["Jobright", /(^|\.)jobright\.ai$/i],
 ];
 
 /** The job-gathering site a link belongs to ("Adzuna"), or null when it isn't one. */

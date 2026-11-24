@@ -3,7 +3,7 @@ import type pg from "pg";
 import {
   ADAPTERS, RulesRequirementsReader, APPLY_PROBLEM, AVATURE, multiStepConfirmed, createLogger, DEFAULT_APPLY_MODE, SERVER_APPLY_ATS, STANDING_ANSWERS, WORKDAY, confirmationIn, decryptField, detectAts, encryptField, formFingerprint,
   looksConfirmed, newSitePassword, SecretValue, willFill, workdayTenant, proposeFields, DEGREE_QUESTION, degreeChoice, degreeLevel, START_QUESTION, startDateFrom, startDatePart, FORM_DATE, questionNames,
-  checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, coverageLine, NEW_QUESTION, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, isTransientLinkFailure, linksIn, reqIdsInUrl, reqIdsOf, trailWords, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
+  checkContext, checkEssay, essayLimit, isEssayQuestion, leftForYouLine, coverageLine, NEW_QUESTION, isHeardAbout, boardFromLinks, companyKey, employerSites, findOnEmployerSite, hiddenEmployerPoster, namedEmployerIn, isTransientLinkFailure, linksIn, reqIdsInUrl, reqIdsOf, trailWords, isJobBoardHost, isNoFetchHost, jobBoardName, pickEmployerLink, securityCodeAsked, securityCodeLength,
   type Coverage, type CareersLookup, type Fetcher, type SiteBrowser, type SourceSpec, type WorkdaySearch,
   HANDOVER_PROBLEM, PERSONAL_STEPS, handoverHours, handoverSentence, type HandoverPhase, type HandoverStep, type HeldSession, type HeldSessions,
   type AnswerInferrer, type EssayDrafter, type InferOutcome, type InferQuestion,
@@ -439,26 +439,43 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
     `SELECT p.id, p.title, p.location_raw, p.apply_url, coalesce(p.employer_apply_url, (SELECT r.employer_apply_url FROM job_posting r WHERE r.id = p.merged_into)) AS employer_apply_url,
             p.employer_lookup, left(p.description_text, 20000) AS description FROM job_posting p JOIN application a ON a.job_posting_id = p.id WHERE a.id = $1`, [app.id])).rows[0] as
     { id: string; title: string; location_raw: string | null; apply_url: string | null; employer_apply_url: string | null; employer_lookup: { found?: boolean; tries?: number } | null; description: string | null });
+  // A site that posts other companies' jobs under its own name (Swooped): the real employer is the one the
+  // posting names outright, if it does; it's never guessed (Yong, 2026-11-24).
+  const poster = hiddenEmployerPoster(app.employer);
+  const named = poster ? namedEmployerIn(posting.description, poster) : null;
+  const employer = named ?? app.employer;
   // How many times the employer's posting has been looked for without luck, this time included.
   const tries = (posting.employer_lookup?.found === false ? (posting.employer_lookup.tries ?? 1) : 0) + 1;
   if (posting.employer_apply_url) {
-    await run.note(`Found on ${site}. Applying on ${app.employer}'s own site instead, where TC Hunter found the same job earlier`);
+    await run.note(`Found on ${site}. Applying on ${employer}'s own site instead, where TC Hunter found the same job earlier`);
     return posting.employer_apply_url;
   }
   const giveUp = async (why: string, again = false) => {
     const or = again ? "Or, to apply now, " : "";
     await run.end("failed", board
-      ? `This job came from ${site}, which only lists jobs from other sites, and its link didn't lead TC Hunter to ${app.employer}'s own posting. It looked for the same job on ${app.employer}'s own careers site, but ${why}. ${or}${or ? "open" : "Open"} the job on ${site} and apply on the employer's site yourself, then choose "I applied" here.`
-      : `This job came from ${site}, and TC Hunter never applies there for you. It looked for the same job on ${app.employer}'s own careers site, but ${why}. ${or}${or ? "apply" : "Apply"} on ${site} yourself, then choose "I applied" here.`);
+      ? `This job came from ${site}, which only lists jobs from other sites, and its link didn't lead TC Hunter to ${employer}'s own posting. It looked for the same job on ${employer}'s own careers site, but ${why}. ${or}${or ? "open" : "Open"} the job on ${site} and apply on the employer's site yourself, then choose "I applied" here.`
+      : `This job came from ${site}, and TC Hunter never applies there for you. It looked for the same job on ${employer}'s own careers site, but ${why}. ${or}${or ? "apply" : "Apply"} on ${site} yourself, then choose "I applied" here.`);
     return null;
   };
   // Not found yet, for a reason that can clear by itself: TC Hunter looks again on its own after 1, 4
   // and 9 hours, and starts applying when it finds the job (Yong, 2026-11-21; redesign §B: one policy for
   // every such reason). The run shows when the next try is.
   const lookAgain = (why: string) => `${why}. TC Hunter looks again by itself in about ${tries * tries} hour${tries > 1 ? "s" : ""} and starts applying there when it finds the job, still asking you before anything is sent`;
+  if (poster && !named) {
+    await withApplicant(pool, auto, (c) => c.query("UPDATE job_posting SET employer_lookup = $2 WHERE id = $1",
+      [posting.id, JSON.stringify({ found: false, reason: "hidden_employer", failure: "hidden_employer", poster, step: 0, trail: [], tries, retry: false, at: new Date() })]));
+    applyLog.info("apply.employer_site", { found: false, failure: "hidden_employer", step: 0, tries, retry: false });
+    await run.end("failed", `This job came from ${site}, posted by ${poster === "a hidden company" ? "a company that keeps its name hidden" : `${poster}, which posts other companies' jobs without naming them`}. The posting doesn't say who the employer is, so TC Hunter can't find their own careers site and has stopped looking. To apply, open the job on ${site} and apply yourself, then choose "I applied" here. Or pass this job.`);
+    return null;
+  }
+  if (named) {
+    await run.note(`${app.employer} posted this job for ${named}, as its text says. Looking on ${named}'s own site`);
+    // The rest of this run (its page, its form, its confirmation) is the named employer's, not the poster's.
+    app.employer = named;
+  }
   if (!deps.fetcher) return giveUp("looking up employers' sites isn't set up on this server");
-  await run.step(board ? `Looking for the same job on ${app.employer}'s own careers site` : `Found on ${site}, where TC Hunter never applies. Looking for the same job on ${app.employer}'s own careers site`);
-  const key = companyKey(app.employer);
+  await run.step(board ? `Looking for the same job on ${employer}'s own careers site` : `Found on ${site}, where TC Hunter never applies. Looking for the same job on ${employer}'s own careers site`);
+  const key = companyKey(employer);
   const known = key ? await withApplicant(pool, auto, async (c) => (await c.query(
     `SELECT s.name, s.type, s.kind, s.source_key AS key, s.url FROM employer_board b JOIN job_source s ON s.id = b.job_source_id WHERE b.company_key = $1`, [key])).rows[0] as SourceSpec | undefined) : undefined;
   // Not known yet: the hiring system the employer's other jobs here came from (Wiley, 2026-11-21).
@@ -468,16 +485,16 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
          CROSS JOIN LATERAL (SELECT p.apply_url AS url UNION ALL SELECT p.employer_apply_url UNION ALL SELECT ps.url FROM job_posting_source ps WHERE ps.job_posting_id = p.id) u
         WHERE p.id <> $1 AND p.employer_canonical ILIKE $2 AND u.url ~* '(myworkdayjobs|greenhouse|lever|ashbyhq|smartrecruiters|workforcenow\\.adp)\\.'
         LIMIT 200`, [posting.id, `%${key.split(" ")[0]}%`])).rows as Array<{ employer: string; url: string }>;
-    return boardFromLinks(rows.filter((x) => companyKey(x.employer) === key).map((x) => x.url), app.employer);
+    return boardFromLinks(rows.filter((x) => companyKey(x.employer) === key).map((x) => x.url), employer);
   });
-  if (fromOthers) await run.note(`Found ${app.employer}'s own hiring site from its other jobs in TC Hunter (${(() => { try { return new URL(fromOthers.url).hostname; } catch { return fromOthers.url; } })()})`);
+  if (fromOthers) await run.note(`Found ${employer}'s own hiring site from its other jobs in TC Hunter (${(() => { try { return new URL(fromOthers.url).hostname; } catch { return fromOthers.url; } })()})`);
   // The requisition IDs the job carries, from its addresses and its text: an ID match is the surest.
   const reqIds = reqIdsOf({ url: jobSiteUrl, applyUrl: posting.apply_url, descriptionText: posting.description });
-  const r = await findOnEmployerSite({ employer: app.employer, title: posting.title, location: posting.location_raw, reqIds }, deps.fetcher, {
+  const r = await findOnEmployerSite({ employer: employer, title: posting.title, location: posting.location_raw, reqIds }, deps.fetcher, {
     known: known ?? fromOthers, lookup: deps.careers, workdaySearch: workdaySearchIn(deps.browser),
     // Last, its own website in TC Hunter's browser, starting from any address the job's text gives.
-    browse: () => { void run.step(`Searching ${app.employer}'s own website for its careers site`); return siteBrowserIn(deps.browser); },
-    hints: employerSites(posting.description ?? "", app.employer),
+    browse: () => { void run.step(`Searching ${employer}'s own website for its careers site`); return siteBrowserIn(deps.browser); },
+    hints: employerSites(posting.description ?? "", employer),
     // First, any link the posting itself gives to the job on the employer's hiring system.
     links: linksIn(posting.description),
   });
@@ -494,7 +511,7 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
     if (r.spec && !known && key) {
       const id = await upsertSource(c, r.spec);
       await c.query(`INSERT INTO employer_board (company_key, name, job_source_id, note, checked_at) VALUES ($1, $2, $3, NULL, now())
-        ON CONFLICT (company_key) DO UPDATE SET job_source_id = coalesce(employer_board.job_source_id, EXCLUDED.job_source_id), note = CASE WHEN employer_board.job_source_id IS NULL THEN NULL ELSE employer_board.note END`, [key, app.employer, id]);
+        ON CONFLICT (company_key) DO UPDATE SET job_source_id = coalesce(employer_board.job_source_id, EXCLUDED.job_source_id), note = CASE WHEN employer_board.job_source_id IS NULL THEN NULL ELSE employer_board.note END`, [key, employer, id]);
     }
     // The site is known now: this employer's other jobs that stopped for want of it start again by themselves.
     if (r.spec && !known && key) {
@@ -519,7 +536,7 @@ async function employerSiteUrl(pool: pg.Pool, auto: RequestContext, app: AppRow,
     return giveUp(r.reason);
   }
   const host = (() => { try { return new URL(r.url).hostname; } catch { return r.url; } })();
-  await run.note(`Found it on ${app.employer}'s own site (${host}): "${r.title}"${r.location ? `, ${r.location}` : ""}${r.by === "req_id" ? ", by its requisition ID" : ""}. Applying there`);
+  await run.note(`Found it on ${employer}'s own site (${host}): "${r.title}"${r.location ? `, ${r.location}` : ""}${r.by === "req_id" ? ", by its requisition ID" : ""}. Applying there`);
   if (await sameJobFound(pool, auto, app, posting.id, r.url, reqIds, run)) return null;
   return r.url;
 }
