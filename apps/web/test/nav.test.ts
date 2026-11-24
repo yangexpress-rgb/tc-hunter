@@ -17,7 +17,9 @@ describe("app navigation", () => {
     expect(at("/jobs/J-123")).toBe("jobs:/jobs");
     expect(at("/jobs/paste")).toBe("jobs:/jobs");  // adding a job lives on Matches now
     expect(at("/applications/A-1")).toBe("applications:/applications");
-    expect(at("/documents/D-1")).toBe("documents:/documents");
+    expect(at("/documents")).toBe("applications:/documents");
+    expect(at("/documents/D-1")).toBe("applications:/documents");
+    expect(at("/documents/D-1/pdf")).toBe("applications:/documents");
   });
   it("gives each kind of setting its own page, Email among them", () => {
     expect(NAV.find((s) => s.key === "settings")!.tabs.map((t) => t.label)).toEqual(["Sign-in and security", "Email", "Job sites", "Applying for you", "Your data"]);
@@ -35,7 +37,8 @@ describe("app navigation", () => {
     expect(at("/sign-in")).toBe("none");
     expect(at("/setup-two-step")).toBe("none");
   });
-  it("has the six sections Yong asked for", () => {
-    expect(NAV.map((s) => s.label)).toEqual(["Home", "Me", "Jobs", "Applications", "Documents", "Settings"]);
+  it("has the five sections Yong asked for, Documents inside Applications", () => {
+    expect(NAV.map((s) => s.label)).toEqual(["Home", "Me", "Jobs", "Applications", "Settings"]);
+    expect(NAV.find((s) => s.key === "applications")!.tabs.map((t) => t.label)).toEqual(["Tracker", "Documents", "Reports"]);
   });
 });

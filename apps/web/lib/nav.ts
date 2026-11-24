@@ -23,10 +23,9 @@ export const NAV: NavSection[] = [
   ] },
   { key: "applications", label: "Applications", icon: "✓", tabs: [
     { href: "/applications", label: "Tracker" },
+    // Documents lives under Applications (Yong, 2026-11-24: fewer top-level tabs). Its pages keep /documents/... links.
+    { href: "/documents", label: "Documents" },
     { href: "/reports", label: "Reports" },
-  ] },
-  { key: "documents", label: "Documents", icon: "▤", tabs: [
-    { href: "/documents", label: "Resumes and letters" },
   ] },
   { key: "settings", label: "Settings", icon: "⚙", tabs: [
     // One page each (Yong, 2026-11-15: "different settings can be separated").

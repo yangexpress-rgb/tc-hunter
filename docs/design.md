@@ -539,7 +539,7 @@ All twelve were decided by Yong on 2026-11-13 and are folded into the body above
 | Rules | `packages/domain/src/tailor/` | claim checker, resume and letter builders (selection, length fit, gaps), rule and Claude proposers, PDF and Word rendering |
 | Documents | `packages/db/src/documents.ts` | profile snapshot, background drafting, edits, alias confirmation, approve with export check, new version, download |
 | Worker | `apps/worker` | runs tailoring; Claude rewording when a key is set and `TC_TAILOR_WRITER` isn't `rules` |
-| Screens | `apps/web/app/documents/*`, job detail, home | Prepare a resume (job page), document page with This version / What changed / Your profile, Approve, Download PDF / Word, Make changes; Documents list; Home next step for a waiting draft; Documents in the top bar |
+| Screens | `apps/web/app/documents/*`, job detail, home | Prepare a resume (job page), document page with This version / What changed / Your profile, Approve, Download PDF / Word, Make changes; Documents list (a tab under Applications); Home next step for a waiting draft |
 | Tests | `packages/*/test` | 318 passing (F4 in domain and through the app), plus an end-to-end browser run: prepare, refused made-up number, What changed, approve, download PDF and Word, next version |
 
 ---
