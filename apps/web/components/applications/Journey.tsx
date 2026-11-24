@@ -116,7 +116,10 @@ function Action({ a, appRef, back }: { a: JourneyAction; appRef: string; back: s
  * The same test on every page, so the list, the job page and the application page offer the same choices.
  */
 export function isStuck(j: Journey, a: { stage: string; applied_at?: Date | null }, run?: { status: string } | null): boolean {
-  return j.tone === "problem" && ["getting_ready", "ready_to_apply", "applying"].includes(j.stage)
+  // Waiting to look again for the employer's posting counts too: Pass and Remove shouldn't wait hours for the
+  // next try to end in red (Yong, 2026-11-24, a Swooped job).
+  const lookingAgain = j.tone === "active" && j.status.startsWith("Looking again by itself") && run?.status === "failed";
+  return (j.tone === "problem" || lookingAgain) && ["getting_ready", "ready_to_apply", "applying"].includes(j.stage)
     && ["interested", "tailoring", "ready_to_apply"].includes(a.stage) && !a.applied_at
     && !["queued", "running", "handover", "sent", "unclear"].includes(String(run?.status ?? ""));
 }
