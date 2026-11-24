@@ -87,7 +87,7 @@ describe("goals", () => {
     const plain = kw(base.descriptionText);
     const both = kw(`${base.descriptionText}\nSupply chain team. Mandarin speakers preferred.`);
     expect(both.points).toBeGreaterThan(plain.points);
-    expect(both.detail).toContain("Mentions your specialty: supply chain.");
+    expect(both.detail).toContain("Your specialties: supply chain — found.");
     expect(both.detail).toContain("Asks for Mandarin, a language you chose.");
     expect(plain.detail).toContain("Doesn't mention Mandarin.");
   });

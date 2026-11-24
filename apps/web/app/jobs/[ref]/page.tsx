@@ -113,7 +113,7 @@ export default async function JobPage(props: Props) {
                 {(x.g_parts as FitPart[] | null)?.length ? (
                   <Details summary={`How we worked out the G-score for this goal (${x.g_score})`}>
                     <table className="breakdown"><tbody>
-                      {(x.g_parts as FitPart[]).map((c) => <tr key={c.key}><th scope="row">{c.label}</th><td className="num">{c.points} of {c.weight}</td><td>{c.detail.join(" ")}</td></tr>)}
+                      {(x.g_parts as FitPart[]).map((c) => <tr key={c.key}><th scope="row">{c.label}</th><td className="num">{c.weight ? `${c.points} of ${c.weight}` : "Not counted"}</td><td>{c.detail.join(" ")}</td></tr>)}
                     </tbody></table>
                   </Details>
                 ) : null}
@@ -200,7 +200,7 @@ export default async function JobPage(props: Props) {
             <table className="breakdown">
               <tbody>
                 {(parts as FitPart[]).map((c) => (
-                  <tr key={c.key}><th scope="row">{c.label}</th><td className="num">{c.points} of {c.weight}</td><td>{c.detail.join(" ")}</td></tr>
+                  <tr key={c.key}><th scope="row">{c.label}</th><td className="num">{c.weight ? `${c.points} of ${c.weight}` : "Not counted"}</td><td>{c.detail.join(" ")}</td></tr>
                 ))}
               </tbody>
             </table>
@@ -213,7 +213,7 @@ export default async function JobPage(props: Props) {
             {comps.map((c) => (
               <tr key={c.key}>
                 <th scope="row">{c.label}</th>
-                <td className="num">{c.points} of {c.weight}</td>
+                <td className="num">{c.weight ? `${c.points} of ${c.weight}` : "Not counted"}</td>
                 <td>{c.detail.join(" ")}</td>
               </tr>
             ))}
