@@ -1,6 +1,6 @@
 "use server";
 import { redirect } from "next/navigation";
-import { createInvitation, remakeInvitation, revokeInvitation, setAccess } from "@tc-hunter/db";
+import { createInvitation, createPasswordReset, remakeInvitation, resetTwoStep, revokeInvitation, setAccess, setAdmin } from "@tc-hunter/db";
 import { errorCode, plainError, t, type L1Key } from "@tc-hunter/domain";
 import { app, requireSession } from "@/lib/server";
 
@@ -71,4 +71,51 @@ export async function accessAction(form: FormData): Promise<void> {
     to = `/settings/people?e=${errorCode(e) ?? "TC_UNKNOWN"}#people`;
   }
   redirect(to);
+}
+
+/** The password reset link, shown once to the admin to hand over. */
+export type ResetLinkState = { email?: string; link?: string; expires?: string; error?: string };
+
+export async function resetLinkAction(_: ResetLinkState, form: FormData): Promise<ResetLinkState> {
+  const { session } = await admin();
+  const { pool, cfg } = app();
+  const id = String(form.get("id") ?? "");
+  if (!ID.test(id)) return { error: t("error.generic") };
+  try {
+    const r = await createPasswordReset(pool, cfg, session, id);
+    return {
+      email: r.email, link: `${cfg.publicOrigin ?? ""}${r.resetPath}`,
+      expires: new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "America/New_York" }).format(r.expiresAt),
+    };
+  } catch (e) {
+    return { error: plainError(errorCode(e)) };
+  }
+}
+
+export async function twoStepResetAction(form: FormData): Promise<void> {
+  const { session } = await admin();
+  const { pool, cfg } = app();
+  const id = String(form.get("id") ?? "");
+  let to = "/settings/people?saved=1#people";
+  try {
+    if (ID.test(id)) await resetTwoStep(pool, cfg, session, id);
+  } catch (e) {
+    to = `/settings/people?e=${errorCode(e) ?? "TC_UNKNOWN"}#people`;
+  }
+  redirect(to);
+}
+
+export async function adminRoleAction(form: FormData): Promise<void> {
+  const { session } = await admin();
+  const { pool, cfg } = app();
+  const id = String(form.get("id") ?? "");
+  const on = form.get("on") === "1";
+  let to = "/settings/people?saved=1#people";
+  try {
+    if (ID.test(id)) await setAdmin(pool, cfg, session, id, on);
+  } catch (e) {
+    to = `/settings/people?e=${errorCode(e) ?? "TC_UNKNOWN"}#people`;
+  }
+  // Stepping down: the People page is no longer yours.
+  redirect(!on && id === session.userAccountId && !to.includes("e=") ? "/settings?saved=1" : to);
 }

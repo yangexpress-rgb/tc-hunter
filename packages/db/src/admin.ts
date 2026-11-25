@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type pg from "pg";
 import { INVITE_DAYS, inviteCodeHash, newInviteCode, normaliseEmail, normaliseInviteCode, type AuditAction } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -156,6 +157,76 @@ export async function setAccess(pool: pg.Pool, cfg: AppConfig, session: Session,
     if (!r.rowCount) return false;
     if (!on) await c.query("DELETE FROM user_session WHERE user_account_id = $1", [targetAccountId]);
     await auditAsAdmin(c, who, on ? "admin.access_on" : "admin.access_off", "user_account", targetAccountId, { account_ref: targetAccountId });
+    return true;
+  });
+}
+
+/** Admin actions on a person need a fresh "Confirm it's you"; the database checks admin again. */
+function adminFor(session: Session, cfg: AppConfig): AdminContext {
+  if (!hasFreshStepUp(session, cfg)) throw new Error("TC_STEP_UP_REQUIRED");
+  return { userAccountId: session.userAccountId, applicantId: session.applicantId };
+}
+
+export const RESET_HOURS = 24;
+export const resetCodeHash = (code: string) => createHash("sha256").update(code.trim()).digest("hex");
+
+/**
+ * Starts a password reset for someone else (brief section 7, Stage 3). Returns a one-time
+ * link to hand over, shown once: only its SHA-256 is stored. It works once, for RESET_HOURS
+ * hours; a new one replaces any older one. The admin never sees or sets the password.
+ */
+export async function createPasswordReset(pool: pg.Pool, cfg: AppConfig, session: Session, targetAccountId: string): Promise<{ resetPath: string; email: string; expiresAt: Date }> {
+  const who = adminFor(session, cfg);
+  if (targetAccountId === session.userAccountId) throw new Error("TC_ADMIN_SELF");
+  return withAdminScope(pool, who, async (c) => {
+    const acct = (await c.query("SELECT email FROM user_account WHERE id = $1", [targetAccountId])).rows[0];
+    if (!acct) throw new Error("TC_NOT_FOUND");
+    await c.query("DELETE FROM password_reset WHERE user_account_id = $1 AND used_at IS NULL", [targetAccountId]);
+    const code = randomBytes(32).toString("base64url");
+    const r = await c.query(
+      `INSERT INTO password_reset (user_account_id, code_hash, created_by, expires_at)
+       VALUES ($1, $2, $3, now() + make_interval(hours => $4)) RETURNING expires_at`,
+      [targetAccountId, resetCodeHash(code), who.userAccountId, RESET_HOURS]);
+    await auditAsAdmin(c, who, "admin.password_reset_made", "user_account", targetAccountId, { account_ref: targetAccountId });
+    return { resetPath: `/reset-password?code=${code}`, email: acct.email, expiresAt: r.rows[0].expires_at };
+  });
+}
+
+/**
+ * Resets someone's two-step sign-in (Stage 3). With an authenticator app: its key, any key
+ * being set up and the recovery codes are cleared, so they set it up again at next sign-in
+ * (or must, when the app requires it). Passkey-only accounts: their passkeys are removed.
+ * Returns what was reset.
+ */
+export async function resetTwoStep(pool: pg.Pool, cfg: AppConfig, session: Session, targetAccountId: string): Promise<"authenticator" | "passkeys" | "nothing"> {
+  const who = adminFor(session, cfg);
+  if (targetAccountId === session.userAccountId) throw new Error("TC_ADMIN_SELF");
+  return withAdminScope(pool, who, async (c) => {
+    const a = (await c.query("SELECT mfa_enabled, mfa_secret_enc IS NOT NULL AS has_key FROM user_account WHERE id = $1", [targetAccountId])).rows[0];
+    if (!a) throw new Error("TC_NOT_FOUND");
+    let what: "authenticator" | "passkeys" | "nothing" = "nothing";
+    if (a.mfa_enabled || a.has_key) {
+      await c.query("UPDATE user_account SET mfa_enabled = false, mfa_secret_enc = NULL, mfa_pending_secret_enc = NULL WHERE id = $1", [targetAccountId]);
+      await c.query("DELETE FROM mfa_recovery_code WHERE user_account_id = $1", [targetAccountId]);
+      what = "authenticator";
+    } else if ((await c.query("DELETE FROM passkey_credential WHERE user_account_id = $1", [targetAccountId])).rowCount) {
+      what = "passkeys";
+    }
+    if (what !== "nothing") await auditAsAdmin(c, who, "admin.two_step_reset", "user_account", targetAccountId, { account_ref: targetAccountId });
+    return what;
+  });
+}
+
+/**
+ * Makes someone an admin, or removes it (Stage 3). You may step down only while another
+ * admin remains; the last admin can never be removed (the database refuses it too).
+ */
+export async function setAdmin(pool: pg.Pool, cfg: AppConfig, session: Session, targetAccountId: string, on: boolean): Promise<boolean> {
+  const who = adminFor(session, cfg);
+  return withAdminScope(pool, who, async (c) => {
+    const r = await c.query("UPDATE user_account SET is_admin = $2 WHERE id = $1 AND is_admin <> $2 RETURNING id", [targetAccountId, on]);
+    if (!r.rowCount) return false;
+    await auditAsAdmin(c, who, "admin.role_changed", "user_account", targetAccountId, { account_ref: targetAccountId, is_admin: on });
     return true;
   });
 }

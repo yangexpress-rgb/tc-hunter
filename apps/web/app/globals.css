@@ -651,3 +651,9 @@ details.removed-sources > summary { cursor: pointer; color: var(--muted); }
 .invite-code code { font-size: 28px; font-weight: 700; letter-spacing: 0.08em; word-break: break-all; }
 #people table, #invitations table { width: 100%; }
 @media (max-width: 640px) { #people table, #invitations table { display: block; overflow-x: auto; } }
+.person-actions { display: grid; gap: 4px; justify-items: start; max-width: 100%; }
+.person-actions .invite-result { max-width: 360px; box-sizing: border-box; }
+.person-actions .invite-result p { overflow-wrap: anywhere; }
+.person-actions form { margin: 0; }
+.reset-link code { font-size: 13px; word-break: break-all; overflow-wrap: anywhere; white-space: normal; }
+#people td:last-child, #invitations td:last-child { white-space: normal; min-width: 260px; }
