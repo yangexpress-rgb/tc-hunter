@@ -76,6 +76,18 @@ export const AUDIT_ALLOWED_KEYS = {
   "scan.finished": ["sources", "checked", "new_jobs", "updated", "closed"],
   "match.feedback": ["job_ref", "action", "reason"],
   "adjustment.changed": ["kind", "active"],
+  // Invitations and admin actions (brief 2026-11-25 section 8). Only which account or invitation
+  // (by id): never a code, a hash or a password, and no email (the brief allowed one, but the log's
+  // standing rule keeps personal details out; the id leads to the email for anyone allowed to see it).
+  "invite.created": ["invitation_ref"],
+  "invite.revoked": ["invitation_ref", "reason"],
+  "invite.accepted": ["invitation_ref"],
+  "admin.access_off": ["account_ref"],
+  "admin.access_on": ["account_ref"],
+  "admin.password_reset_made": ["account_ref"],
+  "admin.password_reset_done": ["account_ref"],
+  "admin.two_step_reset": ["account_ref"],
+  "admin.role_changed": ["account_ref", "is_admin"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type AuditAction = keyof typeof AUDIT_ALLOWED_KEYS;

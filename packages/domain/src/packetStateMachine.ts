@@ -24,7 +24,8 @@ export type WaitingReason = (typeof WAITING_REASONS)[number];
 /** A failure after the submit click: nobody knows if it went through. Blocks every retry. */
 export const OUTCOME_UNKNOWN = "outcome_unknown";
 
-export type Actor = "applicant" | "system" | "automation";
+/** Who did something. "admin" is an admin managing accounts (never applicant data; brief 2026-11-25). */
+export type Actor = "applicant" | "system" | "automation" | "admin";
 
 export const PACKET_TRANSITIONS: Readonly<Record<PacketState, readonly PacketState[]>> = {
   packet_draft: ["packet_ready_for_review", "abandoned"],
