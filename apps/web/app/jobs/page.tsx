@@ -1,10 +1,10 @@
-import { getPreferences, jobsSummary, rescoreMatches, missingGoalRows, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
+import { getPreferences, jobsSummary, listSourceJobs, rescoreMatches, missingGoalRows, latestScan, listAdjustments, listAlerts, listGoals, listMatches, listSources, pendingWork } from "@tc-hunter/db";
 import { FIT_VERSION, JOB_LEVEL_FILTERS, goalLabel, PASS_REASONS, jobLevelKey, jobLevelLabel, normalizeEmployer, t, type Goal } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
 import { Flash } from "@/components/profile/Fact";
 import { DoneNotice, FeedbackButtons, FitScores, GoalChip, ago, pay, place, posted, type Learned } from "@/components/jobs/JobBits";
-import { CompanyCards, COMPANY_SORTS, FitLines, JobCards, sortRows, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
+import { CompanyCards, COMPANY_SORTS, FitLines, JobCards, sortRows, statusOf, type CompanySort, type GoalSort } from "@/components/jobs/JobCards";
 
 import { FilterBar } from "@/components/jobs/FilterBar";
 import { goalOptions, goalTargetsLine } from "@/lib/goals";
@@ -17,6 +17,8 @@ import { adjustmentAction, alertSeenAction, jobsViewAction, pasteLinkAction } fr
 export const dynamic = "force-dynamic";
 
 const TABS = [["new", "New"], ["saved", "Saved"], ["passed", "Passed"]] as const;
+// "All" shows every open job found at one source, matched or not (Yong, 2026-11-25); offered when opened for a source.
+const ALL_TAB = ["all", "All"] as const;
 const SORTS = [["g", "G-score"], ["c", "C-score"], ["score", "Best match"], ["date", "Newest"], ["salary", "Highest pay"], ["company", "Company"]] as const;
 type Sort = (typeof SORTS)[number][0];
 const SORT_KEY: Record<Sort, [GoalSort, "asc" | "desc"]> = { score: ["score", "desc"], g: ["g", "desc"], c: ["c", "desc"], date: ["posted", "desc"], salary: ["pay", "desc"], company: ["company", "asc"] };
@@ -33,7 +35,7 @@ export default async function JobsPage(props: PageProps) {
   const { saved, error, params } = await flashOf(props);
   const sp = await props.searchParams;
   const many = (k: string) => { const v = sp[k]; return (Array.isArray(v) ? v : v ? v.split(",") : []).filter(Boolean); };
-  const status = (["new", "saved", "passed"].includes(params.tab ?? "") ? params.tab : "new") as "new" | "saved" | "passed";
+  const tabAsked = (["new", "saved", "passed", "all"].includes(params.tab ?? "") ? params.tab : "new") as "new" | "saved" | "passed" | "all";
   const sort: Sort = SORTS.some(([k]) => k === params.sort) ? params.sort as Sort : "g";  // G-score first by default (Yong, 2026-11-18)
   const ladder = LADDER.some(([k]) => k && k === params.ladder) ? params.ladder : undefined;
   const showFiltered = params.filtered === "1";
@@ -54,9 +56,12 @@ export default async function JobsPage(props: PageProps) {
   const goal = manyGoals && activeGoals.some((g) => g.id === params.goal) ? params.goal : undefined;
   const labelOf = new Map(goals.map((g) => [g.id, goalLabel(g)]));
   const source = sources.some((s) => s.id === params.source) ? params.source : undefined;
+  const status = tabAsked === "all" && !source ? "new" : tabAsked;
+  const tabs = source ? [...TABS, ALL_TAB] : TABS;
+  const sourceJobs = source ? await listSourceJobs(pool, session, source) : [];
   const levels = [...new Set(many("level").filter((l) => JOB_LEVEL_FILTERS.some(([k]) => k === l)))];
   const works = [...new Set(many("work").filter((w) => WORK.some(([k]) => k === w)))];
-  const listArgs = { status, sort: sort === "company" ? "score" as const : sort, ladder, source, showFiltered, goal };
+  const listArgs = { status: status === "all" ? "new" as const : status, sort: sort === "company" ? "score" as const : sort, ladder, source, showFiltered, goal };
   let matched = await listMatches(pool, session, listArgs);
   // Jobs scored before G and C existed get both the first time Jobs opens (no fetching, rules only).
   // Also when a job lacks its row for a goal in use, which would hide it from that goal's list (2026-11-24 audit).
@@ -64,7 +69,7 @@ export default async function JobsPage(props: PageProps) {
   const { counts } = matched;
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   const workOf = (r: Record<string, any>) => r.workplace_type ?? (/remote/i.test(r.location_raw ?? "") ? "remote" : null);
-  const filtered = matched.rows.filter((r) =>
+  const filtered = (status === "all" ? sourceJobs : matched.rows).filter((r) =>
     (!levels.length || levels.includes(jobLevelKey(r.title ?? "")))
     && (!works.length || works.includes(workOf(r)))
     && (!company || normalizeEmployer(String(r.employer_canonical ?? "")) === normalizeEmployer(company))
@@ -87,7 +92,7 @@ export default async function JobsPage(props: PageProps) {
     }));
   const at = doneRow ? rows.findIndex((r) => r.id === doneRow.id) : -1;
   const nextId: string | undefined = at >= 0 ? (rows[at + 1] ?? rows[at - 1])?.id : undefined;
-  const narrowed = filtered.length !== matched.rows.length;
+  const narrowed = filtered.length !== (status === "all" ? sourceJobs : matched.rows).length;
   const q = (over: Record<string, string | undefined>) => {
     const p = new URLSearchParams();
     const all = { tab: status, view, sort, csort: csort === "g" ? undefined : csort, q: search || undefined, goal, ladder, source,
@@ -135,10 +140,10 @@ export default async function JobsPage(props: PageProps) {
           {JOBS_VIEWS.map((v) => <a key={v} href={q({ view: v })} aria-current={view === v ? "page" : undefined}>{JOBS_VIEW_LABEL[v]}</a>)}
         </nav>
         <nav className="seg" aria-label="Which jobs">
-          {TABS.map(([k, l]) => <a key={k} href={q({ tab: k })} aria-current={status === k ? "page" : undefined}>{l} <span className="count">{counts[k] ?? 0}</span></a>)}
+          {tabs.map(([k, l]) => <a key={k} href={q({ tab: k })} aria-current={status === k ? "page" : undefined}>{l} <span className="count">{k === "all" ? sourceJobs.length : counts[k] ?? 0}</span></a>)}
         </nav>
         <nav className="seg seg-end" aria-label="Sort">
-          {view === "companies"
+          {view === "companies" && status !== "all"
             ? COMPANY_SORTS.map(([k, l]) => <a key={k} href={q({ csort: k === "g" ? undefined : k })} aria-current={csort === k ? "page" : undefined}>{l}</a>)
             : SORTS.map(([k, l]) => <a key={k} href={q({ sort: k })} aria-current={sort === k ? "page" : undefined}>{l}</a>)}
         </nav>
@@ -161,7 +166,7 @@ export default async function JobsPage(props: PageProps) {
         const from = sources.find((x) => x.id === source)!;
         return (
           <p className="source-context">
-            Jobs found at <strong>{from.name}</strong>: {from.open_jobs} open{status === "new" ? `, ${counts.new ?? 0} new for you` : ""}.{" "}
+            Jobs found at <strong>{from.name}</strong>: {status === "all" ? <>{from.open_jobs} open</> : <a href={q({ tab: "all" })} title="See every job found here">{from.open_jobs} open</a>}{status === "new" ? `, ${counts.new ?? 0} new for you` : ""}.{" "}
             <a href={q({ source: undefined })}>Every source</a> · <a href="/jobs/sources#status">Back to Where we look</a>
           </p>);
       })() : null}
@@ -177,8 +182,25 @@ export default async function JobsPage(props: PageProps) {
 
       {rows.length === 0 ? (
         <p className="muted empty">{narrowed ? <>No jobs fit these filters. <a href={q({ q: undefined, goal: undefined, level: undefined, work: undefined, ladder: undefined, source: undefined, company: undefined })}>Clear them</a></>
-          : source && status === "new" ? <>None of these jobs are new for you. Look in <a href={q({ tab: "saved" })}>Saved</a> or <a href={q({ tab: "passed" })}>Passed</a>{counts.filtered ? <>, or <a href={q({ filtered: "1" })}>show the {counts.filtered} hidden by your preferences</a></> : null}.</>
+          : status === "all" ? "No open jobs found here right now."
+          : source && status === "new" ? <>None of these jobs are new for you. <a href={q({ tab: "all" })}>See all {sourceJobs.length} jobs found here</a>, or look in <a href={q({ tab: "saved" })}>Saved</a> or <a href={q({ tab: "passed" })}>Passed</a>{counts.filtered ? <>, or <a href={q({ filtered: "1" })}>show the {counts.filtered} hidden by your preferences</a></> : null}.</>
           : status === "new" ? (sources.length || goals.some((g) => g.active) ? t("jobs.empty") : t("jobs.no_sources")) : status === "saved" ? "You haven't saved any jobs yet." : "You haven't passed on any jobs."}</p>
+      ) : status === "all" ? (
+        <>
+          <p className="muted small">Every open job found here. Jobs marked <strong>Not in your matches</strong> have titles that don't fit your goals, so they aren't in New. Open one to see how it matches you; it then joins your matches.</p>
+          <ul className="job-list plain">
+            {rows.map((r) => (
+              <li key={r.posting_id} className={`job-row${r.filtered ? " is-filtered" : ""}`}>
+                <FitScores r={r} />
+                <div className="job-main">
+                  <a className="job-title" href={`/jobs/${r.public_ref}`}>{r.title}</a>
+                  <div className="job-meta">{jobLevelKey(r.title ?? "") !== "none" ? `${jobLevelLabel(jobLevelKey(r.title ?? ""))} · ` : ""}{r.employer_canonical} · {place(r)}{pay(r) ? ` · ${pay(r)}` : ""} · {posted(r.posted_at)}</div>
+                  <span className="chip">{r.id ? statusOf(r) : "Not in your matches"}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       ) : view === "jobs" ? (
         <JobCards rows={rows} back={here} done={doneRow ? { id: doneRow.id, why, learned, nextId } : undefined} />
       ) : view === "companies" ? (
