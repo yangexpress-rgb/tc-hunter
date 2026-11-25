@@ -644,3 +644,10 @@ details.removed-sources > summary { cursor: pointer; color: var(--muted); }
 .goal-standards select { max-width: 100%; width: 420px; }
 .goal-standards li > .copy-resume, .goal-standards .copy-resume { display: flex; margin: 8px 0 0; align-items: center; }
 .file-text { white-space: pre-wrap; font: inherit; font-size: 0.9rem; max-height: 480px; overflow: auto; }
+
+/* Settings › People (2026-11-25) */
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--accent); color: var(--accent); font-size: 12px; font-weight: 600; vertical-align: middle; }
+.invite-result { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--accent); border-radius: 10px; }
+.invite-code code { font-size: 28px; font-weight: 700; letter-spacing: 0.08em; word-break: break-all; }
+#people table, #invitations table { width: 100%; }
+@media (max-width: 640px) { #people table, #invitations table { display: block; overflow-x: auto; } }

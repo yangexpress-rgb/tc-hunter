@@ -21,7 +21,7 @@ export async function stepUpAction(form: FormData): Promise<void> {
     redirect(`${path}?${ok ? "confirmed=1" : "e=TC_STEP_UP_FAILED"}${hash ? `#${hash}` : ""}`);
   }
   // From another Settings page, go back to it.
-  const page = /^\/settings(\/(email|job-sites|applying|data))?$/.test(back) ? back : "/settings";
+  const page = /^\/settings(\/(email|job-sites|applying|data|people))?$/.test(back) ? back : "/settings";
   redirect(ok ? `${page}?confirmed=1` : `${page}?e=TC_STEP_UP_FAILED`);
 }
 

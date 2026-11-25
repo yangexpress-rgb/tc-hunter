@@ -2,13 +2,13 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { NAV, locate } from "@/lib/nav";
+import { NAV, locate, visibleTabs } from "@/lib/nav";
 
 /**
  * Signed-in navigation: a left sidebar of sections on desktop (a scrolling row on phones),
  * and the tabs of the current section above the page.
  */
-export function AppNav({ brand, tagline, footer }: { brand: string; tagline: string; footer?: ReactNode }) {
+export function AppNav({ brand, tagline, footer, isAdmin = false }: { brand: string; tagline: string; footer?: ReactNode; isAdmin?: boolean }) {
   const pathname = usePathname() ?? "/";
   const [hash, setHash] = useState("");
   useEffect(() => {
@@ -18,6 +18,7 @@ export function AppNav({ brand, tagline, footer }: { brand: string; tagline: str
     return () => window.removeEventListener("hashchange", read);
   }, [pathname]);
   const here = locate(pathname, hash);
+  const tabs = here ? visibleTabs(here.section, isAdmin) : [];
   return (
     <>
       <aside className="side">
@@ -32,9 +33,9 @@ export function AppNav({ brand, tagline, footer }: { brand: string; tagline: str
         </nav>
         {footer ? <div className="side-foot">{footer}</div> : null}
       </aside>
-      {here && here.section.tabs.length > 1 ? (
+      {here && tabs.length > 1 ? (
         <nav className="section-tabs" aria-label={`${here.section.label} tabs`}>
-          {here.section.tabs.map((tab) => (
+          {tabs.map((tab) => (
             <a key={tab.href} href={tab.href} aria-current={here.tab.href === tab.href ? "page" : undefined}>{tab.label}</a>
           ))}
         </nav>

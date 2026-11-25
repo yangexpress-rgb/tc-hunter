@@ -161,6 +161,7 @@ export type SignInResult =
   | { status: "ok"; token: string }
   | { status: "code_required"; token: string }
   | { status: "locked" }
+  | { status: "access_off" }
   | { status: "failed" };
 
 /** A wrong password or code: count it, and lock the account for a while after too many. */
@@ -193,7 +194,8 @@ export async function signIn(pool: pg.Pool, cfg: AppConfig, emailRaw: string, pa
   const email = emailRaw.trim().toLowerCase();
   return withSignInScope(pool, async (c) => {
     const r = await c.query(
-      "SELECT id, password_hash, mfa_enabled, coalesce(locked_until > now(), false) AS locked FROM user_account WHERE email = $1", [email]);
+      `SELECT id, password_hash, mfa_enabled, coalesce(locked_until > now(), false) AS locked, disabled_at IS NOT NULL AS access_off
+       FROM user_account WHERE email = $1`, [email]);
     const row = r.rows[0];
     // Verify against a dummy hash when there is no account, so timing doesn't reveal which emails exist.
     const ok = await verifyPassword(row?.password_hash ?? (await getDummyHash()), password);
@@ -204,6 +206,8 @@ export async function signIn(pool: pg.Pool, cfg: AppConfig, emailRaw: string, pa
       await noteFailure(c, row.id);
       return { status: "failed" as const };
     }
+    // Access turned off by an admin (brief 2026-11-25): said only to someone who knows the password.
+    if (row.access_off) return { status: "access_off" as const };
     // Two-step sign-in is off for everyone while the app doesn't require it (Yong,
     // 2026-11-20): an authenticator set up earlier is removed here, so no code is asked.
     let mfaOn: boolean = row.mfa_enabled;
@@ -230,7 +234,7 @@ export async function verifySignInCode(pool: pg.Pool, cfg: AppConfig, token: str
     const r = await c.query(
       `SELECT s.id, s.user_account_id, s.code_attempts, a.mfa_secret_enc, coalesce(a.locked_until > now(), false) AS locked
        FROM user_session s JOIN user_account a ON a.id = s.user_account_id
-       WHERE s.token_hash = $1 AND s.expires_at > now() AND NOT s.mfa_passed`,
+       WHERE s.token_hash = $1 AND s.expires_at > now() AND NOT s.mfa_passed AND a.disabled_at IS NULL`,
       [tokenHash(token)],
     );
     const row = r.rows[0];
@@ -295,7 +299,7 @@ export async function getSession(pool: pg.Pool, cfg: AppConfig, token: string | 
     await c.query("SELECT set_config('app.user_account_id', $1, true)", [s.user_account_id]);
     const p = await c.query(
       `SELECT a.email, a.mfa_enabled, a.is_admin, p.id AS applicant_id, p.preferred_name
-       FROM user_account a JOIN applicant p ON p.user_account_id = a.id WHERE a.id = $1`,
+       FROM user_account a JOIN applicant p ON p.user_account_id = a.id WHERE a.id = $1 AND a.disabled_at IS NULL`,
       [s.user_account_id],
     );
     const row = p.rows[0] ? { ...p.rows[0], id: s.id, user_account_id: s.user_account_id, reauth_at: s.reauth_at } : null;

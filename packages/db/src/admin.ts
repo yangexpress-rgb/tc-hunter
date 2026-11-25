@@ -1,6 +1,8 @@
 import type pg from "pg";
 import { INVITE_DAYS, inviteCodeHash, newInviteCode, normaliseEmail, normaliseInviteCode, type AuditAction } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
+import { hasFreshStepUp, type Session } from "./auth";
+import type { AppConfig } from "./config";
 import { withAdminScope, type AdminContext } from "./context";
 
 /**
@@ -86,5 +88,74 @@ export async function revokeInvitation(pool: pg.Pool, who: AdminContext, invitat
     const row = (await c.query("SELECT email FROM invitation WHERE id = $1", [invitationId])).rows[0];
     if (!row) return false;
     return (await revokeWaiting(c, who, row.email, "revoked", invitationId)) === 1;
+  });
+}
+
+export interface Person {
+  userAccountId: string;
+  email: string;
+  preferredName: string | null;
+  joinedAt: Date;
+  /** Two-step sign-in with an authenticator app. */
+  twoStep: boolean;
+  hasPasskey: boolean;
+  isAdmin: boolean;
+  accessOn: boolean;
+  isYou: boolean;
+}
+
+/** Everyone with an account, oldest first. Account details only: no applicant data. */
+export async function listPeople(pool: pg.Pool, who: AdminContext): Promise<Person[]> {
+  return withAdminScope(pool, who, async (c) =>
+    (await c.query("SELECT * FROM admin_people()")).rows.map((r) => ({
+      userAccountId: r.user_account_id, email: r.email, preferredName: r.preferred_name ?? null, joinedAt: r.joined_at,
+      twoStep: r.mfa_enabled, hasPasskey: r.has_passkey, isAdmin: r.is_admin, accessOn: r.disabled_at === null,
+      isYou: r.user_account_id === who.userAccountId,
+    })));
+}
+
+export type InvitationStatus = "waiting" | "accepted" | "expired" | "revoked";
+
+export interface InvitationRow {
+  id: string;
+  email: string;
+  invitedBy: string | null;
+  createdAt: Date;
+  expiresAt: Date;
+  status: InvitationStatus;
+}
+
+/** Every invitation, newest first. Status is worked out here, not stored. */
+export async function listInvitations(pool: pg.Pool, who: AdminContext): Promise<InvitationRow[]> {
+  return withAdminScope(pool, who, async (c) =>
+    (await c.query(
+      `SELECT i.id, i.email, a.email AS invited_by, i.created_at, i.expires_at,
+              CASE WHEN i.accepted_at IS NOT NULL THEN 'accepted' WHEN i.revoked_at IS NOT NULL THEN 'revoked'
+                   WHEN i.expires_at <= now() THEN 'expired' ELSE 'waiting' END AS status
+         FROM invitation i LEFT JOIN user_account a ON a.id = i.created_by
+        ORDER BY i.created_at DESC, i.id`)).rows.map((r) => ({
+      id: r.id, email: r.email, invitedBy: r.invited_by, createdAt: r.created_at, expiresAt: r.expires_at, status: r.status,
+    })));
+}
+
+/**
+ * Turns a person's access off or back on (brief section 7). Needs a fresh "Confirm it's you".
+ * Off: every session of theirs ends at once, and sign-in says their access is off. Their data
+ * is untouched; on again restores sign-in as it was. Never your own access, and never the
+ * last admin's (the database refuses that too).
+ */
+export async function setAccess(pool: pg.Pool, cfg: AppConfig, session: Session, targetAccountId: string, on: boolean): Promise<boolean> {
+  if (!hasFreshStepUp(session, cfg)) throw new Error("TC_STEP_UP_REQUIRED");
+  if (targetAccountId === session.userAccountId) throw new Error("TC_ADMIN_SELF");
+  const who = { userAccountId: session.userAccountId, applicantId: session.applicantId };
+  return withAdminScope(pool, who, async (c) => {
+    const r = await c.query(
+      `UPDATE user_account SET disabled_at = CASE WHEN $2 THEN NULL ELSE now() END
+        WHERE id = $1 AND (disabled_at IS NULL) = NOT $2 RETURNING id`,
+      [targetAccountId, on]);
+    if (!r.rowCount) return false;
+    if (!on) await c.query("DELETE FROM user_session WHERE user_account_id = $1", [targetAccountId]);
+    await auditAsAdmin(c, who, on ? "admin.access_on" : "admin.access_off", "user_account", targetAccountId, { account_ref: targetAccountId });
+    return true;
   });
 }

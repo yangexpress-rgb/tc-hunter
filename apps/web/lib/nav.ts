@@ -2,7 +2,7 @@
  * App navigation: the left sidebar sections and the tabs inside each one.
  * Pure data and matching, so it can be tested without a browser.
  */
-export type NavTab = { href: string; label: string; /** Other paths that belong to this tab, e.g. detail pages. */ also?: string[] };
+export type NavTab = { href: string; label: string; /** Other paths that belong to this tab, e.g. detail pages. */ also?: string[]; /** Shown only to admins (the page checks again, and so does the database). */ adminOnly?: boolean };
 export type NavSection = { key: string; label: string; icon: string; tabs: NavTab[] };
 
 export const NAV: NavSection[] = [
@@ -34,6 +34,8 @@ export const NAV: NavSection[] = [
     { href: "/settings/job-sites", label: "Job sites" },
     { href: "/settings/applying", label: "Applying for you" },
     { href: "/settings/data", label: "Your data" },
+    // Invitations and an admin (Yong, 2026-11-25): only the person who runs TC Hunter sees it.
+    { href: "/settings/people", label: "People", adminOnly: true },
   ] },
 ];
 
@@ -56,4 +58,9 @@ export function locate(pathname: string, hash = ""): { section: NavSection; tab:
   const anchors = best.section.tabs.filter((t) => t.href.startsWith(base + "#"));
   if (anchors.length) return { section: best.section, tab: anchors.find((t) => t.href === base + hash) ?? anchors[0]! };
   return { section: best.section, tab: best.tab };
+}
+
+/** The tabs this person sees: admin-only ones are left out for everyone else. */
+export function visibleTabs(section: NavSection, isAdmin: boolean): NavTab[] {
+  return section.tabs.filter((t) => isAdmin || !t.adminOnly);
 }
