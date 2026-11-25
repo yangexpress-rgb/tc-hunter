@@ -95,6 +95,13 @@ Migrations run before each deploy.
 3. Leo does the same on Leo's own device, with a separate email and authenticator.
 4. Back in Railway, set `ALLOW_SIGNUP=false` and redeploy. Sign-up is now closed.
 
+**Invitations (2026-11-25).** The first account on the server (Yong's) is the admin. An
+admin can invite one person at a time by email (Settings › People, the next stage of this work): TC Hunter makes a one-time invitation code
+and a sign-up link, shown once, for the admin to send themselves (the app sends no email).
+The code works only with that email, once, for 7 days. Invitations work even with
+`ALLOW_SIGNUP=false` and no `SIGNUP_CODE`; the shared sign-up code keeps working alongside
+them while it is set.
+
 Passkeys (Settings › Passkeys) work at the Railway address too, as an extra way in.
 
 **Remember this device.** On the sign-in page, tick *Remember this device for 30 days* on

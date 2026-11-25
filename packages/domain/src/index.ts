@@ -4,6 +4,7 @@ export * from "./fingerprint";
 export * from "./crypto";
 export * from "./password";
 export * from "./totp";
+export * from "./invite";
 export * from "./secretStore";
 export * from "./redact";
 export * from "./auditPolicy";

@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type pg from "pg";
 import {
-  decryptField, encryptField, hashPassword, newRecoveryCodes, newTotpSecret, newWrappedDataKey, normaliseRecoveryCode,
+  decryptField, encryptField, hashPassword, inviteCodeHash, newRecoveryCodes, normaliseInviteCode, newTotpSecret, newWrappedDataKey, normaliseRecoveryCode,
   passwordProblem, totpStep, verifyPassword,
 } from "@tc-hunter/domain";
 import { recordAudit } from "./audit";
@@ -12,8 +12,13 @@ import { withApplicant, withSignInScope } from "./context";
  * The app's own sign-in (brief 8): email + strong password (argon2id),
  * authenticator-app two-step code (required by default since the app moved to a
  * public host), idle timeout, and a fresh-check ("step-up") required before
- * approving a submission. Each household member has their own account and
- * applicant; there is no shared login and no admin view.
+ * approving a submission. Each person has their own account and applicant;
+ * there is no shared login.
+ *
+ * Accounts are made by invitation (brief 2026-11-25): an admin (the earliest
+ * account, Yong's) invites one email at a time with a one-time code, and manages
+ * accounts (never their data) in the admin scope (./admin.ts). The older shared
+ * household SIGNUP_CODE still works alongside invitations.
  *
  * Public-host protections: wrong passwords and codes count against the account
  * and lock it for a while (LOCK_AFTER / LOCK_MINUTES); one sign-in gets at most
@@ -39,6 +44,8 @@ export interface Session {
   email: string;
   mfaEnabled: boolean;
   reauthAt: Date;
+  /** Can manage accounts and invitations (People in Settings). Admin actions check again in the database. */
+  isAdmin: boolean;
 }
 
 /** True when this person must turn on two-step sign-in before doing anything else. */
@@ -53,20 +60,49 @@ function sameText(a: string, b: string): boolean {
 
 export type SignUpResult = { ok: true; token: string } | { ok: false; code: string };
 
+class BadInvite extends Error {}
+
+/**
+ * Creates an account. Three ways in:
+ *  - an invitation code (any host, even with sign-up otherwise closed): it must be
+ *    waiting, unexpired, and made for this exact email; it is used up here;
+ *  - the shared household SIGNUP_CODE, exactly as before invitations;
+ *  - no code at all, where the server leaves sign-up open (a private household server).
+ * Every bad invitation (unknown, expired, revoked, used, other email) gets the same answer.
+ */
 export async function signUp(
   pool: pg.Pool, cfg: AppConfig, input: { email: string; password: string; preferredName: string; signupCode?: string },
 ): Promise<SignUpResult> {
-  if (!cfg.allowSignup) return { ok: false, code: "signup.closed" };
-  if (cfg.signupCode && !sameText(cfg.signupCode, (input.signupCode ?? "").trim())) return { ok: false, code: "signup.bad_code" };
+  const typed = (input.signupCode ?? "").trim();
+  const invite = normaliseInviteCode(typed);
+  // The pre-invitation gates, unchanged.
+  const legacyOk = cfg.allowSignup && (!cfg.signupCode || sameText(cfg.signupCode, typed));
+  if (!legacyOk && !invite) {
+    if (!cfg.allowSignup && !typed) return { ok: false, code: "signup.closed" };
+    return { ok: false, code: cfg.allowSignup && cfg.signupCode ? "signup.bad_code" : "signup.bad_invite" };
+  }
   const email = input.email.trim().toLowerCase();
   const problem = passwordProblem(input.password, email);
   if (problem) return { ok: false, code: `signup.${problem}` };
   const pwHash = await hashPassword(input.password);
   try {
     return await withSignInScope(pool, async (c) => {
-      const acct = await c.query("INSERT INTO user_account (email, password_hash) VALUES ($1, $2) RETURNING id", [email, pwHash]);
+      if (invite && !legacyOk) {
+        const waiting = (await c.query("SELECT invitation_waiting($1, $2) AS ok", [inviteCodeHash(invite), email])).rows[0].ok;
+        if (!waiting) throw new BadInvite();
+      }
+      // The very first account on a new server runs it (an existing server's first account was made admin by migration 099).
+      await c.query("SELECT pg_advisory_xact_lock(hashtextextended('tc_first_admin', 0))");
+      const acct = await c.query(
+        "INSERT INTO user_account (email, password_hash, is_admin) VALUES ($1, $2, NOT EXISTS (SELECT 1 FROM user_account)) RETURNING id",
+        [email, pwHash]);
       const accountId: string = acct.rows[0].id;
       await c.query("SELECT set_config('app.user_account_id', $1, true)", [accountId]);
+      let invitationId: string | null = null;
+      if (invite) {
+        invitationId = (await c.query("SELECT redeem_invitation($1, $2) AS id", [inviteCodeHash(invite), email])).rows[0].id;
+        if (!invitationId && !legacyOk) throw new BadInvite();
+      }
       const applicantId: string = (await c.query("SELECT gen_random_uuid() AS id")).rows[0].id;
       const wrapped = newWrappedDataKey(cfg.masterKey, applicantId);
       await c.query(
@@ -74,11 +110,13 @@ export async function signUp(
         [applicantId, accountId, wrapped, input.preferredName.trim()],
       );
       await c.query("SELECT set_config('app.applicant_id', $1, true)", [applicantId]);
-      await recordAudit(c, "account.created", { objectType: "applicant", objectId: applicantId, payload: { method: "password" } });
+      await recordAudit(c, "account.created", { objectType: "applicant", objectId: applicantId, payload: { method: invitationId ? "invitation" : "password" } });
+      if (invitationId) await recordAudit(c, "invite.accepted", { objectType: "invitation", objectId: invitationId, payload: { invitation_ref: invitationId } });
       const token = await createSession(c, cfg, accountId, true);
       return { ok: true as const, token };
     });
   } catch (e) {
+    if (e instanceof BadInvite) return { ok: false, code: "signup.bad_invite" };
     if ((e as { code?: string }).code === "23505") return { ok: false, code: "signup.email_taken" };
     throw e;
   }
@@ -256,7 +294,7 @@ export async function getSession(pool: pg.Pool, cfg: AppConfig, token: string | 
     if (!s) return null;
     await c.query("SELECT set_config('app.user_account_id', $1, true)", [s.user_account_id]);
     const p = await c.query(
-      `SELECT a.email, a.mfa_enabled, p.id AS applicant_id, p.preferred_name
+      `SELECT a.email, a.mfa_enabled, a.is_admin, p.id AS applicant_id, p.preferred_name
        FROM user_account a JOIN applicant p ON p.user_account_id = a.id WHERE a.id = $1`,
       [s.user_account_id],
     );
@@ -270,6 +308,7 @@ export async function getSession(pool: pg.Pool, cfg: AppConfig, token: string | 
       email: row.email,
       mfaEnabled: row.mfa_enabled,
       reauthAt: row.reauth_at,
+      isAdmin: row.is_admin === true,
     };
   });
 }

@@ -5,8 +5,11 @@ import pg from "pg";
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "migrations");
 
-/** Applies migrations in order, as the owner role. Each file runs in one transaction. */
-export async function migrate(ownerUrl: string, opts: { reset?: boolean } = {}): Promise<string[]> {
+/**
+ * Applies migrations in order, as the owner role. Each file runs in one transaction.
+ * `until` (tests only) stops after the named file, to check a migration against older data.
+ */
+export async function migrate(ownerUrl: string, opts: { reset?: boolean; until?: string } = {}): Promise<string[]> {
   const client = new pg.Client({ connectionString: ownerUrl });
   await client.connect();
   try {
@@ -20,6 +23,7 @@ export async function migrate(ownerUrl: string, opts: { reset?: boolean } = {}):
     const files = (await readdir(MIGRATIONS_DIR)).filter((f) => f.endsWith(".sql")).sort();
     const applied: string[] = [];
     for (const f of files) {
+      if (opts.until && f > opts.until) break;
       if (done.has(f)) continue;
       const sql = await readFile(join(MIGRATIONS_DIR, f), "utf8");
       await client.query("BEGIN");
