@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { applyStatus, getApplication, getMatchByRef, getPreferences, journeyFacts, listAdjustments, listApplications, listDocuments, listEmailSignals, listGoals, matchGoals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
+import { applyStatus, getApplication, getMatchByRef, getPreferences, matchFoundJob, journeyFacts, listAdjustments, listApplications, listDocuments, listEmailSignals, listGoals, matchGoals, tailorReadiness, tailorWork, trackerSummary } from "@tc-hunter/db";
 import { PASS_REASONS, READ_WITHOUT_AI, aiIsOff, domainLabel, goalLabel, readWithoutAi, t, tierReasonText } from "@tc-hunter/domain";
 import { Details } from "@/components/Layers";
 import { Advanced, AdvancedRow } from "@/components/advanced/Advanced";
@@ -33,7 +33,9 @@ export default async function JobPage(props: Props) {
   const { ref } = await props.params;
   if (!/^[A-Za-z0-9-]{1,40}$/.test(ref)) notFound();
   const { pool, cfg } = app();
-  const [{ saved, error, params }, m, learnedAdj] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref), listAdjustments(pool, session)]);
+  const [{ saved, error, params }, found, learnedAdj] = await Promise.all([flashOf(props), getMatchByRef(pool, session, ref), listAdjustments(pool, session)]);
+  // A found job outside the matches (opened from "All" on a source, 2026-11-25) is scored on first open.
+  const m = found ?? (await matchFoundJob(pool, session, ref) ? await getMatchByRef(pool, session, ref) : null);
   if (!m) notFound();
   const [docs, work, prefs, apps, ready, noAi, goals, perGoal] = await Promise.all([listDocuments(pool, session, m.public_ref), tailorWork(pool, session, m.public_ref), getPreferences(pool, session), listApplications(pool, session), tailorReadiness(pool, session), aiIsOff(),
     listGoals(pool, session), matchGoals(pool, session, m.id)]);

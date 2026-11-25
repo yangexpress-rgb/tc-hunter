@@ -241,3 +241,42 @@ export async function jobsSummary(pool: pg.Pool, session: Session) {
     return { newToday: today, gaps, following };
   });
 }
+
+/**
+ * Every open job found at one followed source (Yong, 2026-11-25): also the ones never put in the
+ * applicant's matches because the title didn't relate to their goals, so nothing found is out of sight.
+ * A job already matched carries its status and scores; the rest carry none.
+ */
+export async function listSourceJobs(pool: pg.Pool, session: Session, sourceId: string) {
+  return withApplicant(pool, asApplicant(session), async (c) => (await c.query(
+    `SELECT p.id AS posting_id, p.public_ref, p.title, p.employer_canonical, p.location_raw, p.workplace_type, p.salary_min, p.salary_max, p.salary_currency, p.salary_period,
+            p.posted_at, p.status AS posting_status, m.id, m.status, m.g_score, m.c_score, m.score, m.filtered, m.filter_reasons, m.fit_version
+       FROM job_posting_source ps
+       JOIN applicant_job_source f ON f.job_source_id = ps.job_source_id AND NOT f.muted
+       JOIN job_posting d ON d.id = ps.job_posting_id
+       JOIN job_posting p ON p.id = coalesce(d.merged_into, d.id)
+       LEFT JOIN match m ON m.job_posting_id = p.id
+      WHERE ps.job_source_id = $1 AND ps.active AND p.status = 'active'
+      GROUP BY p.id, m.id
+      ORDER BY (m.id IS NULL), m.g_score DESC NULLS LAST, p.posted_at DESC NULLS LAST, p.title
+      LIMIT 500`, [sourceId])).rows as Array<Record<string, any>>);
+}
+
+/**
+ * Opening a found job that isn't in the matches yet (it came from a followed source, but its title
+ * didn't relate to the goals): it is scored now, like a pasted link, so its page opens. Returns
+ * false when the job isn't one of the applicant's found jobs.
+ */
+export async function matchFoundJob(pool: pg.Pool, session: Session, publicRef: string): Promise<boolean> {
+  return withApplicant(pool, asApplicant(session), async (c) => {
+    const p = (await c.query(
+      `SELECT p.id FROM job_posting p
+        WHERE p.public_ref = $1 AND EXISTS (
+          SELECT 1 FROM job_posting_source ps JOIN job_posting d ON d.id = ps.job_posting_id
+            JOIN applicant_job_source f ON f.job_source_id = ps.job_source_id AND NOT f.muted
+           WHERE coalesce(d.merged_into, d.id) = p.id)`, [publicRef])).rows[0];
+    if (!p) return false;
+    await matchApplicant(c, new Date(), [p.id]);
+    return true;
+  });
+}

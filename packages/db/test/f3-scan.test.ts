@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { RulesRequirementsReader, SourceRefusedError, type Fetcher, type FetchResult } from "@tc-hunter/domain";
 import {
   addEvidence, addFact, approvePacket, followSource, giveFeedback, listAdjustments, listAlerts, listMatches, listSources, requestLink,
-  requestScan, runNextWork, savePreferences, setAdjustmentActive, unfollowSource, withApplicant, getMatchByRef, jobsSummary,
+  requestScan, runNextWork, savePreferences, setAdjustmentActive, unfollowSource, withApplicant, getMatchByRef, jobsSummary, listSourceJobs, matchFoundJob,
   type AppConfig, type Session, type WorkDeps,
 } from "../src";
 import { appPool, freshDatabase, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -119,6 +119,20 @@ describe("scan and match", () => {
     expect(d!.sources).toHaveLength(2);
     expect(d!.evidence.map((e: { canonical_name: string }) => e.canonical_name).sort()).toEqual(["Excel", "SQL"]);
     expect(await getMatchByRef(pool, leo, ref)).toBeNull();  // Leo has no match for it
+  });
+
+  it("All on a source lists every open job found there, and opening one outside the matches scores it (Yong, 2026-11-25)", async () => {
+    const ref = (await listMatches(pool, yong)).rows[0].public_ref;
+    expect(await matchFoundJob(pool, leo, ref)).toBe(false);  // not found at any source Leo follows
+    const src = await followSource(pool, leo, "https://boards.greenhouse.io/fabrikam");
+    const all = await listSourceJobs(pool, leo, src);
+    expect(all.map((r) => [r.public_ref, r.id])).toEqual([[ref, null]]);  // found there, not in Leo's matches
+    expect(await matchFoundJob(pool, leo, ref)).toBe(true);
+    expect(await getMatchByRef(pool, leo, ref)).not.toBeNull();
+    expect((await listSourceJobs(pool, leo, src))[0]).toMatchObject({ public_ref: ref, status: "new" });
+    expect((await listSourceJobs(pool, yong, src)).map((r) => r.status)).toEqual(["new"]);
+    await ownerQuery("DELETE FROM match WHERE applicant_id = $1", [leo.applicantId]);
+    await unfollowSource(pool, leo, src);
   });
 
   it("a board fetched by one applicant's scan is not fetched again for the other within half an hour", async () => {
