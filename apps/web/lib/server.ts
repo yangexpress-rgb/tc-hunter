@@ -73,3 +73,9 @@ export async function requireSessionForSetup(): Promise<Session> {
   if (!session) redirect("/sign-in");
   return session;
 }
+
+/** The signed-in person, or null (no redirect). For page chrome such as the navigation. */
+export async function currentSession(): Promise<Session | null> {
+  const { pool, cfg } = app();
+  return getSession(pool, cfg, await sessionToken());
+}

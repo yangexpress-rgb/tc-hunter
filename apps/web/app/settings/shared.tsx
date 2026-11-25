@@ -8,7 +8,7 @@ import { app } from "@/lib/server";
 import { stepUpAction } from "./vault-actions";
 
 /** The Settings pages (Yong, 2026-11-15: "different settings can be separated"). One page each, as tabs. */
-export type SettingsPage = "/settings" | "/settings/email" | "/settings/job-sites" | "/settings/applying" | "/settings/data";
+export type SettingsPage = "/settings" | "/settings/email" | "/settings/job-sites" | "/settings/applying" | "/settings/data" | "/settings/people";
 
 export const ago = (d: Date | string | null) => (d ? new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d)) : "not yet");
 

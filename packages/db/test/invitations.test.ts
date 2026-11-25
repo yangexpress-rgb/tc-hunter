@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
 import { hashPassword, newWrappedDataKey, normaliseInviteCode } from "@tc-hunter/domain";
 import {
-  APPLICANT_OWNED_TABLES, createInvitation, getSession, migrate, remakeInvitation, revokeInvitation, signIn, signUp,
+  APPLICANT_OWNED_TABLES, createInvitation, getSession, migrate, remakeInvitation, revokeInvitation, listInvitations, listPeople, setAccess, signIn, signUp,
   withAdminScope, withApplicant, withSignInScope, type AdminContext, type Session,
 } from "../src";
 import { APP_URL, OWNER_URL, appPool, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -244,5 +244,59 @@ describe("the admin boundary (fixtures 5, 6, 8)", () => {
     expect((await ownerQuery("SELECT email FROM user_account WHERE is_admin")).rows).toEqual([{ email: "leo@example.test" }]);
     await ownerQuery("UPDATE user_account SET is_admin = true WHERE email = 'yong@example.test'");
     await ownerQuery("UPDATE user_account SET is_admin = false WHERE email = 'leo@example.test'");
+  });
+});
+
+describe("People: lists and access off / on (Stage 2: fixtures 5, 7, 8, 11)", () => {
+  const fresh = (s: Session): Session => ({ ...s, reauthAt: new Date() });
+
+  it("lists people and invitations for the admin only", async () => {
+    const people = await listPeople(pool, who(yong));
+    expect(people[0]).toMatchObject({ email: "yong@example.test", isAdmin: true, accessOn: true, isYou: true, preferredName: "Yong" });
+    expect(people.find((p) => p.email === "leo@example.test")).toMatchObject({ isAdmin: false, isYou: false });
+    const inv = await listInvitations(pool, who(yong));
+    expect(new Set(inv.map((i) => i.status))).toEqual(new Set(["waiting", "accepted", "expired", "revoked"]));
+    expect(inv.every((i) => i.invitedBy === "yong@example.test")).toBe(true);
+    await expect(listPeople(pool, who(leo))).rejects.toThrow(/TC_NOT_ADMIN/);
+    await expect(listInvitations(pool, who(leo))).rejects.toThrow(/TC_NOT_ADMIN/);
+  });
+
+  it("turning access off needs a fresh check, never works on yourself, and a non-admin can't do it", async () => {
+    await expect(setAccess(pool, cfg, { ...yong, reauthAt: new Date(0) }, leo.userAccountId, false)).rejects.toThrow(/TC_STEP_UP_REQUIRED/);
+    await expect(setAccess(pool, cfg, fresh(yong), yong.userAccountId, false)).rejects.toThrow(/TC_ADMIN_SELF/);
+    await expect(setAccess(pool, cfg, fresh(leo), yong.userAccountId, false)).rejects.toThrow(/TC_NOT_ADMIN/);
+  });
+
+  it("access off: live session stops, sign-in refused with its own message, data intact; on again restores sign-in (fixture 7)", async () => {
+    const live = await signIn(pool, cfg, "leo@example.test", PASSWORD);
+    const token = (live as { token: string }).token;
+    expect(await getSession(pool, cfg, token)).not.toBeNull();
+    const before = (await ownerQuery("SELECT count(*)::int AS n FROM audit_event WHERE applicant_id = $1", [leo.applicantId])).rows[0].n;
+
+    expect(await setAccess(pool, cfg, fresh(yong), leo.userAccountId, false)).toBe(true);
+    expect(await setAccess(pool, cfg, fresh(yong), leo.userAccountId, false)).toBe(false);  // already off
+    expect(await getSession(pool, cfg, token)).toBeNull();
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM user_session WHERE user_account_id = $1", [leo.userAccountId])).rows[0].n).toBe(0);
+    expect(await signIn(pool, cfg, "leo@example.test", PASSWORD)).toEqual({ status: "access_off" });
+    expect(await signIn(pool, cfg, "leo@example.test", "wrong password here")).toEqual({ status: "failed" });  // says nothing without the password
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM audit_event WHERE applicant_id = $1", [leo.applicantId])).rows[0].n).toBe(before);
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM document WHERE applicant_id = $1", [leo.applicantId])).rows[0].n).toBeGreaterThan(0);
+    expect((await listPeople(pool, who(yong))).find((p) => p.email === "leo@example.test")!.accessOn).toBe(false);
+
+    expect(await setAccess(pool, cfg, fresh(yong), leo.userAccountId, true)).toBe(true);
+    const back = await signIn(pool, cfg, "leo@example.test", PASSWORD);
+    expect(back.status).toBe("ok");
+    leo = (await getSession(pool, cfg, (back as { token: string }).token))!;
+  });
+
+  it("logs access off and on as admin actions with only the account id (fixture 11)", async () => {
+    const r = await ownerQuery(
+      `SELECT e.actor, e.action, e.payload_summary, e.applicant_id FROM audit_event e WHERE e.action LIKE 'admin.%' ORDER BY e.at`);
+    expect(r.rows.map((x) => x.action)).toEqual(["admin.access_off", "admin.access_on"]);
+    for (const x of r.rows) {
+      expect(x.actor).toBe("admin");
+      expect(x.applicant_id).toBe(yong.applicantId);
+      expect(x.payload_summary).toEqual({ account_ref: leo.userAccountId });
+    }
   });
 });

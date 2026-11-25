@@ -121,6 +121,7 @@ export async function finishPasskeySignIn(pool: pg.Pool, cfg: AppConfig, respons
     if (!(await takeChallenge(c, "sign_in", challenge, null))) return null;
     const accountId = await verifyAssertion(c, cfg, response, challenge);
     if (!accountId) return null;
+    if ((await c.query("SELECT 1 FROM user_account WHERE id = $1 AND disabled_at IS NOT NULL", [accountId])).rowCount) return null;
     await c.query("SELECT set_config('app.user_account_id', $1, true)", [accountId]);
     await auditAsAccount(c, accountId, "session.signed_in", { mfa_used: true, method: "passkey" });
     const token = await createSession(c, cfg, accountId, true, device);

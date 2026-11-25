@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NAV, locate } from "../lib/nav";
+import { NAV, locate, visibleTabs } from "../lib/nav";
 
 const at = (p: string, h = "") => { const r = locate(p, h); return r ? `${r.section.key}:${r.tab?.href}` : "none"; };
 
@@ -22,7 +22,11 @@ describe("app navigation", () => {
     expect(at("/documents/D-1/pdf")).toBe("applications:/documents");
   });
   it("gives each kind of setting its own page, Email among them", () => {
-    expect(NAV.find((s) => s.key === "settings")!.tabs.map((t) => t.label)).toEqual(["Sign-in and security", "Email", "Job sites", "Applying for you", "Your data"]);
+    const settings = NAV.find((s) => s.key === "settings")!;
+    expect(visibleTabs(settings, false).map((t) => t.label)).toEqual(["Sign-in and security", "Email", "Job sites", "Applying for you", "Your data"]);
+    // People (invitations and accounts) is a sixth tab only the admin sees.
+    expect(visibleTabs(settings, true).map((t) => t.label)).toEqual(["Sign-in and security", "Email", "Job sites", "Applying for you", "Your data", "People"]);
+    expect(at("/settings/people")).toBe("settings:/settings/people");
     expect(at("/settings")).toBe("settings:/settings");
     expect(at("/settings/email")).toBe("settings:/settings/email");
     expect(at("/settings/email/connect")).toBe("settings:/settings/email");

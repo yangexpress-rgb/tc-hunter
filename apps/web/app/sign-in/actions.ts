@@ -16,9 +16,9 @@ export async function signInAction(_: FormState, form: FormData): Promise<FormSt
   }
   const device = await deviceChoice(form.get("remember") === "on");
   const r = await signIn(pool, cfg, email, String(form.get("password") ?? ""), device);
-  if (r.status === "failed" || r.status === "locked") {
+  if (r.status === "failed" || r.status === "locked" || r.status === "access_off") {
     log.info(`sign_in.${r.status}`, {});
-    return { error: t(r.status === "locked" ? "signin.locked" : "signin.failed"), email };
+    return { error: t(r.status === "locked" ? "signin.locked" : r.status === "access_off" ? "signin.access_off" : "signin.failed"), email };
   }
   await setSessionCookie(r.token, r.status === "ok" ? await sessionCookieUntil(pool, r.token) : null);
   redirect(r.status === "code_required" ? "/sign-in/code" : "/");
