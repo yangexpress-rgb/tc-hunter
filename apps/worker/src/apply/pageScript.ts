@@ -61,7 +61,16 @@ export const PAGE_SCRIPT = String.raw`
     if (el.placeholder) return clean(el.placeholder);
     return clean(el.name || el.id || el.getAttribute("data-automation-id"));
   }
+  // A radio button's own words, as the driver reads them: its label first. Pinpoint also names each button by a
+  // hidden "question + yes" text, which isn't the choice's own word.
+  function radioText(el) {
+    var l = (el.id && rootOf(el).querySelector('label[for="' + esc(el.id) + '"]')) || el.closest("label");
+    return l && clean(l.textContent) ? clean(l.textContent) : labelOf(el);
+  }
   function groupLabel(el) {
+    // Pinpoint: the question's label sits above its Yes / No buttons, in the same box.
+    var pq = el.closest(".pad-v-3"); var pl = pq && pq.querySelector(".external-form__label");
+    if (pl && clean(pl.textContent)) return clean(pl.textContent);
     var fs = el.closest("fieldset"); var lg = fs && fs.querySelector("legend");
     if (lg && clean(lg.textContent)) return clean(lg.textContent);
     var grp = el.closest("[role=radiogroup],[role=group]");
@@ -100,7 +109,20 @@ export const PAGE_SCRIPT = String.raw`
     return null;
   }
   function isRequired(el, label) {
-    return !!el.required || el.getAttribute("aria-required") === "true" || /\*\s*$/.test(label) || /\(required\)/i.test(label);
+    return !!el.required || el.getAttribute("aria-required") === "true" || /\*\s*$/.test(label) || /\(required\)/i.test(label) || markedRequired(el);
+  }
+  // A question whose label the site marks required by its look, not by a "*" in the words (Pinpoint's
+  // "external-form__label--required", Align Technology 2026-11-26): the question's own label says so.
+  function markedRequired(el) {
+    function marks(l) { return !!l && (/(^|[-_\s])label--required\b/.test(String(l.className || "")) || !!l.querySelector("[class*='label--required']")); }
+    if (el.id && el.type !== "radio" && marks(rootOf(el).querySelector('label[for="' + esc(el.id) + '"]'))) return true;
+    // The question's heading in the box around it (its file box, its Yes / No, its drawn drop-down), the nearest box with one.
+    for (var box = el.parentElement, depth = 0; box && depth < 6; box = box.parentElement, depth++) {
+      var heads = box.querySelectorAll(".external-form__label");
+      if (heads.length > 1) return false;
+      if (heads.length === 1 && !heads[0].contains(el)) return marks(heads[0]);
+    }
+    return false;
   }
 
   function captchaVisible() {
@@ -156,7 +178,7 @@ export const PAGE_SCRIPT = String.raw`
         var k = "radio:" + el.name; if (seen[k]) continue; seen[k] = 1;
         var radios = deepAll('input[type=radio][name="' + esc(el.name) + '"]', rootOf(el));
         var gl = groupLabel(el);
-        out.push({ key: k, label: gl, type: type, options: radios.map(labelOf), required: radios.some(function (r) { return r.required; }) || /\*\s*$/.test(gl),
+        out.push({ key: k, label: gl, type: type, options: radios.map(radioText), required: radios.some(function (r) { return r.required; }) || /\*\s*$/.test(gl) || markedRequired(el),
           hasValue: radios.some(function (r) { return r.checked; }) });
         continue;
       }
@@ -212,7 +234,7 @@ export const PAGE_SCRIPT = String.raw`
     var tag = el.tagName.toLowerCase();
     if (key.indexOf("radio:") === 0) {
       var on = deepAll('input[type=radio][name="' + esc(el.name) + '"]', rootOf(el)).filter(function (r) { return r.checked; })[0];
-      return on ? (labelOf(on) || on.value || "") : "";
+      return on ? (radioText(on) || on.value || "") : "";
     }
     if (tag === "select") {
       if (el.multiple) return Array.prototype.map.call(el.selectedOptions, function (o) { return clean(o.textContent); }).join(", ");

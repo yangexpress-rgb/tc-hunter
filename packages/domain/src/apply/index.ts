@@ -147,11 +147,14 @@ export function formUrlFor(ats: Ats, url: string): string {
   const parts = u.pathname.split("/").filter(Boolean);
   if (ats === "lever" && parts.length === 2) u.pathname = `/${parts[0]}/${parts[1]}/apply`;
   if (ats === "ashby" && parts.length === 2) u.pathname = `/${parts[0]}/${parts[1]}/application`;
+  // Pinpoint: the job's page, then its form at /applications/new.
+  const pp = parts.indexOf("postings");
+  if (ats === "pinpoint" && pp >= 0 && parts.length === pp + 2) u.pathname = `/${[...parts, "applications", "new"].join("/")}`;
   return u.toString();
 }
 
 /** Which hiring system pages TC Hunter's own browser applies on. */
-export const SERVER_APPLY_ATS: readonly Ats[] = ["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "avature"];
+export const SERVER_APPLY_ATS: readonly Ats[] = ["greenhouse", "lever", "ashby", "smartrecruiters", "pinpoint", "workday", "avature"];
 
 /** Workday's Submit and thank-you signs. */
 export const WORKDAY = {

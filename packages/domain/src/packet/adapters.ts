@@ -8,7 +8,7 @@ import { willFill } from "./map";
  * Everything else, and any form that doesn't look exactly as expected, stays Assisted Fill:
  * the applicant presses Submit themselves.
  */
-export type Ats = "greenhouse" | "lever" | "ashby" | "smartrecruiters" | "workday" | "avature" | "icims" | "taleo" | "linkedin" | "indeed" | "other";
+export type Ats = "greenhouse" | "lever" | "ashby" | "smartrecruiters" | "pinpoint" | "workday" | "avature" | "icims" | "taleo" | "linkedin" | "indeed" | "other";
 export const TIER1: readonly Ats[] = ["greenhouse", "lever", "ashby", "smartrecruiters"];
 /** Never automated (design 5.5): Workday, iCIMS and Taleo are Assisted Fill only; LinkedIn and Indeed are not automated at all. */
 export const ASSISTED_ONLY: readonly Ats[] = ["workday", "avature", "icims", "taleo", "linkedin", "indeed", "other"];
@@ -25,7 +25,7 @@ export interface AtsAdapter {
   confirmed: { url?: RegExp; text: RegExp };
 }
 
-export const ADAPTERS: Record<"greenhouse" | "lever" | "ashby" | "smartrecruiters", AtsAdapter> = {
+export const ADAPTERS: Record<"greenhouse" | "lever" | "ashby" | "smartrecruiters" | "pinpoint", AtsAdapter> = {
   greenhouse: {
     ats: "greenhouse", hosts: /(^|\.)(boards|job-boards)\.greenhouse\.io$/,
     required: [{ name: "first name", match: /first_name|first name/i }, { name: "last name", match: /last_name|last name/i }, { name: "email", match: /email/i }, { name: "resume", match: /resume|cv/i }],
@@ -50,6 +50,15 @@ export const ADAPTERS: Record<"greenhouse" | "lever" | "ashby" | "smartrecruiter
     submit: "button[type=submit]",
     confirmed: { url: /\/confirmation\b|\/thank-?you/, text: /thank you for (applying|your application)|application (has been )?(sent|submitted|received)/i },
   },
+  // Pinpoint (Align Technology's jobs.aligntech.com, Yong 2026-11-26): a one-page form, usually on the
+  // employer's own address, sometimes on {company}.pinpointhq.com. Its invisible reCAPTCHA asks nothing of a
+  // person; a visible check, if one ever shows, goes to the applicant as always.
+  pinpoint: {
+    ats: "pinpoint", hosts: /(^|\.)pinpointhq\.com$/,
+    required: [{ name: "first name", match: /first_name|first name/i }, { name: "last name", match: /last_name|last name/i }, { name: "email", match: /email/i }],
+    submit: "form[action$='/applications'] input[type=submit], form[action$='/applications'] button[type=submit]",
+    confirmed: { url: /\/applications\/[0-9a-f-]{8,}(\/|$)(?!.*\/new\b)|\/thank-?you/, text: /thank(s| you) for (applying|your application|submitting)|application (has been |was )?(successfully )?(sent|submitted|received)|we('ve| have) received your application/i },
+  },
 };
 
 /** Hosts the extension may keep watching through the submit and its confirmation page. */
@@ -61,6 +70,7 @@ export function detectAts(url: string): Ats {
   let host = "";
   try { host = new URL(url).hostname.toLowerCase(); } catch { return "other"; }
   for (const a of Object.values(ADAPTERS)) if (a.hosts.test(host)) return a.ats;
+  if (isPinpointPosting(url)) return "pinpoint";
   if (/myworkdayjobs\.com$|workday\.com$/.test(host)) return "workday";
   if (isAvature(url)) return "avature";
   if (/icims\.com$/.test(host)) return "icims";
@@ -68,6 +78,16 @@ export function detectAts(url: string): Ats {
   if (/(^|\.)linkedin\.com$/.test(host)) return "linkedin";
   if (/(^|\.)indeed\.[a-z.]+$/.test(host)) return "indeed";
   return "other";
+}
+
+/**
+ * A Pinpoint job or its application form on the employer's own address (jobs.aligntech.com):
+ * /{locale}/postings/{uuid}, then /applications/new. Pinpoint's own hosts are matched by ADAPTERS.
+ */
+export function isPinpointPosting(url: string): boolean {
+  try {
+    return /^\/(?:[a-z]{2}(?:-[A-Za-z]{2})?\/)?postings\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/applications(?:\/new)?)?\/?$/.test(new URL(url).pathname);
+  } catch { return false; }
 }
 
 /**
