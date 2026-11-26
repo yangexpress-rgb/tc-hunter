@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ADAPTERS, SERVER_APPLY_ATS, SourceRefusedError, detectAts, fetchSource, findOnEmployerSite, formUrlFor, isPinpointPage, isPinpointPosting, looksConfirmed, pickSameJob, readPinpointList, type FetchOpts, type Fetcher } from "../src";
+import { ADAPTERS, SERVER_APPLY_ATS, SourceRefusedError, detectAts, fetchSource, findOnEmployerSite, formUrlFor, isPinpointPage, pinpointEnglish, isPinpointPosting, looksConfirmed, pickSameJob, readPinpointList, type FetchOpts, type Fetcher } from "../src";
 
 /**
  * Pinpoint careers sites (Align Technology, 2026-11-26): the "Vice President, Platform Engineering"
@@ -53,6 +53,19 @@ describe("Pinpoint careers sites (Align Technology)", () => {
   it("opens the job's own form, and leaves the form's address as it is", () => {
     expect(formUrlFor("pinpoint", VP_SJ)).toBe(`${VP_SJ}/applications/new`);
     expect(formUrlFor("pinpoint", `${VP_SJ}/applications/new`)).toBe(`${VP_SJ}/applications/new`);
+  });
+
+  it("always opens the English form: Pinpoint showed Align's in Thai on the server (2026-11-26)", () => {
+    const th = "https://jobs.aligntech.com/th/postings/14d29eb2-d36a-4ef6-8383-329d603d83ae";
+    expect(detectAts(th)).toBe("pinpoint");
+    expect(formUrlFor("pinpoint", th)).toBe(`${VP_SJ}/applications/new`);
+    expect(formUrlFor("pinpoint", `${th}/applications/new`)).toBe(`${VP_SJ}/applications/new`);
+    expect(formUrlFor("pinpoint", "https://jobs.aligntech.com/postings/14d29eb2-d36a-4ef6-8383-329d603d83ae")).toBe(`${VP_SJ}/applications/new`);
+    expect(formUrlFor("pinpoint", "https://jobs.aligntech.com/pt-BR/postings/14d29eb2-d36a-4ef6-8383-329d603d83ae/applications/new")).toBe(`${VP_SJ}/applications/new`);
+    expect(pinpointEnglish(VP_SJ)).toBe(VP_SJ);
+    expect(pinpointEnglish("https://jobs.aligntech.com/th")).toBe("https://jobs.aligntech.com/th");
+    const all = readPinpointList({ data: [{ ...LIST.data[0], url: th }] }, "Align Technology", HOME);
+    expect(all[0]).toMatchObject({ url: VP_SJ, applyUrl: `${VP_SJ}/applications/new` });
   });
 
   it("presses only the form's own Submit, and knows the thank-you", () => {

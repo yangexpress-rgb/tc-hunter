@@ -656,7 +656,8 @@ export function isPinpointPage(html: string): boolean {
 /** Postings from a Pinpoint site's /postings.json. */
 export function readPinpointList(r: Obj, employer: string, base: string): RawPosting[] {
   return ((r.data ?? []) as Obj[]).filter((j) => j.title && (j.url || j.path)).map((j) => {
-    const url = String(j.url || new URL(String(j.path), base).href);
+    // Always the English address: Pinpoint can hand out another language's (see pinpointEnglish).
+    const url = String(j.url || new URL(String(j.path), base).href).replace(/^(https:\/\/[^/]+)\/(?:[a-z]{2}(?:-[A-Za-z]{2,4})?\/)?postings\//, "$1/en/postings/");
     const loc = (j.location ?? {}) as Obj;
     const desc = [j.description, j.key_responsibilities, j.skills_knowledge_expertise, j.benefits].filter(Boolean).map((x) => htmlToText(String(x))).join("\n\n").trim();
     const wp = String(j.workplace_type ?? "").toLowerCase();

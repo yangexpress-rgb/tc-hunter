@@ -86,7 +86,7 @@ export function detectAts(url: string): Ats {
  */
 export function isPinpointPosting(url: string): boolean {
   try {
-    return /^\/(?:[a-z]{2}(?:-[A-Za-z]{2})?\/)?postings\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/applications(?:\/new)?)?\/?$/.test(new URL(url).pathname);
+    return /^\/(?:[a-z]{2}(?:-[A-Za-z]{2,4})?\/)?postings\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\/applications(?:\/new)?)?\/?$/.test(new URL(url).pathname);
   } catch { return false; }
 }
 
