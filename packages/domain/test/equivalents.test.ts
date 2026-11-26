@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { countryForRegion, matchChoice, proposeField, sameAnswer, searchTermsFor, type PacketProfile } from "../src";
+import { countryForRegion, isHeardAbout, matchChoice, proposeField, sameAnswer, searchTermsFor, type PacketProfile } from "../src";
 
 describe("answers that mean the same (Yong, 2026-11-15)", () => {
   it("countries by name or code", () => {
@@ -61,6 +61,20 @@ describe("answers that mean the same (Yong, 2026-11-15)", () => {
     expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select" }, p).answer).toBe("Job Board");
     const saved = { ...p, answers: [{ ...p.answers[0]!, text: "Referral", approved: true, stale: false }] };
     expect(proposeField({ key: "h", label: "How Did You Hear About Us?*", type: "select", options: ["Job Board", "Referral"] }, saved)).toMatchObject({ answer: "Referral", source: "answer_bank" });
+  });
+  it("answers Align's \"How did you first hear about this job opportunity?\" from its list (2026-11-26)", () => {
+    const opts = ["Align Technology Alumni", "Align Technology Career Site", "Employee Referral", "Job Board", "Professional Recruitment Event", "Social Media Site", "University Recruitment", "Other", "TENT Organization"];
+    const label = "How did you first hear about this job opportunity?";
+    const base = { firstName: "Y", lastName: "E", fullName: "Y E", preferredName: "Y", email: null, phone: null, city: null, region: null, country: null, links: {}, resume: null, letter: null };
+    const none = { ...base, answers: [] } as unknown as PacketProfile;
+    expect(isHeardAbout(label)).toBe(true);
+    expect(proposeField({ key: "h", label, type: "select", options: opts }, none)).toMatchObject({ answer: "Job Board" });
+    // A saved "linkedin" their list doesn't offer: LinkedIn is a social media site.
+    const li = { ...base, answers: [{ id: "a9", key: "heard_about", patterns: ["how did you (first )?(hear|learn|find out) about"], text: "linkedin", approved: true, stale: false, isApplicantStep: false }] } as unknown as PacketProfile;
+    expect(proposeField({ key: "h", label, type: "select", options: opts }, li)).toMatchObject({ answer: "Social Media Site", source: "answer_bank" });
+    // A saved site that is a job board: Job Board.
+    const ind = { ...li, answers: [{ ...li.answers[0]!, text: "Indeed" }] } as PacketProfile;
+    expect(proposeField({ key: "h", label, type: "select", options: opts }, ind)).toMatchObject({ answer: "Job Board" });
   });
   it("knows the country from the state when the profile has none, and finds a job-posting choice", () => {
     expect(countryForRegion("NC")).toBe("United States");
