@@ -141,7 +141,8 @@ export async function listInvitations(pool: pg.Pool, who: AdminContext): Promise
 
 /**
  * Turns a person's access off or back on (brief section 7). Needs a fresh "Confirm it's you".
- * Off: every session of theirs ends at once, and sign-in says their access is off. Their data
+ * Off: every session of theirs ends at once, sign-in says their access is off, and their background
+ * work (searches, email checks, applying) waits (migration 101). Their data
  * is untouched; on again restores sign-in as it was. Never your own access, and never the
  * last admin's (the database refuses that too).
  */

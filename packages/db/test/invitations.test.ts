@@ -391,3 +391,35 @@ describe("recovery and roles (Stage 3: fixtures 8, 9, 10, 11)", () => {
     expect(r.rows.filter((x) => x.action === "admin.role_changed").map((x) => x.applicant_id)).toContain(leo.applicantId);
   });
 });
+
+describe("access off pauses background work (Yong, 2026-11-26)", () => {
+  const fresh = (s: Session): Session => ({ ...s, reauthAt: new Date() });
+  const claimAll = async () => {
+    const got: string[] = [];
+    for (;;) {
+      const r = (await pool.query("SELECT * FROM claim_work()")).rows[0];
+      if (!r) return got;
+      got.push(r.applicant_id);
+    }
+  };
+
+  it("queued work waits while access is off and runs again once it is back on", async () => {
+    await ownerQuery("UPDATE work_item SET status = 'done' WHERE status IN ('queued','running')");
+    const item = (await ownerQuery("INSERT INTO work_item (applicant_id, kind, payload) VALUES ($1, 'scan', '{}') RETURNING id", [leo.applicantId])).rows[0].id;
+    await setAccess(pool, cfg, fresh(yong), leo.userAccountId, false);
+    expect(await claimAll()).not.toContain(leo.applicantId);
+    expect((await ownerQuery("SELECT status FROM work_item WHERE id = $1", [item])).rows[0].status).toBe("queued");
+    // No new scheduled search is queued for them meanwhile.
+    await ownerQuery("UPDATE work_item SET status = 'done' WHERE id = $1", [item]);
+    await pool.query("SELECT enqueue_due_scans(now() + interval '2 days')");
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM work_item WHERE applicant_id = $1 AND status = 'queued'", [leo.applicantId])).rows[0].n).toBe(0);
+
+    await setAccess(pool, cfg, fresh(yong), leo.userAccountId, true);
+    // With access on, the same schedule does queue Leo's search (so the check above meant something).
+    await pool.query("SELECT enqueue_due_scans(now() + interval '2 days')");
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM work_item WHERE applicant_id = $1 AND status = 'queued'", [leo.applicantId])).rows[0].n).toBe(1);
+    await ownerQuery("UPDATE work_item SET status = 'done' WHERE applicant_id = $1 AND status = 'queued'", [leo.applicantId]);
+    await ownerQuery("UPDATE work_item SET status = 'queued' WHERE id = $1", [item]);
+    expect(await claimAll()).toContain(leo.applicantId);
+  });
+});
