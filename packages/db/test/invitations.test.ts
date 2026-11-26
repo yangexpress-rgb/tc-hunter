@@ -403,6 +403,9 @@ describe("access off pauses background work (Yong, 2026-11-26)", () => {
     }
   };
 
+  // An hour after the usual 6 PM (New York) search, two days on: always due, whatever time the test runs
+  // (now() + 2 days was due only in the six hours after 6 PM New York time).
+  const DUE = "(date_trunc('day', now() AT TIME ZONE 'America/New_York') + interval '2 days 19 hours') AT TIME ZONE 'America/New_York'";
   it("queued work waits while access is off and runs again once it is back on", async () => {
     await ownerQuery("UPDATE work_item SET status = 'done' WHERE status IN ('queued','running')");
     const item = (await ownerQuery("INSERT INTO work_item (applicant_id, kind, payload) VALUES ($1, 'scan', '{}') RETURNING id", [leo.applicantId])).rows[0].id;
@@ -411,12 +414,12 @@ describe("access off pauses background work (Yong, 2026-11-26)", () => {
     expect((await ownerQuery("SELECT status FROM work_item WHERE id = $1", [item])).rows[0].status).toBe("queued");
     // No new scheduled search is queued for them meanwhile.
     await ownerQuery("UPDATE work_item SET status = 'done' WHERE id = $1", [item]);
-    await pool.query("SELECT enqueue_due_scans(now() + interval '2 days')");
+    await pool.query(`SELECT enqueue_due_scans(${DUE})`);
     expect((await ownerQuery("SELECT count(*)::int AS n FROM work_item WHERE applicant_id = $1 AND status = 'queued'", [leo.applicantId])).rows[0].n).toBe(0);
 
     await setAccess(pool, cfg, fresh(yong), leo.userAccountId, true);
     // With access on, the same schedule does queue Leo's search (so the check above meant something).
-    await pool.query("SELECT enqueue_due_scans(now() + interval '2 days')");
+    await pool.query(`SELECT enqueue_due_scans(${DUE})`);
     expect((await ownerQuery("SELECT count(*)::int AS n FROM work_item WHERE applicant_id = $1 AND status = 'queued'", [leo.applicantId])).rows[0].n).toBe(1);
     await ownerQuery("UPDATE work_item SET status = 'done' WHERE applicant_id = $1 AND status = 'queued'", [leo.applicantId]);
     await ownerQuery("UPDATE work_item SET status = 'queued' WHERE id = $1", [item]);
