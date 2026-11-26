@@ -87,7 +87,7 @@ export default async function PeoplePage(props: PageProps) {
             ))}
           </tbody>
         </table>
-        <p className="muted small">Turning access off signs them out everywhere at once and stops them signing in. Their information is kept, and turning access back on lets them sign in as before.</p>
+        <p className="muted small">Turning access off signs them out everywhere at once, stops them signing in, and pauses their job searches and other background work. Their information is kept, and turning access back on lets them sign in and picks their searches up again.</p>
         <p className="muted small">A password reset link lets someone who lost their password set a new one. Resetting two-step sign-in clears their authenticator app and recovery codes (or removes their passkeys), so they set it up again next time they sign in. Admins can see this page and manage people; there is always at least one.</p>
       </section>
 
