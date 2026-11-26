@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chromium } from "playwright-core";
-import { AVATURE, detectAts, multiStepConfirmed, type ApplyPage, type WorkdayPage } from "@tc-hunter/domain";
+import { ADAPTERS, AVATURE, detectAts, looksConfirmed, multiStepConfirmed, type ApplyPage, type WorkdayPage } from "@tc-hunter/domain";
 import { ServerBrowser } from "../src/apply/browser";
 
 /**
@@ -19,6 +19,8 @@ let server: Server;
 let base = "";
 const submits: string[] = [];
 const avature: string[] = [];
+const pinpoint: string[] = [];
+const PP_JOB = "/en/postings/14d29eb2-d36a-4ef6-8383-329d603d83ae";
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -26,6 +28,13 @@ beforeAll(async () => {
     const html = (s: string) => { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(s); };
     if (url.startsWith("/gh/jobs/1/confirmation")) { submits.push(url); return html("<h1>Thank you for applying!</h1><p>Your confirmation number: GH-55555</p>"); }
     if (url.startsWith("/gh/jobs/1")) return html(fixture("greenhouse.html"));
+    // A Pinpoint careers site shaped like Align Technology's (jobs.aligntech.com, 2026-11-26).
+    if (url === `${PP_JOB}/applications` && req.method === "POST") {
+      let body = ""; req.on("data", (c) => { body += c; }); req.on("end", () => { pinpoint.push(body); html("<h1>Thank you for your application!</h1><p>We'll be in touch.</p>"); });
+      return;
+    }
+    if (url === `${PP_JOB}/applications/new`) return html(fixture("pinpoint.html"));
+    if (url === PP_JOB) return html(`<h1>Vice President, Platform Engineering</h1><a href="${PP_JOB}/applications/new">Apply Now</a>`);
     if (url.startsWith("/wd/")) return html(fixture("workday.html"));
     // A box drawn by the page (Workday's way): the real input sits off screen, so a click at its spot misses.
     if (url.startsWith("/drawn")) return html('<form><fieldset><legend>Job type</legend><div class="box"><input type="checkbox" id="ft" style="position:absolute;left:-9999px;top:-9999px"><span>Full-Time</span></div></fieldset>' +
@@ -188,6 +197,57 @@ describe.skipIf(!available)("the server's browser on a Greenhouse-shaped form", 
     expect(submits[0]).not.toMatch(/newsletter/);
     const shot = await page.screenshot();
     expect(shot[0]).toBe(0xff);
+  });
+});
+
+describe.skipIf(!available)("the server's browser on a Pinpoint careers site (Align Technology, 2026-11-26)", () => {
+  let page: ApplyPage;
+  afterAll(async () => { await page?.close(); });
+
+  it("goes from the job to its form and reads each question, its words and whether it's required", async () => {
+    expect(detectAts(`${base}${PP_JOB}`)).toBe("pinpoint");
+    page = await new ServerBrowser({ timeoutMs: 15_000 }).open(`${base}${PP_JOB}`);
+    const form = await page.openForm("pinpoint");
+    expect(page.url()).toBe(`${base}${PP_JOB}/applications/new`);
+    // Its reCAPTCHA is the invisible kind: nothing for a person to do.
+    expect(form.captcha).toBe(false);
+    const by = (k: string) => form.fields.find((f) => f.key === k);
+    expect(by("#application_form_application_first_name")).toMatchObject({ label: "First Name", required: true });
+    expect(by("#application_form_application_linkedin_url")).toMatchObject({ label: "LinkedIn URL", required: false });
+    // The resume is required by its heading's look, not by a "*" or the box itself.
+    expect(by("#application_form[application][cv]")).toMatchObject({ type: "file", required: true });
+    expect(by("#application_form[application][cover_letter]")).toMatchObject({ type: "file", required: false });
+    expect(by("#application_form[application][cover_letter]")!.label).toMatch(/^Cover Letter/);
+    // Yes / No: the question's own words and the buttons' own words, not the hidden "question yes" text.
+    expect(by("radio:application_form[application][answers_attributes][0][boolean_answer]")).toMatchObject({
+      label: "Are you currently authorized to work lawfully in the U.S. on a full-time basis?", options: ["Yes", "No"], required: true, hasValue: false });
+    expect(by("#application_form_application_answers_attributes_1_text_answer")).toMatchObject({ type: "select", required: true });
+    expect(by("#application_form_application_answers_attributes_1_text_answer")!.options).toContain("LinkedIn");
+    expect(by("#application_process_information")).toMatchObject({ type: "checkbox", required: true });
+  });
+
+  it("fills it, then presses its Submit Application once (never Save for later) and reads the thank-you", async () => {
+    const pdf = new TextEncoder().encode("%PDF-1.4 sandbox");
+    const r = await page.fill([
+      { key: "#application_form_application_first_name", type: "text", value: "Yong" }, { key: "#application_form_application_last_name", type: "text", value: "Example" },
+      { key: "#application_form_application_email", type: "email", value: "yong@example.test" },
+      { key: "#application_form[application][cv]", type: "file", value: null, file: { name: "resume.pdf", mime: "application/pdf", bytes: pdf } },
+      { key: "radio:application_form[application][answers_attributes][0][boolean_answer]", type: "radio", value: "Yes" },
+      { key: "#application_form_application_answers_attributes_1_text_answer", type: "select", value: "LinkedIn" },
+      { key: "#application_process_information", type: "checkbox", value: "Yes" },
+    ]);
+    expect(r.map((x) => x.status)).toEqual(["filled", "filled", "filled", "filled", "filled", "filled", "filled"]);
+    const again = await page.readForm();
+    expect(again.fields.filter((f) => f.required && !f.hasValue).map((f) => f.key)).toEqual([]);
+    expect(await page.submit(ADAPTERS.pinpoint.submit)).toBe(true);
+    await new Promise((ok) => setTimeout(ok, 800));
+    const now = await page.now();
+    expect(looksConfirmed("pinpoint", now.url, now.text)).toBe(true);
+    expect(pinpoint).toHaveLength(1);
+    expect(pinpoint[0]).toMatch(/name="application_form\[application\]\[first_name\]"\r\n\r\nYong/);
+    expect(pinpoint[0]).toMatch(/boolean_answer\]"\r\n\r\ntrue/);
+    expect(pinpoint[0]).toMatch(/text_answer\]"\r\n\r\nLinkedIn/);
+    expect(pinpoint[0]).toMatch(/filename="resume.pdf"/);
   });
 });
 

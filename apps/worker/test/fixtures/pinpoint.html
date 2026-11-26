@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>New Application | Vice President, Platform Engineering | Align Technology Careers</title>
+<link rel="icon" href="https://res.cloudinary.com/pinpointhq/image/upload/c_fill/v1/uploads/x.png"></head>
+<body>
+<!-- Shaped like Align Technology's Pinpoint form (jobs.aligntech.com, 2026-11-26). -->
+<form enctype="multipart/form-data" action="/en/postings/14d29eb2-d36a-4ef6-8383-329d603d83ae/applications" method="post">
+  <input type="hidden" name="authenticity_token" value="tok">
+  <legend class="external-form__legend">1. Personal Details</legend>
+  <div class="frow"><label class="external-form__label" for="application_form_application_first_name"><span class="external-form__label--title external-form__label--required">First Name</span></label>
+    <input required type="text" name="application_form[application][first_name]" id="application_form_application_first_name"></div>
+  <div class="frow"><label class="external-form__label" for="application_form_application_last_name"><span class="external-form__label--title external-form__label--required">Last Name</span></label>
+    <input required type="text" name="application_form[application][last_name]" id="application_form_application_last_name"></div>
+  <div class="frow"><label class="external-form__label" for="application_form_application_email"><span class="external-form__label--title external-form__label--required">Email Address</span></label>
+    <input required type="email" name="application_form[application][email]" id="application_form_application_email"></div>
+  <div class="frow"><label class="external-form__label" for="application_form_application_linkedin_url"><span class="external-form__label--title">LinkedIn URL</span></label>
+    <input type="text" name="application_form[application][linkedin_url]" id="application_form_application_linkedin_url"></div>
+  <div class="frow frow--gutters-2x"><div class="col-md-1-1">
+    <div class="external-form__label"><div class="external-form__label--required">Résumé / CV</div><span>Accepted file formats are .pdf and .docx</span></div>
+    <div class="file-field file-field--themed"><input class="file-field__input" id="application_form[application][cv]" name="application_form[application][cv]" type="file"><label for="application_form[application][cv]" class="file-field__label"><div>Attach Résumé / CV</div><div class="file-field__progress"></div></label></div>
+  </div></div>
+  <div class="frow frow--gutters-2x"><div class="col-md-1-1">
+    <div class="external-form__label"><div>Cover Letter</div><span>Accepted file formats are .pdf and .docx</span></div>
+    <div class="file-field file-field--themed"><input class="file-field__input" id="application_form[application][cover_letter]" name="application_form[application][cover_letter]" type="file"><label for="application_form[application][cover_letter]" class="file-field__label"><div>Attach</div><div class="file-field__progress"></div></label></div>
+  </div></div>
+  <div class="frow"><div class="col-md-1-1"><div class="pad-v-3">
+    <label class="external-form__label" for="application_form_application_answers_attributes_0_boolean_answer"><span class="external-form__label--title external-form__label--required">Are you currently authorized to work lawfully in the U.S. on a full-time basis?</span></label>
+    <div class="frow">
+      <div class="col-1-2"><div class="checkable-input"><div id="answer-label-0-true" style="display: none;">Are you currently authorized to work lawfully in the U.S. on a full-time basis? yes</div><input class="checkable-input__input" type="radio" id="application_form_application_answers_attributes_0_boolean_answer_true" name="application_form[application][answers_attributes][0][boolean_answer]" aria-labelledby="answer-label-0-true" value="true"><label class="checkable-input__label" for="application_form_application_answers_attributes_0_boolean_answer_true">Yes</label></div></div>
+      <div class="col-1-2"><div class="checkable-input"><div id="answer-label-0-false" style="display: none;">Are you currently authorized to work lawfully in the U.S. on a full-time basis? no</div><input class="checkable-input__input" type="radio" id="application_form_application_answers_attributes_0_boolean_answer_false" name="application_form[application][answers_attributes][0][boolean_answer]" aria-labelledby="answer-label-0-false" value="false"><label class="checkable-input__label" for="application_form_application_answers_attributes_0_boolean_answer_false">No</label></div></div>
+    </div>
+  </div></div></div>
+  <div class="frow"><div class="col-md-1-1"><div class="pad-v-3">
+    <label class="external-form__label" for="application_form_application_answers_attributes_1_text_answer"><span class="external-form__label--title external-form__label--required">How did you first hear about this job opportunity?</span></label>
+    <div class="react-select css-container"><div class="react-select__control"><div class="react-select__value-container"><div class="react-select__placeholder">Select...</div>
+      <div class="react-select__input-container" data-value=""><input class="react-select__input" id="application_form_application_answers_attributes_1_text_answer" role="combobox" aria-expanded="false" aria-haspopup="true" aria-label="How did you first hear about this job opportunity?" type="text" value=""></div></div></div>
+      <div class="react-select__menu" hidden></div><input name="selectBox" type="hidden" value=""></div>
+    <input type="hidden" id="src_answer" name="application_form[application][answers_attributes][1][text_answer]" value="">
+  </div></div></div>
+  <legend class="external-form__legend">5. Submit Application</legend>
+  <div class="pretty"><input name="application[process_information]" type="hidden" value="0"><input required type="checkbox" value="1" name="application[process_information]" id="application_process_information">
+    <div class="state"><label class="external-form__label" for="application_process_information">(Required) Allow us to process your personal information. *</label></div></div>
+  <div class="grecaptcha-badge"><iframe title="reCAPTCHA" width="256" height="60" src="about:blank#recaptcha/enterprise/anchor?size=invisible"></iframe></div>
+  <button type="button">Save application for later</button>
+  <input type="submit" name="commit" value="Submit Application">
+</form>
+<script>
+  var box = document.querySelector(".react-select"), input = box.querySelector("input[role=combobox]"), menu = box.querySelector(".react-select__menu"), vc = box.querySelector(".react-select__value-container");
+  var choices = ["Align Technology Alumni", "Align Technology Career Site", "Employee Referral", "Job Board", "LinkedIn", "Other"];
+  function close() { menu.hidden = true; menu.innerHTML = ""; }
+  function open() { menu.hidden = false; menu.innerHTML = ""; choices.filter(function (t) { return !input.value || t.toLowerCase().indexOf(input.value.toLowerCase()) >= 0; }).forEach(function (t) {
+    var o = document.createElement("div"); o.setAttribute("role", "option"); o.textContent = t; o.addEventListener("click", function () {
+      var ph = vc.querySelector(".react-select__placeholder, .react-select__single-value"); if (ph) ph.remove(); var sv = document.createElement("div"); sv.className = "react-select__single-value"; sv.textContent = t;
+      vc.insertBefore(sv, vc.firstChild); input.value = ""; document.getElementById("src_answer").value = t; close(); }); menu.appendChild(o); }); }
+  input.addEventListener("focus", open); input.addEventListener("click", open); input.addEventListener("input", open);
+  input.addEventListener("blur", function () { setTimeout(function () { input.value = ""; close(); }, 50); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+</script>
+</body></html>

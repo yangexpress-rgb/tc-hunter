@@ -620,6 +620,11 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
     case "dayforce": return fetchDayforce(spec, f);
     case "careers_page": {
       const page = await f.get(spec.url, { kind: "page" });
+      // A Pinpoint careers site (Align Technology's jobs.aligntech.com): its whole list is one public file.
+      if (isPinpointPage(page.text)) {
+        const all = readPinpointList(JSON_OR((await f.get(`${new URL(page.url).origin}/postings.json`)).text, "Pinpoint"), spec.name, page.url);
+        return { postings: all, complete: true, checked: all.length, listed: all.length, notes: [] };
+      }
       let postings = jobPostingsFromHtml(page.text, page.url);
       let complete = postings.length > 0;
       if (!postings.length) {
@@ -637,6 +642,34 @@ export async function fetchSource(spec: SourceSpec, f: Fetcher, wanted: (title: 
     default:
       return { postings: [], complete: false, checked: 0, listed: 0, notes: [] };
   }
+}
+
+// Pinpoint (Align Technology, 2026-11-26) ------------------------------------------------------------
+// Pinpoint careers sites (on {company}.pinpointhq.com or the employer's own address) publish every open
+// job, with its requisition ID, at /postings.json. Each job's form is at {job}/applications/new.
+
+/** A page served by Pinpoint (its pages name pinpointhq for their images and job IDs). */
+export function isPinpointPage(html: string): boolean {
+  return /res\.cloudinary\.com\/pinpointhq\/|app\.pinpointhq\.com\/|"Pinpoint Job Posting ID"/.test(html.slice(0, 400_000));
+}
+
+/** Postings from a Pinpoint site's /postings.json. */
+export function readPinpointList(r: Obj, employer: string, base: string): RawPosting[] {
+  return ((r.data ?? []) as Obj[]).filter((j) => j.title && (j.url || j.path)).map((j) => {
+    const url = String(j.url || new URL(String(j.path), base).href);
+    const loc = (j.location ?? {}) as Obj;
+    const desc = [j.description, j.key_responsibilities, j.skills_knowledge_expertise, j.benefits].filter(Boolean).map((x) => htmlToText(String(x))).join("\n\n").trim();
+    const wp = String(j.workplace_type ?? "").toLowerCase();
+    const req = String(((j.job ?? {}) as Obj).requisition_id ?? "").trim();
+    const min = num(j.compensation_minimum), max = num(j.compensation_maximum);
+    return {
+      externalId: `pinpoint:${new URL(url).host}:${String(j.id)}`, url, employer, title: String(j.title).trim(), locationRaw: loc.name ? String(loc.name) : null,
+      workplaceType: wp === "remote" || wp === "hybrid" ? wp : wp === "onsite" ? "onsite" : detectWorkplace(loc.name, desc.slice(0, 600)),
+      descriptionText: desc,
+      salary: String(j.compensation_visible) === "true" && (min !== null || max !== null) ? { min, max, currency: String(j.compensation_currency ?? "").slice(0, 3) || null, period: period(j.compensation_frequency) } : null,
+      postedAt: null, applyUrl: `${url.replace(/\/$/, "")}/applications/new`, atsType: "pinpoint", ...(req ? { reqIds: [req] } : {}),
+    };
+  });
 }
 
 /** Reads one pasted job address. LinkedIn, Indeed and similar sites are never fetched. */
