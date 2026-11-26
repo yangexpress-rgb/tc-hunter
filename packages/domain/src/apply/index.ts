@@ -141,15 +141,33 @@ const HUMAN_CHECK = /\b(verify (that )?you('| a)re (a )?human|are you (a )?(huma
 export function humanCheckIn(text: string): boolean { return HUMAN_CHECK.test(text.slice(0, 20000)); }
 
 /** Where each system shows its application form, from a job's address. */
+/**
+ * A Pinpoint address in English. Pinpoint shows its own questions (name, email, phone, Yes / No,
+ * consent) in the language its address names, and without one it picks a language itself: Align's
+ * form came up in Thai on TC Hunter's server (Yong, 2026-11-26), so no saved answer or preset matched.
+ */
+export function pinpointEnglish(url: string): string {
+  try {
+    const u = new URL(url);
+    const m = /^\/(?:([a-z]{2}(?:-[A-Za-z]{2,4})?)\/)?postings\//.exec(u.pathname);
+    if (!m || m[1] === "en") return url;
+    u.pathname = u.pathname.replace(/^\/(?:[a-z]{2}(?:-[A-Za-z]{2,4})?\/)?postings\//, "/en/postings/");
+    return u.toString();
+  } catch { return url; }
+}
+
 export function formUrlFor(ats: Ats, url: string): string {
   let u: URL;
   try { u = new URL(url); } catch { return url; }
   const parts = u.pathname.split("/").filter(Boolean);
   if (ats === "lever" && parts.length === 2) u.pathname = `/${parts[0]}/${parts[1]}/apply`;
   if (ats === "ashby" && parts.length === 2) u.pathname = `/${parts[0]}/${parts[1]}/application`;
-  // Pinpoint: the job's page, then its form at /applications/new.
-  const pp = parts.indexOf("postings");
-  if (ats === "pinpoint" && pp >= 0 && parts.length === pp + 2) u.pathname = `/${[...parts, "applications", "new"].join("/")}`;
+  // Pinpoint: the job's page, then its form at /applications/new, always in English (see pinpointEnglish).
+  if (ats === "pinpoint") {
+    const pp = parts.indexOf("postings");
+    if (pp >= 0 && parts.length === pp + 2) u.pathname = `/${[...parts, "applications", "new"].join("/")}`;
+    return pinpointEnglish(u.toString());
+  }
   return u.toString();
 }
 
