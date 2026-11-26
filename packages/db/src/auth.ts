@@ -276,7 +276,7 @@ export async function pendingSignIn(pool: pg.Pool, token: string | undefined): P
     (await c.query("SELECT 1 FROM user_session WHERE token_hash = $1 AND expires_at > now() AND NOT mfa_passed", [tokenHash(token)])).rowCount === 1);
 }
 
-export async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out" | "session.step_up" | "session.locked" | "session.remembered" | "session.ended_elsewhere" | "mfa.disabled", payload: Record<string, unknown>) {
+export async function auditAsAccount(c: pg.PoolClient, accountId: string, action: "session.signed_in" | "session.signed_out" | "session.step_up" | "session.locked" | "session.remembered" | "session.ended_elsewhere" | "mfa.disabled" | "admin.password_reset_done", payload: Record<string, unknown>) {
   const a = await c.query("SELECT id FROM applicant WHERE user_account_id = $1", [accountId]);
   if (!a.rows[0]) return;
   await c.query("SELECT set_config('app.applicant_id', $1, true)", [a.rows[0].id]);
@@ -486,5 +486,44 @@ export async function signOutElsewhere(pool: pg.Pool, session: Session, id?: str
     const count = r.rowCount ?? 0;
     if (count) await recordAudit(c, "session.ended_elsewhere", { objectType: "user_account", objectId: session.userAccountId, payload: { count } });
     return count;
+  });
+}
+
+const resetHash = (code: string) => createHash("sha256").update(code.trim()).digest("hex");
+
+/** Whether a password reset link still works (to show its page), and for which email. */
+export async function passwordResetFor(pool: pg.Pool, code: string): Promise<string | null> {
+  if (!code || code.length > 100) return null;
+  return withSignInScope(pool, async (c) => {
+    const id = (await c.query("SELECT password_reset_account($1) AS id", [resetHash(code)])).rows[0].id;
+    if (!id) return null;
+    return (await c.query("SELECT email FROM user_account WHERE id = $1", [id])).rows[0]?.email ?? null;
+  });
+}
+
+export type ResetResult = { ok: true } | { ok: false; code: string };
+
+/**
+ * Sets a new password from an admin's reset link (brief section 7). The link works once
+ * and for 24 hours. It also clears the sign-in lockout and signs the person out everywhere.
+ * The old password stops working. Every bad link gets the same answer.
+ */
+export async function resetPasswordWithLink(pool: pg.Pool, code: string, newPassword: string): Promise<ResetResult> {
+  const bad = { ok: false as const, code: "reset.bad_link" };
+  if (!code || code.length > 100) return bad;
+  return withSignInScope(pool, async (c) => {
+    const hash = resetHash(code);
+    const id: string | null = (await c.query("SELECT password_reset_account($1) AS id", [hash])).rows[0].id;
+    if (!id) return bad;
+    const email: string = (await c.query("SELECT email FROM user_account WHERE id = $1", [id])).rows[0].email;
+    const problem = passwordProblem(newPassword, email);
+    if (problem) return { ok: false as const, code: `signup.${problem}` };
+    const pwHash = await hashPassword(newPassword);
+    if ((await c.query("SELECT use_password_reset($1) AS id", [hash])).rows[0].id !== id) return bad;
+    await c.query("SELECT set_config('app.user_account_id', $1, true)", [id]);
+    await c.query("UPDATE user_account SET password_hash = $2, failed_sign_ins = 0, locked_until = NULL WHERE id = $1", [id, pwHash]);
+    await c.query("DELETE FROM user_session WHERE user_account_id = $1", [id]);
+    await auditAsAccount(c, id, "admin.password_reset_done", { account_ref: id });
+    return { ok: true as const };
   });
 }

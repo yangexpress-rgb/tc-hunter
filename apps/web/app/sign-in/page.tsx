@@ -15,6 +15,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
       <TopBar signedIn={false} />
       <div className="card">
         <h1>{t("signin.title")}</h1>
+        {sp.reset ? <p className="status" role="status">{t("reset.done")}</p> : null}
         {sp.erased ? <p className="status" role="status">Your account and everything in it have been deleted.</p> : null}
         <SignInForm labels={{
           email: "Email", password: "Password", cta: t("signin.cta"),

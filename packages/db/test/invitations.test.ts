@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import pg from "pg";
-import { hashPassword, newWrappedDataKey, normaliseInviteCode } from "@tc-hunter/domain";
+import { hashPassword, newWrappedDataKey, normaliseInviteCode, totpAt } from "@tc-hunter/domain";
 import {
-  APPLICANT_OWNED_TABLES, createInvitation, getSession, migrate, remakeInvitation, revokeInvitation, listInvitations, listPeople, setAccess, signIn, signUp,
+  APPLICANT_OWNED_TABLES, createInvitation, getSession, migrate, remakeInvitation, revokeInvitation, beginMfaSetup, confirmMfaSetup, createPasswordReset, listInvitations, listPeople, passwordResetFor, resetPasswordWithLink, resetTwoStep,
+  setAccess, setAdmin, signIn, signUp, verifySignInCode,
   withAdminScope, withApplicant, withSignInScope, type AdminContext, type Session,
 } from "../src";
 import { APP_URL, OWNER_URL, appPool, newApplicant, ownerQuery, testConfig } from "./helpers";
@@ -298,5 +299,95 @@ describe("People: lists and access off / on (Stage 2: fixtures 5, 7, 8, 11)", ()
       expect(x.applicant_id).toBe(yong.applicantId);
       expect(x.payload_summary).toEqual({ account_ref: leo.userAccountId });
     }
+  });
+});
+
+describe("recovery and roles (Stage 3: fixtures 8, 9, 10, 11)", () => {
+  const fresh = (s: Session): Session => ({ ...s, reauthAt: new Date() });
+  const NEW_PASSWORD = "a brand new long passphrase 7";
+  const codeOf = (path: string) => new URL(path, "http://x").searchParams.get("code")!;
+
+  it("a reset link sets a new password once; old password then fails; it clears a lockout and ends sessions (fixture 9)", async () => {
+    await expect(createPasswordReset(pool, cfg, { ...yong, reauthAt: new Date(0) }, leo.userAccountId)).rejects.toThrow(/TC_STEP_UP_REQUIRED/);
+    await expect(createPasswordReset(pool, cfg, fresh(leo), yong.userAccountId)).rejects.toThrow(/TC_NOT_ADMIN/);
+    await expect(createPasswordReset(pool, cfg, fresh(yong), yong.userAccountId)).rejects.toThrow(/TC_ADMIN_SELF/);
+
+    const first = await createPasswordReset(pool, cfg, fresh(yong), leo.userAccountId);
+    const made = await createPasswordReset(pool, cfg, fresh(yong), leo.userAccountId);  // replaces the first
+    expect(made.email).toBe("leo@example.test");
+    expect(made.expiresAt.getTime() - Date.now()).toBeGreaterThan(23.9 * 3_600_000);
+    const code = codeOf(made.resetPath);
+    const stored = JSON.stringify((await ownerQuery("SELECT * FROM password_reset")).rows) + JSON.stringify((await ownerQuery("SELECT * FROM audit_event")).rows);
+    expect(stored).not.toContain(code);
+    expect(await passwordResetFor(pool, codeOf(first.resetPath))).toBeNull();
+    expect(await passwordResetFor(pool, code)).toBe("leo@example.test");
+
+    // Leo is locked out and signed in somewhere.
+    const live = await signIn(pool, cfg, "leo@example.test", PASSWORD);
+    const token = (live as { token: string }).token;
+    await ownerQuery("UPDATE user_account SET locked_until = now() + interval '15 minutes', failed_sign_ins = 4 WHERE id = $1", [leo.userAccountId]);
+
+    expect(await resetPasswordWithLink(pool, code, "short")).toEqual({ ok: false, code: "signup.password_too_short" });
+    expect(await resetPasswordWithLink(pool, code, NEW_PASSWORD)).toEqual({ ok: true });
+    expect(await resetPasswordWithLink(pool, code, "yet another long passphrase 9")).toEqual({ ok: false, code: "reset.bad_link" });  // used
+    expect(await getSession(pool, cfg, token)).toBeNull();
+    expect(await signIn(pool, cfg, "leo@example.test", PASSWORD)).toEqual({ status: "failed" });
+    const now = await signIn(pool, cfg, "leo@example.test", NEW_PASSWORD);
+    expect(now.status).toBe("ok");
+    leo = (await getSession(pool, cfg, (now as { token: string }).token))!;
+
+    const late = await createPasswordReset(pool, cfg, fresh(yong), leo.userAccountId);
+    await ownerQuery("UPDATE password_reset SET expires_at = now() - interval '1 minute' WHERE used_at IS NULL");
+    expect(await resetPasswordWithLink(pool, codeOf(late.resetPath), "yet another long passphrase 9")).toEqual({ ok: false, code: "reset.bad_link" });  // expired
+    expect(await resetPasswordWithLink(pool, "made-up", "yet another long passphrase 9")).toEqual({ ok: false, code: "reset.bad_link" });
+  });
+
+  it("two-step reset: authenticator and recovery codes stop working; next sign-in sets it up again (fixture 10)", async () => {
+    const strict = { ...cfg, requireMfa: true };
+    const secret = await beginMfaSetup(pool, strict, leo);
+    const codes = await confirmMfaSetup(pool, strict, leo, totpAt(secret, Date.now()));
+    expect(codes).toHaveLength(10);
+    expect((await signIn(pool, strict, "leo@example.test", NEW_PASSWORD)).status).toBe("code_required");
+
+    expect(await resetTwoStep(pool, cfg, fresh(yong), leo.userAccountId)).toBe("authenticator");
+    expect(await resetTwoStep(pool, cfg, fresh(yong), leo.userAccountId)).toBe("nothing");
+    const after = await signIn(pool, strict, "leo@example.test", NEW_PASSWORD);
+    expect(after.status).toBe("ok");  // no code asked: the old authenticator is gone
+    const token = (after as { token: string }).token;
+    expect(await verifySignInCode(pool, strict, token, (codes as string[])[0]!)).toBe(false);
+    const s = (await getSession(pool, strict, token))!;
+    expect(s.mfaEnabled).toBe(false);  // with two-step required, the app sends them to set it up again
+    expect((await ownerQuery("SELECT count(*)::int AS n FROM mfa_recovery_code WHERE user_account_id = $1", [leo.userAccountId])).rows[0].n).toBe(0);
+    leo = s;
+  });
+
+  it("make and remove admin; the only admin can't step down (fixture 8)", async () => {
+    await expect(setAdmin(pool, cfg, fresh(yong), yong.userAccountId, false)).rejects.toThrow(/TC_LAST_ADMIN/);
+    await expect(setAdmin(pool, cfg, fresh(leo), leo.userAccountId, true)).rejects.toThrow(/TC_NOT_ADMIN/);
+    expect(await setAdmin(pool, cfg, fresh(yong), leo.userAccountId, true)).toBe(true);
+    expect(await setAdmin(pool, cfg, fresh(yong), leo.userAccountId, true)).toBe(false);
+    expect(await setAdmin(pool, cfg, fresh(yong), yong.userAccountId, false)).toBe(true);   // another admin remains
+    await expect(setAdmin(pool, cfg, fresh(leo), leo.userAccountId, false)).rejects.toThrow(/TC_LAST_ADMIN/);
+    expect(await setAdmin(pool, cfg, fresh(leo), yong.userAccountId, true)).toBe(true);
+    expect(await setAdmin(pool, cfg, fresh(yong), leo.userAccountId, false)).toBe(true);
+  });
+
+  it("every admin action is in the log with actor admin and only the account id; the reset itself is the person's own (fixture 11)", async () => {
+    const r = await ownerQuery(`SELECT actor, action, payload_summary, applicant_id FROM audit_event WHERE action LIKE 'admin.%' ORDER BY at`);
+    const actions = r.rows.map((x) => x.action);
+    for (const a of ["admin.access_off", "admin.access_on", "admin.password_reset_made", "admin.password_reset_done", "admin.two_step_reset", "admin.role_changed"]) {
+      expect(actions, a).toContain(a);
+    }
+    for (const x of r.rows) {
+      expect(Object.keys(x.payload_summary).every((k) => ["account_ref", "is_admin"].includes(k))).toBe(true);
+      if (x.action === "admin.password_reset_done") {
+        expect(x.actor).toBe("applicant");
+        expect(x.applicant_id).toBe(leo.applicantId);
+      } else {
+        expect(x.actor).toBe("admin");
+      }
+    }
+    // Leo's role change, made while Leo was the admin, is in Leo's own log.
+    expect(r.rows.filter((x) => x.action === "admin.role_changed").map((x) => x.applicant_id)).toContain(leo.applicantId);
   });
 });
