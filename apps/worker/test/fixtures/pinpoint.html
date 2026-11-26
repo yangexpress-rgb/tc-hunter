@@ -48,11 +48,22 @@
   var choices = ["Align Technology Alumni", "Align Technology Career Site", "Employee Referral", "Job Board", "LinkedIn", "Other"];
   function close() { menu.hidden = true; menu.innerHTML = ""; }
   function open() { menu.hidden = false; menu.innerHTML = ""; choices.filter(function (t) { return !input.value || t.toLowerCase().indexOf(input.value.toLowerCase()) >= 0; }).forEach(function (t) {
-    var o = document.createElement("div"); o.setAttribute("role", "option"); o.textContent = t; o.addEventListener("click", function () {
+    var o = document.createElement("div"); o.className = "react-select__option"; o.id = "react-select-2-option-" + choices.indexOf(t); o.textContent = t; o.addEventListener("click", function () {
       var ph = vc.querySelector(".react-select__placeholder, .react-select__single-value"); if (ph) ph.remove(); var sv = document.createElement("div"); sv.className = "react-select__single-value"; sv.textContent = t;
       vc.insertBefore(sv, vc.firstChild); input.value = ""; document.getElementById("src_answer").value = t; close(); }); menu.appendChild(o); }); }
   input.addEventListener("focus", open); input.addEventListener("click", open); input.addEventListener("input", open);
   input.addEventListener("blur", function () { setTimeout(function () { input.value = ""; close(); }, 50); });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
+  // Pinpoint's upload box sends the file to storage straight away: a moment later the box is emptied, the
+  // file is kept as a hidden value under the same name, and the box shows the file's name.
+  var cv = document.getElementById("application_form[application][cv]");
+  cv.addEventListener("change", function () {
+    var name = cv.files[0] && cv.files[0].name;
+    setTimeout(function () {
+      var h = document.createElement("input"); h.type = "hidden"; h.name = cv.name; h.value = "signed-blob-123";
+      cv.parentElement.appendChild(h); cv.value = ""; cv.removeAttribute("name");
+      cv.parentElement.querySelector("label div").textContent = name;
+    }, 1200);
+  });
 </script>
 </body></html>

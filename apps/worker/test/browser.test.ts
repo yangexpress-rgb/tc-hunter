@@ -239,6 +239,7 @@ describe.skipIf(!available)("the server's browser on a Pinpoint careers site (Al
     expect(r.map((x) => x.status)).toEqual(["filled", "filled", "filled", "filled", "filled", "filled", "filled"]);
     const again = await page.readForm();
     expect(again.fields.filter((f) => f.required && !f.hasValue).map((f) => f.key)).toEqual([]);
+    expect(again.fields.find((f) => f.key === "#application_form[application][cv]")).toMatchObject({ hasValue: true });
     expect(await page.submit(ADAPTERS.pinpoint.submit)).toBe(true);
     await new Promise((ok) => setTimeout(ok, 800));
     const now = await page.now();
@@ -247,7 +248,8 @@ describe.skipIf(!available)("the server's browser on a Pinpoint careers site (Al
     expect(pinpoint[0]).toMatch(/name="application_form\[application\]\[first_name\]"\r\n\r\nYong/);
     expect(pinpoint[0]).toMatch(/boolean_answer\]"\r\n\r\ntrue/);
     expect(pinpoint[0]).toMatch(/text_answer\]"\r\n\r\nLinkedIn/);
-    expect(pinpoint[0]).toMatch(/filename="resume.pdf"/);
+    // The resume went to their storage when it was attached: the form sends its stored copy.
+    expect(pinpoint[0]).toMatch(/name="application_form\[application\]\[cv\]"\r\n\r\nsigned-blob-123/);
   });
 });
 
