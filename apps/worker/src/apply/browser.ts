@@ -113,6 +113,12 @@ const radioLabel = (el: HTMLInputElement) => {
   return (l?.textContent ?? el.value ?? "").replace(/\s+/g, " ").trim();
 };
 
+/**
+ * The choices of a list drawn by the site. React Select's own choices carry no role (Pinpoint's "How did you
+ * first hear about this job opportunity?", Align Technology 2026-11-26), so they're found by their class and id too.
+ */
+const OPTIONS = "[role=option]:visible, [data-automation-id='promptOption']:visible, .react-select__option:visible, [id^='react-select-'][id*='-option-']:visible";
+
 const errText = (e: unknown) => String((e as Error)?.message ?? e).split("\n")[0]!.slice(0, 200);
 
 /** Whether what the form shows is the answer: the choice that was picked, or the answer itself in other words. */
@@ -185,7 +191,7 @@ class PwPage implements ApplyPage {
     let texts: string[] = [];
     for (let i = 0; i < 10; i++) {
       await this.pg.waitForTimeout(400);
-      texts = (await this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible").allTextContents())
+      texts = (await this.pg.locator(OPTIONS).allTextContents())
         .map((t) => t.replace(/\s+/g, " ").trim()).filter((t) => t && !/^(no options|no items\.?|loading)/i.test(t));
       if (texts.some((t) => !/^(select( one)?|choose( one)?|please select)\b/i.test(t))) break;
     }
@@ -372,7 +378,7 @@ class PwPage implements ApplyPage {
         const list = tag === "button" || await this.isSiteList(it);
         if (list) {
           ways.push(["type, then pick the first match", async () => {
-            const all = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible, .select2-results__option:visible");
+            const all = this.pg.locator(`${OPTIONS}, .select2-results__option:visible`);
             const texts = async () => (await all.allTextContents().catch(() => [] as string[])).map((t) => t.replace(/\s+/g, " ").trim());
             await this.pg.keyboard.press("Escape").catch(() => {});
             const before = new Set(await texts());
@@ -465,15 +471,26 @@ class PwPage implements ApplyPage {
     if (!(await loc.count())) return "not_found";
     if (it.file) {
       const file = { name: it.file.name, mimeType: it.file.mime, buffer: Buffer.from(it.file.bytes) };
-      const held = () => loc.evaluate((el: HTMLInputElement) => (el.files?.length ?? 0) > 0).catch(() => false);
+      // Held: in the box, or sent on to the site's storage and kept as a hidden value or shown by name (pageScript's fileHeld).
+      const held = async () => {
+        await this.helpers().catch(() => {});
+        return this.pg.evaluate((k) => !!(window as any).__tcApply?.fileHeld(k), it.key).catch(() => false);
+      };
+      /** Up to `ms` for the site to take the file in: a box that uploads it straight away takes a few seconds. */
+      const settled = async (ms: number) => {
+        for (const until = Date.now() + ms; ;) {
+          if (await held()) return true;
+          if (Date.now() >= until) return false;
+          await this.pg.waitForTimeout(500);
+        }
+      };
       await loc.setInputFiles(file);
-      await this.pg.waitForTimeout(1500);  // let the site take the file in
-      if (await held()) return "filled";
+      if (await settled(15_000)) return "filled";
       // Some upload boxes replace their input once used: choose the file through the box's own button instead.
       const button = loc.locator("xpath=ancestor::*[.//button][1]").locator("button").filter({ hasText: /attach|upload|choose|browse|select/i }).first();
       if (await button.count()) {
         const [chooser] = await Promise.all([this.pg.waitForEvent("filechooser", { timeout: 5000 }).catch(() => null), button.click().catch(() => {})]);
-        if (chooser) { await chooser.setFiles(file); await this.pg.waitForTimeout(2500); }
+        if (chooser) { await chooser.setFiles(file); await settled(15_000); }
       }
       const name = it.file.name.replace(/\.[a-z]+$/i, "");
       const shown = await this.pg.evaluate((n) => (document.body?.innerText ?? "").includes(n), name).catch(() => false);
@@ -544,7 +561,7 @@ class PwPage implements ApplyPage {
     // Typing filters the list. Try the answer, then its other names ("USA" finds "United States");
     // for an agreement the site's wording may differ, so look at the whole list.
     const terms = isButton || agreeing ? [""] : [...searchTermsFor(value), ""];
-    const options = this.pg.locator("[role=option]:visible, [data-automation-id='promptOption']:visible");
+    const options = this.pg.locator(OPTIONS);
     const read = async () => (await options.allTextContents().catch(() => [] as string[])).map((t) => t.replace(/\s+/g, " ").trim());
     // What already shows as a choice before this list opens belongs to something else: another question's
     // chosen item ("Afghanistan (+93)" beside the phone code, Workday's own site, 2026-11-19) or a list left open.

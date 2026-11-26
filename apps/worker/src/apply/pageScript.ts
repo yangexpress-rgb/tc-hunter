@@ -202,7 +202,7 @@ export const PAGE_SCRIPT = String.raw`
         var shown = clean(el.textContent);
         f.hasValue = !!shown && !/^select( one)?$|^choose/i.test(shown);
       } else if (type === "checkbox") f.hasValue = el.checked;
-      else if (type === "file") f.hasValue = !!(el.files && el.files.length);
+      else if (type === "file") f.hasValue = fileHeld(el);
       else if (wdList) {
         // Workday's search lists ("How Did You Hear About Us?", "Country Phone Code") show the chosen item beside the box.
         var fb = el.closest("[data-automation-id^='formField']") || el.parentElement;
@@ -217,6 +217,20 @@ export const PAGE_SCRIPT = String.raw`
     }
     return { url: location.href, fields: out, captcha: captchaVisible() };
   }
+
+  /**
+   * Whether a file box holds a file. Upload boxes that send the file straight to the site's storage
+   * (Pinpoint's, Align Technology 2026-11-26) can empty the box once it's sent and keep the file as a hidden
+   * value under the same name, or show the file's name where "Attach" was.
+   */
+  function fileHeld(el) {
+    if (!el) return false;
+    if (el.files && el.files.length) return true;
+    if (el.name && deepAll('input[type=hidden][name="' + esc(el.name) + '"]', rootOf(el)).some(function (h) { return !!h.value && h.value !== "0"; })) return true;
+    var box = el.parentElement;
+    return !!(box && /\.(pdf|docx?|rtf|odt|txt)\b/i.test(clean(box.textContent)));
+  }
+  function fileHeldByKey(key) { return fileHeld(byKey(key)); }
 
   /** The element a key names (as keyOf made it). */
   function byKey(key) {
@@ -306,6 +320,6 @@ export const PAGE_SCRIPT = String.raw`
     return { dialog: mask(dialog).slice(0, 400), invalid: invalid.join(" | "), errors: mask(parts.join(" | ")).slice(0, 600), buttons: mask(buttons.join(" | ")), text: mask(txt(main)).slice(0, 500) };
   }
 
-  window.__tcApply = { isWorkdayList: isWorkdayList, shown: shown, flagged: flagged, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible, stuck: stuck };
+  window.__tcApply = { isWorkdayList: isWorkdayList, shown: shown, flagged: flagged, readForm: readForm, errors: errors, snapshot: snapshot, captchaVisible: captchaVisible, stuck: stuck, fileHeld: fileHeldByKey };
 })();
 `;
