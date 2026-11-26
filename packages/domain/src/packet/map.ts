@@ -272,6 +272,13 @@ export function proposeField(f: FormField, p: PacketProfile): ProposedField {
     const chosen = !f.options?.length ? "English" : f.options.find((o) => /^english\b/i.test(o.trim())) ?? f.options.find((o) => /\benglish\b/i.test(o)) ?? null;
     if (chosen) return { ...base, answer: chosen, source: "master_profile", sourceRefId: null, confidence: 0.9, note: "Your resume and profile are in English. Save your own answer under Saved answers to change it." };
   }
+  // A saved site name the list doesn't offer ("LinkedIn" where the choices are "Social Media Site", "Job Board", ...):
+  // the kind of site it is.
+  if (HEARD_ABOUT.test(label) && saved?.approved && f.options?.length) {
+    const kind = HEARD_KINDS.find(([site]) => site.test(saved.text.trim()))?.[1];
+    const chosen = kind ? f.options.find((o) => kind.test(o)) : undefined;
+    if (chosen) return { ...base, answer: chosen, source: "answer_bank", sourceRefId: saved.id, confidence: 0.86, note: `Your saved answer is "${saved.text.trim()}"; their list has "${chosen}" for it.` };
+  }
   // "How did you hear about us?" with no saved answer: TC Hunter found the job online, so a job board.
   if (HEARD_ABOUT.test(label)) {
     // No fitting choice: the first one (Yong, 2026-11-16).
@@ -398,7 +405,13 @@ function fence(f: FormField, step: StepKind, p: PacketProfile): Partial<Proposed
 const FORM_LANGUAGE = /^(preferred |form |display |communication )?language( of (this|the) form| preference| for (this form|communication))?$/;
 /** A question whose box takes a number. */
 export const NUMBER_QUESTION = /\b(percent(age)?|number of|how many)\b/i;
-const HEARD_ABOUT = /how did you (hear|learn|find out) about|where did you (hear|find|see|learn)|how did you find (us|this|out)|^(referral |candidate |application )?source$/;
+// "first" too: Align Technology asks "How did you first hear about this job opportunity?" (2026-11-26).
+const HEARD_ABOUT = /how did you (first )?(hear|learn|find out) about|where did you (first )?(hear|find|see|learn)|how did you (first )?find (us|this|out)|^(referral |candidate |application )?source$/;
+/** A saved "how did you hear" answer that names a site, and the kind of choice that site is. */
+const HEARD_KINDS: Array<[RegExp, RegExp]> = [
+  [/^(linked ?in|facebook|twitter|x|instagram|tiktok|youtube|reddit)$/i, /social/i],
+  [/^(indeed|glassdoor|zip ?recruiter|monster|dice|career ?builder|adzuna|jooble|simply ?hired|google( jobs)?)$/i, /^job ?boards?\b|job (boards?|sites?)/i],
+];
 /**
  * "How did you hear about us?" (Yong, 2026-11-16: take the first choice when no answer fits). The browser may take the
  * closest general choice its list offers when the answer itself isn't there (a list grouped "Website > ...").
